@@ -1,0 +1,9 @@
+MarjapussiAI — provenance
+
+crates/engine/src/game*  is imported from marjapussi-rs (Samuel Leßmann, GPL-3.0,
+https://github.com/SamuelLess/marjapussi-rs, v0.1.3 incl. PR #1 "Fix trump and point rules"
+and PR #2 "Require trump when void in led suit") plus Krarilotus' rule corrections from branch
+v2-ml-implement (commit 03bdc09): NoPair answer marks the partner's trump state, legal answers
+look up the last question event, team points in GameFinishedInfo.
+
+The whole project is therefore GPL-3.0 (owner decision, 2026-10-06).
