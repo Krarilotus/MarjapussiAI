@@ -15,8 +15,15 @@ pub const BID_STEP: i32 = 5;
 /// The highest bid.
 pub const MAX_BID: i32 = 420;
 
-/// The bids allowed over the current value, lowest first: the one range that both bid
-/// generation and the legality check use.
+/// Whether `bid` is allowed over the current `value`: exactly the members of `bid_range(value)`,
+/// in O(1) for the legality check (tests/rules.rs checks the equivalence exhaustively).
+#[inline]
+pub const fn is_bid(value: Points, bid: i32) -> bool {
+    bid > value.0 && bid <= MAX_BID && (bid - value.0) % BID_STEP == 0
+}
+
+/// The bids allowed over the current value, lowest first (bid generation; `is_bid` is its
+/// membership test).
 pub fn bid_range(value: Points) -> StepBy<RangeInclusive<i32>> {
     (value.0 + BID_STEP..=MAX_BID).step_by(BID_STEP as usize)
 }
