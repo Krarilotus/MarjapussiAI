@@ -7,37 +7,9 @@ use std::ops::{Deref, DerefMut};
 
 use serde::{Serialize, Serializer};
 
-use crate::game::cards::{Card, Suit, Value};
-use crate::game::gamestate::FinishedTrick;
-use crate::game::player::PlaceAtTable;
-use crate::game::points::Points;
-
-/// A value for the unused slots (never observable).
+/// A value for the unused slots (never observable); implemented next to each item type.
 pub trait Filler: Copy {
     const FILL: Self;
-}
-
-impl Filler for Card {
-    const FILL: Card = Card {
-        suit: Suit::Green,
-        value: Value::Six,
-    };
-}
-
-impl Filler for Suit {
-    const FILL: Suit = Suit::Green;
-}
-
-impl Filler for PlaceAtTable {
-    const FILL: PlaceAtTable = PlaceAtTable(0);
-}
-
-impl Filler for FinishedTrick {
-    const FILL: FinishedTrick = FinishedTrick {
-        cards: [Card::FILL; 4],
-        winner: PlaceAtTable(0),
-        points: Points(0),
-    };
 }
 
 #[derive(Clone, Copy)]

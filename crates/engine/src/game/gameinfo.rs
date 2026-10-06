@@ -3,38 +3,11 @@ use serde::Serialize;
 use crate::game::cards::Card;
 use crate::game::gameevent::{ActionType, GameAction, GameEvent, GameEventPlayer};
 use crate::game::gamestate::{FinishedTrick, GamePhase};
-use crate::game::player::{PlaceAtTable, Player};
+use crate::game::meta::GameMetaInfo;
+use crate::game::player::PlaceAtTable;
 use crate::game::points::Points;
 use crate::game::scoring::{game_scores, team_points, GameOutcome, SCHWARZ_FACTOR_FIFTHS};
-use crate::game::{current_time_string, Game};
-
-#[derive(Debug, Clone, Serialize)]
-pub struct GameMetaInfo {
-    pub name: String,
-    pub create_time: String,
-    pub start_time: Option<String>,
-    pub end_time: Option<String>,
-    pub player_names: [String; 4],
-    pub player_start_cards: [Vec<Card>; 4],
-}
-
-impl GameMetaInfo {
-    pub fn create(name: String, player_names: [String; 4], players: [Player; 4]) -> Self {
-        GameMetaInfo {
-            name,
-            create_time: current_time_string(),
-            start_time: None,
-            end_time: None,
-            player_names,
-            player_start_cards: [
-                players[0].cards.to_vec(),
-                players[1].cards.to_vec(),
-                players[2].cards.to_vec(),
-                players[3].cards.to_vec(),
-            ],
-        }
-    }
-}
+use crate::game::table::Game;
 
 /// The public part of `GameMetaInfo`: no start hands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

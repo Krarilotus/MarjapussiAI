@@ -1,0 +1,415 @@
+//! `Game`: one game at a table, event-sourced. Applies legal actions (`apply_action`), answers
+//! legality on demand (`legal_actions`), and keeps the undo snapshot and the event log.
+
+use std::sync::Arc;
+
+use crate::game::apply_action::{self, Target};
+use crate::game::cards::Card;
+use crate::game::clock::{now_millis, Clock};
+use crate::game::errors::GameError;
+use crate::game::gameevent::{ActionType, GameAction, GameEvent};
+use crate::game::gamestate::{GamePhase, GameState};
+use crate::game::legal_actions;
+use crate::game::meta::GameMetaInfo;
+use crate::game::player::{create_players, PlaceAtTable};
+use crate::game::points::Points;
+
+/// Wrapper for Game and all of its details. Legal actions are computed on demand
+/// (`legal_actions`, `legal_actions_into`, `is_legal`).
+#[derive(Debug, Clone)]
+pub struct Game {
+    /// Whether events get wall-clock times (`Clock::Off` for simulations: time 0).
+    pub clock: Clock,
+    /// Shared between copies of a game; changes only when the game starts and ends.
+    pub info: Arc<GameMetaInfo>,
+    pub state: GameState,
+    pub last_state: Option<GameState>,
+    pub all_events: Vec<GameEvent>,
+}
+
+impl Game {
+    pub fn new(name: String, player_names: [String; 4], cards: Option<[Vec<Card>; 4]>) -> Self {
+        let players = create_players(player_names.clone(), cards);
+        Game {
+            clock: Clock::Wall,
+            info: Arc::new(GameMetaInfo::create(name, player_names, players.clone())),
+            state: GameState::create(players),
+            last_state: None,
+            all_events: vec![],
+        }
+    }
+
+    /// All legal actions in the current state.
+    pub fn legal_actions(&self) -> Vec<GameAction> {
+        let mut legal = vec![];
+        self.legal_actions_into(&mut legal);
+        legal
+    }
+
+    /// Replaces the contents of `legal` with the legal actions (reuses its buffer).
+    pub fn legal_actions_into(&self, legal: &mut Vec<GameAction>) {
+        legal.clear();
+        legal_actions::push_legal_actions(&self.state, self.last_state.as_ref(), legal);
+        if let Some(player) = self.undo_requester() {
+            legal.push(GameAction {
+                action_type: ActionType::UndoRequest,
+                player,
+            });
+        }
+    }
+
+    /// The player who may request an undo now, if any.
+    fn undo_requester(&self) -> Option<PlaceAtTable> {
+        match self.state.phase {
+            GamePhase::WaitingForStart
+            | GamePhase::Ended
+            | GamePhase::PassingBack
+            | GamePhase::Raising
+            | GamePhase::PendingUndo(_) => None,
+            GamePhase::Bidding if self.state.value == Points(115) => None,
+            _ => self.last_state.as_ref().map(|last| last.player_at_turn),
+        }
+    }
+
+    /// Whether `action` is legal now: exactly `legal_actions().contains(action)`, without
+    /// building the list (tests/legality.rs checks the equivalence).
+    pub fn is_legal(&self, action: &GameAction) -> bool {
+        if action.action_type == ActionType::UndoRequest {
+            return self.undo_requester() == Some(action.player);
+        }
+        legal_actions::is_legal_in_phase(&self.state, self.last_state.as_ref(), action)
+    }
+
+    /// Tries creating a new Game with state after applying a given action.
+    /// Can fail and does not mutate the existing Game.
+    pub fn apply_action(&self, action: GameAction) -> Result<Game, GameError> {
+        if !self.is_legal(&action) {
+            return Err(GameError::IllegalAction);
+        }
+        // Every action except these two replaces the undo snapshot, so it is cloned only here.
+        let keeps_snapshot = matches!(action.action_type, ActionType::UndoRequest | ActionType::UndoAccept);
+        let mut all_events = Vec::with_capacity(self.all_events.len() + 1);
+        all_events.extend_from_slice(&self.all_events);
+        let mut next_game = Game {
+            clock: self.clock,
+            info: self.info.clone(),
+            state: self.state.clone(),
+            last_state: if keeps_snapshot { self.last_state.clone() } else { None },
+            all_events,
+        };
+        next_game.apply_legal(action);
+        Ok(next_game)
+    }
+
+    /// Builder form of setting `clock`.
+    pub fn with_clock(mut self, clock: Clock) -> Game {
+        self.clock = clock;
+        self
+    }
+
+    pub fn ended(&self) -> bool {
+        self.state.phase == GamePhase::Ended
+    }
+
+    /// Applies a legal action in place; panics on an illegal one.
+    pub fn apply_action_mut(&mut self, action: GameAction) {
+        if !self.is_legal(&action) {
+            eprintln!("Discarded illegal action: {:?}", action);
+            eprintln!("Game state: {:#?}", self);
+            panic!();
+        }
+        self.apply_legal(action);
+    }
+
+    fn apply_legal(&mut self, action: GameAction) {
+        let target = Target {
+            state: &mut self.state,
+            last_state: &mut self.last_state,
+            info: &mut self.info,
+        };
+        let callback = apply_action::apply(target, &action);
+        self.all_events.push(GameEvent {
+            last_action: action,
+            callback,
+            player_at_turn: self.state.player_at_turn,
+            time: match self.clock {
+                Clock::Wall => now_millis(),
+                Clock::Off => 0,
+            },
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::cards::Suit;
+    use crate::game::clock::{current_time_string, format_time};
+    use crate::game::gameevent::QuestionType;
+    use crate::game::player::{PlaceAtTable, PlayerTrumpPossibilities};
+    use rand::prelude::IndexedMutRandom;
+
+    #[test]
+    fn clock_off_records_zero() {
+        let mut game = helper_create_game().with_clock(Clock::Off);
+        let start = game.legal_actions()[0];
+        game.apply_action_mut(start);
+        assert_eq!(game.all_events[0].time, 0);
+        let mut game = helper_create_game();
+        let start = game.legal_actions()[0];
+        game.apply_action_mut(start);
+        assert!(game.all_events[0].time > 0);
+    }
+
+    #[test]
+    fn test_time_creation() {
+        assert_eq!(format_time(now_millis()).len(), 19);
+        assert_eq!(format_time(now_millis()), current_time_string());
+        let time = current_time_string();
+        assert_eq!(time.len(), 19);
+    }
+
+    fn helper_create_game() -> Game {
+        let names = ["S1".to_string(), "S2".to_string(), "S3".to_string(), "S4".to_string()];
+        Game::new(String::from("Testgame"), names, None)
+    }
+
+    #[test]
+    fn test_creating() {
+        let names = ["S1".to_string(), "S2".to_string(), "S3".to_string(), "S4".to_string()];
+        let game = Game::new(String::from("Game Name"), names, None);
+        assert_eq!(game.info.name, "Game Name");
+    }
+
+    #[test]
+    fn test_starting() {
+        let mut game = helper_create_game();
+        let mut actions = game.legal_actions();
+        assert_eq!(actions.len(), 4);
+        for _ in 0..4 {
+            let act = actions.pop().unwrap();
+            let res = game.apply_action(act);
+            game = res.ok().unwrap();
+            actions = game.legal_actions();
+        }
+        assert_eq!(game.state.phase, GamePhase::Bidding);
+    }
+
+    #[test]
+    fn test_random_game_controlled() {
+        let mut game = helper_create_game();
+        let mut actions = game.legal_actions();
+        assert_eq!(actions.len(), 4);
+        for _ in 0..4 {
+            game = game.apply_action(actions.pop().unwrap()).ok().unwrap();
+            actions = game.legal_actions();
+        }
+        assert_eq!(game.state.phase, GamePhase::Bidding);
+        actions = game.legal_actions();
+        assert_eq!(actions.len(), 62);
+        let bid140 = GameAction {
+            action_type: ActionType::NewBid(140),
+            player: game.state.player_at_turn,
+        };
+        game = game.apply_action(bid140).ok().unwrap();
+        let forbidden_action = actions.pop().unwrap();
+        let res = game.apply_action(forbidden_action);
+        assert!(res.is_err());
+        for _ in 0..4 {
+            actions = game.legal_actions();
+            let res = game.apply_action(actions[3]);
+            game = res.ok().unwrap();
+        }
+        for _ in 0..3 {
+            actions = game.legal_actions();
+            assert_eq!(game.state.phase, GamePhase::Bidding);
+            let res = game.apply_action(actions[0]);
+            game = res.ok().unwrap();
+        }
+        assert_eq!(game.state.value, Points(200));
+
+        //passing forth
+        assert_eq!(&*game.state.player_at_turn().name, "S3");
+        assert_eq!(game.state.phase, GamePhase::PassingForth);
+        assert_eq!(game.state.player_at_turn().cards.len(), 9);
+        assert_eq!(game.legal_actions().len(), 127); //nCr(9,4) + 1
+        actions = game.legal_actions();
+        let res = game.apply_action(actions[2]);
+        game = res.ok().unwrap();
+        assert_eq!(game.state.player_at_turn().cards.len(), 13);
+        assert_eq!(
+            game.state
+                .player_at_place(game.state.player_at_turn.partner())
+                .cards
+                .len(),
+            5
+        );
+        //passing back
+        assert_eq!(&*game.state.player_at_turn().name, "S1");
+        assert_eq!(game.state.phase, GamePhase::PassingBack);
+        actions = game.legal_actions();
+        let res = game.apply_action(actions[9]);
+        game = res.ok().unwrap();
+        assert_eq!(game.state.player_at_turn().cards.len(), 9);
+        assert_eq!(
+            game.state
+                .player_at_place(game.state.player_at_turn.partner())
+                .cards
+                .len(),
+            9
+        );
+        assert_eq!(game.state.phase, GamePhase::Raising);
+        actions = game.legal_actions();
+        let res = game.apply_action(actions[2]);
+        game = res.ok().unwrap();
+        assert_eq!(game.state.phase, GamePhase::Trick);
+        actions = game.legal_actions();
+        let _res = game.apply_action(actions[0]);
+    }
+
+    #[test]
+    fn test_random_game_multi() {
+        for _ in 0..100 {
+            test_random_game_random();
+        }
+    }
+
+    #[test]
+    fn test_trump_possibilities_only_move_upwards() {
+        let names = ["S1".to_string(), "S2".to_string(), "S3".to_string(), "S4".to_string()];
+        let cards = [
+            vec![
+                "r-O".parse().unwrap(),
+                "r-K".parse().unwrap(),
+                "g-A".parse().unwrap(),
+                "g-Z".parse().unwrap(),
+                "g-9".parse().unwrap(),
+                "s-6".parse().unwrap(),
+                "s-7".parse().unwrap(),
+                "e-6".parse().unwrap(),
+                "e-7".parse().unwrap(),
+            ],
+            vec![
+                "r-A".parse().unwrap(),
+                "r-Z".parse().unwrap(),
+                "r-U".parse().unwrap(),
+                "r-9".parse().unwrap(),
+                "r-8".parse().unwrap(),
+                "r-7".parse().unwrap(),
+                "r-6".parse().unwrap(),
+                "s-A".parse().unwrap(),
+                "s-Z".parse().unwrap(),
+            ],
+            vec![
+                "s-K".parse().unwrap(),
+                "s-O".parse().unwrap(),
+                "s-U".parse().unwrap(),
+                "s-9".parse().unwrap(),
+                "s-8".parse().unwrap(),
+                "g-K".parse().unwrap(),
+                "g-O".parse().unwrap(),
+                "g-U".parse().unwrap(),
+                "g-8".parse().unwrap(),
+            ],
+            vec![
+                "e-A".parse().unwrap(),
+                "e-Z".parse().unwrap(),
+                "e-K".parse().unwrap(),
+                "e-O".parse().unwrap(),
+                "e-U".parse().unwrap(),
+                "e-9".parse().unwrap(),
+                "e-8".parse().unwrap(),
+                "g-7".parse().unwrap(),
+                "g-6".parse().unwrap(),
+            ],
+        ];
+        let mut game = Game::new(String::from("TrumpUp"), names, Some(cards));
+        let p0 = PlaceAtTable(0);
+
+        game.state.started = true;
+        game.state.phase = GamePhase::StartTrick;
+        game.state.player_at_turn = p0;
+
+        assert!(game.legal_actions().contains(&GameAction {
+            action_type: ActionType::AnnounceTrump(Suit::Red),
+            player: p0,
+        }));
+        assert!(game.legal_actions().contains(&GameAction {
+            action_type: ActionType::Question(QuestionType::Yours),
+            player: p0,
+        }));
+
+        game = game
+            .apply_action(GameAction {
+                action_type: ActionType::Question(QuestionType::Yours),
+                player: p0,
+            })
+            .unwrap();
+        assert_eq!(game.state.player_at_place(p0).trump, PlayerTrumpPossibilities::Yours);
+
+        game.state.phase = GamePhase::StartTrick;
+        game.state.player_at_turn = p0;
+        assert!(game.legal_actions().contains(&GameAction {
+            action_type: ActionType::Question(QuestionType::Yours),
+            player: p0,
+        }));
+        assert!(!game.legal_actions().contains(&GameAction {
+            action_type: ActionType::AnnounceTrump(Suit::Red),
+            player: p0,
+        }));
+
+        game = game
+            .apply_action(GameAction {
+                action_type: ActionType::Question(QuestionType::YourHalf(Suit::Green)),
+                player: p0,
+            })
+            .unwrap();
+        assert_eq!(game.state.player_at_place(p0).trump, PlayerTrumpPossibilities::Ours);
+
+        game.state.phase = GamePhase::StartTrick;
+        game.state.player_at_turn = p0;
+        assert!(!game.legal_actions().contains(&GameAction {
+            action_type: ActionType::Question(QuestionType::Yours),
+            player: p0,
+        }));
+        assert!(game.legal_actions().contains(&GameAction {
+            action_type: ActionType::Question(QuestionType::YourHalf(Suit::Red)),
+            player: p0,
+        }));
+    }
+
+    pub fn test_random_game_random() {
+        let mut game = helper_create_game();
+        let mut actions = game.legal_actions();
+        assert_eq!(actions.len(), 4);
+        for _ in 0..4 {
+            game = game.apply_action(actions.pop().unwrap()).ok().unwrap();
+            actions = game.legal_actions();
+        }
+        let mut i = 0;
+        while game.state.phase != GamePhase::Ended {
+            i += 1;
+            if i >= 200 {
+                panic!("Too many moves! Game: {:#?}\n ", game,);
+            }
+            actions = game.legal_actions();
+            let opt_select = actions.choose_mut(&mut rand::rng());
+            if opt_select.is_none() {
+                panic!("Game: {:#?}\n Action: {:?}", game, opt_select);
+            }
+            let select = *opt_select.unwrap();
+            let res = game.apply_action(select).ok();
+            if let Some(successful) = res {
+                game = successful;
+            } else {
+                panic!("Game: {:?}\n Action: {:?}", game, select);
+            }
+        }
+        let total_points: Points = game
+            .state
+            .all_tricks
+            .iter()
+            .fold(Points(0), |acc, trick| acc + trick.points);
+        assert_eq!(total_points, Points(140));
+    }
+}

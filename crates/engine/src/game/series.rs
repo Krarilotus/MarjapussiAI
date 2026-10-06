@@ -1,10 +1,11 @@
 #![allow(unused)]
 
+use crate::game::clock::current_time_string;
 use crate::game::gameevent::GameAction;
 use crate::game::gameinfo::GameInfoPlayer;
 use crate::game::player::PlaceAtTable;
 use crate::game::scoring::SeriesSettings;
-use crate::game::{current_time_string, Game};
+use crate::game::table::Game;
 
 struct Series {
     name: String,
