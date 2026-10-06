@@ -1,4 +1,5 @@
-use std::time::SystemTime;
+use std::cell::RefCell;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::offset::Local;
 use chrono::DateTime;
@@ -50,63 +51,66 @@ impl Game {
 
     /// Creates list with all legal actions in the current state of the game.
     pub fn legal_actions(&self) -> Vec<GameAction> {
-        let mut legal = self.state.phase.legal_actions(self);
-        let disallow_undo: Vec<GamePhase> = vec![
-            GamePhase::WaitingForStart,
-            GamePhase::Ended,
-            GamePhase::PassingBack,
-            GamePhase::Raising,
-        ];
-        if disallow_undo.contains(&self.state.phase) {
-            return legal;
-        }
-        // disallow undo special cases
-        match self.state.phase.clone() {
-            GamePhase::PendingUndo(_) => {
-                return legal.clone();
-            }
-            GamePhase::Bidding => {
-                if self.state.value == Points(115) {
-                    return legal.clone();
-                }
-            }
+        let mut legal = vec![];
+        self.push_legal_actions(&mut legal);
+        legal
+    }
+
+    fn push_legal_actions(&self, legal: &mut Vec<GameAction>) {
+        self.state.phase.push_legal_actions(self, legal);
+        match self.state.phase {
+            GamePhase::WaitingForStart
+            | GamePhase::Ended
+            | GamePhase::PassingBack
+            | GamePhase::Raising
+            | GamePhase::PendingUndo(_) => return,
+            GamePhase::Bidding if self.state.value == Points(115) => return,
             _ => {}
         }
-        if self.last_state.is_some() {
+        if let Some(last) = &self.last_state {
             legal.push(GameAction {
                 action_type: ActionType::UndoRequest,
-                player: self.last_state.clone().unwrap().player_at_turn.clone(),
+                player: last.player_at_turn,
             });
         }
-        legal
+    }
+
+    /// Whether `action` is in `legal_actions`. A pass is checked directly when the list is
+    /// that player's passing list (up to 715 four-card passes).
+    fn is_legal(&self, action: &GameAction) -> bool {
+        if let (ActionType::Pass(cards), Some(first)) = (&action.action_type, self.legal_actions.first()) {
+            if matches!(first.action_type, ActionType::Pass(_)) && first.player == action.player {
+                return legal_actions::is_legal_pass(self, cards);
+            }
+        }
+        self.legal_actions.contains(action)
     }
 
     /// Tries creating a new Game with state after applying a given action.
     /// Can fail and does not mutate the existing Game.
     pub fn apply_action(&self, action: GameAction) -> Result<Game, GameError> {
-        if !self.legal_actions.contains(&action) {
+        if !self.is_legal(&action) {
             return Err(GameError::IllegalAction);
         }
-        let (next_game_meta, next_game_state, this_callback, last_state) =
-            action.clone().action_type.apply_action(&action, self);
-
-        // next game Object
-        let this_event = GameEvent {
-            last_action: action,
-            callback: this_callback,
-            player_at_turn: next_game_state.player_at_turn.clone(),
-            time: current_time_string(),
-        };
-        let mut next_all_events: Vec<GameEvent> = self.all_events.clone();
-        next_all_events.push(this_event);
+        // Every action except these two replaces the undo snapshot, so it is cloned only here.
+        let keeps_snapshot = matches!(
+            action.action_type,
+            ActionType::UndoRequest | ActionType::UndoAccept
+        );
+        let mut all_events = Vec::with_capacity(self.all_events.len() + 1);
+        all_events.extend_from_slice(&self.all_events);
         let mut next_game = Game {
-            info: next_game_meta,
-            state: next_game_state,
+            info: self.info.clone(),
+            state: self.state.clone(),
             legal_actions: vec![],
-            last_state,
-            all_events: next_all_events,
+            last_state: if keeps_snapshot {
+                self.last_state.clone()
+            } else {
+                None
+            },
+            all_events,
         };
-        next_game.legal_actions = next_game.legal_actions();
+        next_game.apply_legal(action);
         Ok(next_game)
     }
 
@@ -114,35 +118,50 @@ impl Game {
         self.state.phase == GamePhase::Ended
     }
 
+    /// Applies a legal action in place; panics on an illegal one.
     pub fn apply_action_mut(&mut self, action: GameAction) {
-        if !self.legal_actions.contains(&action) {
+        if !self.is_legal(&action) {
             eprintln!("Discarded illegal action: {:?}", action);
             eprintln!("Game state: {:#?}", self);
             panic!();
         }
+        self.apply_legal(action);
+    }
 
-        let (next_game_meta, next_game_state, this_callback, last_state) =
-            action.action_type.clone().apply_action(&action, self);
-
-        let this_event = GameEvent {
+    fn apply_legal(&mut self, action: GameAction) {
+        let callback = self.apply_in_place(&action);
+        self.all_events.push(GameEvent {
             last_action: action,
-            callback: this_callback,
-            player_at_turn: next_game_state.player_at_turn.clone(),
+            callback,
+            player_at_turn: self.state.player_at_turn,
             time: current_time_string(),
-        };
-
-        self.info = next_game_meta;
-        self.state = next_game_state;
-        self.last_state = last_state;
-        self.all_events.push(this_event);
-        self.legal_actions = self.legal_actions();
+        });
+        let mut legal = std::mem::take(&mut self.legal_actions);
+        legal_actions::recycle(&mut legal);
+        self.push_legal_actions(&mut legal);
+        self.legal_actions = legal;
     }
 }
 
+/// Local wall-clock time as `YYYY-MM-DD HH:MM:SS`. The text is formatted once per second and
+/// per thread and then reused: formatting local time costs more than a whole card play.
 pub fn current_time_string() -> String {
+    thread_local! {
+        static CACHE: RefCell<(u64, String)> = const { RefCell::new((u64::MAX, String::new())) };
+    }
     let system_time = SystemTime::now();
-    let datetime: DateTime<Local> = system_time.into();
-    format!("{}", datetime.format("%Y-%m-%d %T"))
+    let second = system_time
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(u64::MAX - 1);
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.0 != second {
+            let datetime: DateTime<Local> = system_time.into();
+            *cache = (second, format!("{}", datetime.format("%Y-%m-%d %T")));
+        }
+        cache.1.clone()
+    })
 }
 
 #[cfg(test)]
