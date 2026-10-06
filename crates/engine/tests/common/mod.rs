@@ -127,22 +127,27 @@ pub fn finished_line(f: &GameFinishedInfo) -> String {
     out
 }
 
-/// `GameFinishedInfo::scores` as reviewed on feat/heuristic-a (264fa3d), verbatim logic.
-pub fn scores_264fa3d(info: &GameFinishedInfo) -> [i32; 2] {
-    let rounded = |points: i32| (points + 2) / 5 * 5;
-    let Some(playing) = &info.playing_party else {
-        return info.team_points.map(rounded);
-    };
-    let (s, n) = (playing.0 as usize % 2, 1 - playing.0 as usize % 2);
-    let won = info.won.unwrap_or(false);
-    let value = info.game_value.0;
-    let n_tricks = info.tricks.iter().filter(|t| t.winner.0 as usize % 2 == n).count();
-    let mut scores = [0; 2];
-    scores[s] = if won { value } else { -value };
-    scores[n] = if n_tricks == 0 && won {
-        -2 * value
-    } else {
-        rounded(info.team_points[n])
-    };
-    scores
+/// The site's per-game scoring (`marjapussi-online` `SeriesTable.vue`), ported line by line,
+/// on a `GameFinishedInfo`. The source of truth for scoring (owner decision D2).
+pub fn site_scores(info: &GameFinishedInfo) -> [i32; 2] {
+    let mut value = info.game_value.0;
+    if value == 115 {
+        value = 0;
+    }
+    let playing = info.playing_party.map(|p| (p.0 % 2) as usize);
+    let points = info.team_points;
+    let round = |p: i32| (p + 2).div_euclid(5) * 5;
+    let mut gets = [round(points[0]), round(points[1])];
+    for t in 0..2 {
+        if playing == Some(t) {
+            gets[t] = if points[t] >= value { value } else { -value };
+        }
+    }
+    if points[0] == 0 && info.schwarz_game && value >= 120 && gets[1] > 0 {
+        gets[0] = -10 * value / 5;
+    }
+    if points[1] == 0 && info.schwarz_game && value >= 120 && gets[0] > 0 {
+        gets[1] = -10 * value / 5;
+    }
+    gets
 }

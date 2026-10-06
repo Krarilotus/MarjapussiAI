@@ -1,10 +1,10 @@
-//! Guards for `game::scoring`: one case per rule of the rules page ("Spielbewertung"), the
-//! series rules of the site's series table, and `GameFinishedInfo::scores` on random games
-//! against the version reviewed on feat/heuristic-a (264fa3d).
+//! Guards for `game::scoring`: one case per scoring rule of marjapussi.de (the source of truth,
+//! owner decision D2), the series rules of the site's series table, and
+//! `GameFinishedInfo::scores` on random games against a line-by-line port of the site's code.
 
 mod common;
 
-use common::{new_game, pick_action, scores_264fa3d};
+use common::{new_game, pick_action, site_scores};
 use marjapussi_engine::game::gameinfo::GameFinishedInfo;
 use marjapussi_engine::game::points::{points_card, LAST_TRICK_BONUS, PAIR_POINTS};
 use marjapussi_engine::game::scoring::{
@@ -54,14 +54,18 @@ fn schwarz_doubles_only_when_the_contract_is_made() {
 }
 
 #[test]
-fn schwarz_of_the_playing_party_scores_like_a_failed_contract() {
-    // Rules text: only N's schwarz is special. (The site's series table gives S −2 × value
-    // here; open question to the owner, see docs/design/performance.md.)
-    assert_eq!(score(outcome(Some(0), 120, [0, 140], [0, 9])), [-120, 140]);
+fn schwarz_of_the_playing_party_doubles_its_loss() {
+    // Owner decision D2 (the site's table): declarers played schwarz lose −2 × value.
+    assert_eq!(score(outcome(Some(0), 120, [0, 140], [0, 9])), [-240, 140]);
+    assert_eq!(score(outcome(Some(1), 300, [180, 0], [9, 0])), [180, -600]);
+    // Failing with at least one trick stays −value.
+    assert_eq!(score(outcome(Some(0), 150, [2, 138], [1, 8])), [-150, 140]);
 }
 
 #[test]
 fn all_passed_scores_rounded_points() {
+    // `team_points` include announced pairs in all-pass games (owner decision D2).
+    assert_eq!(score(outcome(None, 115, [112, 68], [5, 4])), [110, 70]);
     assert_eq!(score(outcome(None, 115, [72, 68], [5, 4])), [70, 70]);
     assert_eq!(score(outcome(None, 115, [0, 140], [0, 9])), [0, 140]);
 }
@@ -131,7 +135,7 @@ fn playing_to_500_has_no_end_bonuses() {
 }
 
 #[test]
-fn random_games_score_like_264fa3d() {
+fn random_games_score_like_the_site() {
     let mut series = SeriesTally::new(SeriesSettings::default());
     let mut schwarz = 0;
     for seed in 0..3_000 {
@@ -142,7 +146,7 @@ fn random_games_score_like_264fa3d() {
             game.apply_action_mut(a);
         }
         let info = GameFinishedInfo::from(game);
-        assert_eq!(info.scores(), scores_264fa3d(&info), "seed {seed}");
+        assert_eq!(info.scores(), site_scores(&info), "seed {seed}");
         schwarz += info.outcome().team_tricks.contains(&0) as u32;
         series.add(&info.outcome());
     }

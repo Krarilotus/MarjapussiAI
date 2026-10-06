@@ -159,8 +159,8 @@ impl From<Game> for GameFinishedInfo {
             won = Some(points.total()[playing_party.unwrap().0 as usize] >= game.state.value.0);
         }
 
-        // Announced pairs count only when a contract was played (open owner question).
-        let team_points = if no_one_played { points.cards } else { points.total() };
+        // Announced pairs count in every game, all-pass games included (as on the site).
+        let team_points = points.total();
 
         GameFinishedInfo {
             info: game.info.clone(),
