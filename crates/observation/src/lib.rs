@@ -2,7 +2,7 @@
 //!
 //! Everything above this crate sees the game only through `SeatEvent`s and the seat's own
 //! starting hand. Hidden passes carry no cards. Never read `Game.info.player_start_cards`
-//! (all four starting hands); the engine's per-seat view `GameInfoPlayer` is redacted.
+//! (all four starting hands).
 
 use engine::Game;
 use engine::Suit;

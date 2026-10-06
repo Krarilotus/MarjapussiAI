@@ -7,7 +7,7 @@ use std::fmt::Write;
 use marjapussi_engine::FinishedTrick;
 use marjapussi_engine::Game;
 use marjapussi_engine::GameFinishedInfo;
-use marjapussi_engine::{get_all_cards, Card};
+use marjapussi_engine::{get_all_cards, hands_from_deck, Card};
 use marjapussi_engine::{ActionType, GameAction, GameEvent};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -32,12 +32,7 @@ impl Digest {
 pub fn deal(rng: &mut StdRng) -> [Vec<Card>; 4] {
     let mut deck = get_all_cards();
     deck.shuffle(rng);
-    [
-        deck[0..9].to_vec(),
-        deck[9..18].to_vec(),
-        deck[18..27].to_vec(),
-        deck[27..36].to_vec(),
-    ]
+    hands_from_deck(&deck)
 }
 
 pub fn new_game(rng: &mut StdRng) -> Game {

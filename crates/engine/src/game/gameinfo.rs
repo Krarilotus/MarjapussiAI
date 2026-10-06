@@ -1,88 +1,13 @@
 use serde::Serialize;
 
 use crate::game::cards::Card;
-use crate::game::gameevent::{ActionType, GameAction, GameEvent, GameEventPlayer};
+use crate::game::gameevent::{ActionType, GameEvent};
 use crate::game::gamestate::{FinishedTrick, GamePhase};
 use crate::game::meta::GameMetaInfo;
 use crate::game::player::PlaceAtTable;
 use crate::game::points::Points;
 use crate::game::scoring::{game_scores, team_points, GameOutcome, SCHWARZ_FACTOR_FIFTHS};
 use crate::game::table::Game;
-
-/// The public part of `GameMetaInfo`: no start hands.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PublicInfo {
-    pub name: String,
-    pub create_time: String,
-    pub start_time: Option<String>,
-    pub end_time: Option<String>,
-    pub player_names: [String; 4],
-}
-
-impl From<&GameMetaInfo> for PublicInfo {
-    fn from(m: &GameMetaInfo) -> Self {
-        PublicInfo {
-            name: m.name.clone(),
-            create_time: m.create_time.clone(),
-            start_time: m.start_time.clone(),
-            end_time: m.end_time.clone(),
-            player_names: m.player_names.clone(),
-        }
-    }
-}
-
-/// What one seat may see (for a frontend): public facts, its own hand and its own legal
-/// actions. Nothing here depends on another seat's hidden cards (tests/view_privacy.rs).
-#[derive(Debug, Clone)]
-pub struct GameInfoPlayer {
-    pub public_info: PublicInfo,
-    pub players_pressed_start: Vec<String>,
-    pub players_from_perspective: [String; 4],
-    pub player_at_turn: String,
-    pub own_cards: Option<Vec<Card>>,
-    pub players_cards_number_perspective: [u8; 4],
-    pub game_phase: GamePhase,
-    pub bidding_history: Vec<(ActionType, PlaceAtTable)>,
-    pub current_trick: Vec<Card>,
-    pub last_trick: Option<FinishedTrick>,
-    pub last_event: Option<GameEventPlayer>,
-    pub legal_actions: Vec<GameAction>,
-}
-
-impl GameInfoPlayer {
-    pub fn from_game(game: Game, place: PlaceAtTable) -> Self {
-        // Only this seat's actions: another seat's card plays or passes would show its hand.
-        let mut legal_actions = game.legal_actions();
-        legal_actions.retain(|a| a.player == place);
-        GameInfoPlayer {
-            public_info: PublicInfo::from(&*game.info),
-            players_pressed_start: game.state.players_started(),
-            players_from_perspective: game.state.players_perspective(place),
-            player_at_turn: game.state.player_at_place(game.state.player_at_turn).name.to_string(),
-            own_cards: match game.state.started {
-                true => Some(game.state.player_at_place(place).cards.to_vec()),
-                false => None,
-            },
-            players_cards_number_perspective: game.state.players_perspective_cards(place),
-            game_phase: game.state.phase,
-            bidding_history: game.state.bidding_history,
-            current_trick: game.state.current_trick.to_vec(),
-            last_trick: game.state.all_tricks.clone().last().cloned(),
-            last_event: match game.all_events.last() {
-                None => None,
-                Some(event) => {
-                    //hide last event if cards were passed
-                    if let ActionType::Pass(_cards) = event.last_action.action_type {
-                        Some(GameEventPlayer::HiddenEvent)
-                    } else {
-                        Some(GameEventPlayer::PublicEvent(*event))
-                    }
-                }
-            },
-            legal_actions,
-        }
-    }
-}
 
 /// Everything the database needs to know
 #[derive(Debug, Clone, Serialize)]

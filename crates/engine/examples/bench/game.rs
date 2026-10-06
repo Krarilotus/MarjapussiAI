@@ -31,7 +31,7 @@ macro_rules! game_bench {
         use std::hint::black_box;
 
         use $engine::Game;
-        use $engine::{get_all_cards, Card};
+        use $engine::{get_all_cards, hands_from_deck, Card};
         use $engine::{ActionType, GameAction};
 
         pub struct Script {
@@ -62,12 +62,7 @@ macro_rules! game_bench {
                     for i in (1..deck.len()).rev() {
                         deck.swap(i, rng.below(i + 1));
                     }
-                    let hands = [
-                        deck[0..9].to_vec(),
-                        deck[9..18].to_vec(),
-                        deck[18..27].to_vec(),
-                        deck[27..36].to_vec(),
-                    ];
+                    let hands = hands_from_deck(&deck);
                     let mut game = new_game(&hands);
                     let mut picks = vec![];
                     while !game.ended() {

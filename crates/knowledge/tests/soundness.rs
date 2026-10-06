@@ -4,7 +4,7 @@
 use engine::get_all_cards;
 use engine::CardSet;
 use engine::Game;
-use engine::{ActionType, GameAction};
+use engine::{hands_from_deck, ActionType, GameAction};
 use knowledge::Tracker;
 use observation::{start_hand, SeatFilter};
 use rand::rngs::StdRng;
@@ -16,12 +16,7 @@ const GAMES: u64 = 3_000;
 fn new_game(rng: &mut StdRng) -> Game {
     let mut deck = get_all_cards();
     deck.shuffle(rng);
-    let hands = [
-        deck[0..9].to_vec(),
-        deck[9..18].to_vec(),
-        deck[18..27].to_vec(),
-        deck[27..36].to_vec(),
-    ];
+    let hands = hands_from_deck(&deck);
     let names = ["S0", "S1", "S2", "S3"].map(String::from);
     Game::new("soundness".into(), names, Some(hands))
 }
