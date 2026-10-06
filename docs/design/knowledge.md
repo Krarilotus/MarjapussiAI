@@ -81,6 +81,7 @@ Measured v0 baseline (tier 0 only, release build, PC under load from other proje
 - `count()`: the exact number of such deals;
 - `holder_counts()` / `marginals()`: the exact number (probability) of deals in which seat y holds card c; a zero count means the card is impossible there, so this also gives the exact possible sets;
 - `sample(rng)`: one deal, exactly uniform, without rejection;
+- `exact_possible()`: `possible` made exact (cards held in some but not every deal). `Tracker::exact_possible()` caches it by event count, which only grows (undos included), so the cache cannot go stale. Over 72,224 states from random games it removes 404 of 3.13 M possible bits (0.013 %); the guard test compares the cache with a fresh computation after every event;
 - `sample_worlds(rng, n, belief)`: uniform samples weighted by a `Belief` (a likelihood hook for the soft layer; the weights are importance weights).
 
 Method (Investigator A §6.4–6.5):
