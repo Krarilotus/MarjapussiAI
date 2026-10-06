@@ -22,6 +22,7 @@ pub mod legal_actions;
 pub mod parse;
 pub mod player;
 pub mod points;
+pub mod scoring;
 pub mod series;
 
 /// Wrapper for Game and all of its details.

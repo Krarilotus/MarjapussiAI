@@ -18,13 +18,16 @@ mod common;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use common::{finished_line, Digest};
+use common::{finished_line, scores_264fa3d, Digest};
 use marjapussi_engine::game::cards::{Card, Suit};
 use marjapussi_engine::game::gameevent::{ActionType, AnswerType, GameAction, QuestionType};
 use marjapussi_engine::game::gameinfo::GameFinishedInfo;
 use marjapussi_engine::game::player::PlaceAtTable;
 use marjapussi_engine::game::Game;
 use serde_json::Value;
+
+/// Sum of `GameFinishedInfo::scores()` over the replayed games, per team (E1).
+const SCORE_TOTALS: [i64; 2] = [35_710, 29_005];
 
 /// Recorded on `main` at 68c98f0.
 const EXPECTED: u64 = 0x9a38_7d77_f3bc_8e2d;
@@ -235,6 +238,33 @@ fn replay(rec: &Value) -> Result<Game, String> {
     }
 }
 
+/// The site's per-game scoring (`SeriesTable.vue`), on the record's own fields, by team.
+fn site_scores(rec: &Value) -> Option<[i32; 2]> {
+    let names: Vec<&str> = rec["players"].as_array()?.iter().filter_map(|v| v.as_str()).collect();
+    let pts = |i: usize| rec["players_points"][names[i]].as_i64().map(|p| p as i32);
+    let points = [pts(0)? + pts(2)?, pts(1)? + pts(3)?];
+    let mut value = rec["game_value"].as_i64()? as i32;
+    if value == 115 {
+        value = 0;
+    }
+    let playing = rec["playing_player"].as_str().and_then(|p| names.iter().position(|n| *n == p));
+    let schwarz = rec["schwarz_game"].as_bool().unwrap_or(false);
+    let round = |p: i32| (p + 2).div_euclid(5) * 5;
+    let mut gets = points.map(round);
+    for t in 0..2 {
+        if playing.map(|p| p % 2) == Some(t) {
+            gets[t] = if points[t] >= value { value } else { -value };
+        }
+    }
+    let before = gets;
+    for t in 0..2 {
+        if points[t] == 0 && schwarz && value >= 120 && before[1 - t] > 0 {
+            gets[t] = -10 * value / 5;
+        }
+    }
+    Some(gets)
+}
+
 #[test]
 fn human_games_replay_like_main() {
     let Some(path) = dataset() else {
@@ -246,6 +276,9 @@ fn human_games_replay_like_main() {
     let mut stopped: BTreeMap<String, u32> = BTreeMap::new();
     let (mut records, mut ended, mut contract_made, mut schwarz) = (0, 0, 0, 0);
     let mut team_points = [0i64; 2];
+    let mut score_totals = [0i64; 2];
+    let (mut site_points_equal, mut site_scores_equal, mut s_schwarz) = (0, 0, 0);
+    let mut differences: BTreeMap<&str, u32> = BTreeMap::new();
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
         records += 1;
         let rec: Value = serde_json::from_str(line).expect("json record");
@@ -258,6 +291,35 @@ fn human_games_replay_like_main() {
                 team_points[0] += info.team_points[0] as i64;
                 team_points[1] += info.team_points[1] as i64;
                 digest.add(&finished_line(&info));
+                let scores = info.scores();
+                assert_eq!(scores, scores_264fa3d(&info), "scores differ from 264fa3d");
+                score_totals[0] += scores[0] as i64;
+                score_totals[1] += scores[1] as i64;
+                let outcome = info.outcome();
+                if let Some(s) = outcome.playing_team {
+                    s_schwarz += (outcome.team_tricks[s as usize] == 0) as u32;
+                }
+                let names: Vec<&str> = rec["players"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+                let recorded = [0, 1].map(|t| {
+                    let p = |i: usize| rec["players_points"][names[i]].as_i64().unwrap_or(-1) as i32;
+                    p(t) + p(t + 2)
+                });
+                site_points_equal += (recorded == info.team_points) as u32;
+                site_scores_equal += (site_scores(&rec) == Some(scores)) as u32;
+                // Every difference to the site's scoring must have a known cause (E1).
+                if site_scores(&rec) != Some(scores) {
+                    let flagged = rec["schwarz_game"].as_bool().unwrap_or(false);
+                    let cause = if recorded != info.team_points {
+                        "team points differ from the record (old site version)"
+                    } else if !flagged && outcome.team_tricks.contains(&0) {
+                        "N schwarz, record without the schwarz flag (old site version)"
+                    } else if outcome.playing_team.is_some_and(|p| outcome.team_tricks[p as usize] == 0) {
+                        "playing party schwarz: site -2A, rules text -A"
+                    } else {
+                        "unexplained"
+                    };
+                    *differences.entry(cause).or_default() += 1;
+                }
             }
             Err(why) => {
                 digest.add(&why);
@@ -269,6 +331,13 @@ fn human_games_replay_like_main() {
         "{records} records: {ended} replayed to the end ({contract_made} contracts made, {schwarz} schwarz, team points {team_points:?}); stopped {stopped:?}; digest {:#018x}",
         digest.0
     );
+    eprintln!(
+        "scores: totals {score_totals:?}; team points equal to the site's record in {site_points_equal}/{ended}; \
+         scores equal to the site's table in {site_scores_equal}/{ended}; playing party schwarz in {s_schwarz}; \
+         differences by cause {differences:?}"
+    );
+    assert!(!differences.contains_key("unexplained"), "a score differs from the site without a known cause");
     assert_eq!(records, 1_579);
     assert_eq!(digest.0, EXPECTED, "human replay outcomes changed (digest {:#018x})", digest.0);
+    assert_eq!(score_totals, SCORE_TOTALS, "human replay scores changed");
 }

@@ -5,6 +5,7 @@ use crate::game::gameevent::{ActionType, GameAction, GameCallback, GameEvent, Ga
 use crate::game::gamestate::{FinishedTrick, GamePhase};
 use crate::game::player::{PlaceAtTable, Player};
 use crate::game::points::{points_pair, Points};
+use crate::game::scoring::{game_scores, GameOutcome, SCHWARZ_FACTOR_FIFTHS};
 use crate::game::{current_time_string, Game};
 
 #[derive(Debug, Clone, Serialize)]
@@ -203,5 +204,30 @@ impl GameFinishedInfo {
         self.info.create_time = created;
         self.info.start_time = Some(started);
         self.info.end_time = Some(ended);
+    }
+
+    /// What scoring needs: the playing team, the game value, points and tricks per team.
+    pub fn outcome(&self) -> GameOutcome {
+        let mut team_tricks = [0u8; 2];
+        for t in &self.tricks {
+            team_tricks[(t.winner.0 % 2) as usize] += 1;
+        }
+        GameOutcome {
+            playing_team: self.playing_party.map(|p| p.0 % 2),
+            game_value: self.game_value.0,
+            team_points: self.team_points,
+            team_tricks,
+        }
+    }
+
+    /// Score of the game for each team (team 0 = seats 0 and 2), by the rules page; see
+    /// `game::scoring`.
+    pub fn scores(&self) -> [i32; 2] {
+        self.scores_with(SCHWARZ_FACTOR_FIFTHS)
+    }
+
+    /// `scores` with a series' schwarz factor (in fifths of the game value).
+    pub fn scores_with(&self, schwarz_factor_fifths: i32) -> [i32; 2] {
+        game_scores(&self.outcome(), schwarz_factor_fifths)
     }
 }
