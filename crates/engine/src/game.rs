@@ -128,7 +128,7 @@ impl Game {
             last_action: action,
             callback,
             player_at_turn: self.state.player_at_turn,
-            time: current_time_string(),
+            time: now_millis(),
         });
         let mut legal = std::mem::take(&mut self.legal_actions);
         legal.clear();
@@ -139,6 +139,20 @@ impl Game {
 
 /// Local wall-clock time as `YYYY-MM-DD HH:MM:SS`. The text is formatted once per second and
 /// per thread and then reused: formatting local time costs more than a whole card play.
+/// Milliseconds since the Unix epoch (0 if the clock is before it).
+pub fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// A `GameEvent::time` as local time, `YYYY-MM-DD HH:MM:SS`.
+pub fn format_time(millis: u64) -> String {
+    let time = UNIX_EPOCH + std::time::Duration::from_millis(millis);
+    let datetime: DateTime<Local> = time.into();
+    format!("{}", datetime.format("%Y-%m-%d %T"))
+}
+
 pub fn current_time_string() -> String {
     thread_local! {
         static CACHE: RefCell<(u64, String)> = const { RefCell::new((u64::MAX, String::new())) };
@@ -168,6 +182,8 @@ mod tests {
 
     #[test]
     fn test_time_creation() {
+        assert_eq!(format_time(now_millis()).len(), 19);
+        assert_eq!(format_time(now_millis()), current_time_string());
         let time = current_time_string();
         assert_eq!(time.len(), 19);
     }

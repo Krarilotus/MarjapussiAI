@@ -7,13 +7,14 @@ use crate::game::player::PlaceAtTable;
 
 /// This is everything that happened since the last game state.
 /// Meant to broadcast implicit information about the game that follows actions
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct GameEvent {
     pub last_action: GameAction,
     /// Inner change that can not be known from single last action
     pub callback: Option<GameCallback>,
     pub player_at_turn: PlaceAtTable,
-    pub time: String,
+    /// Wall-clock time in milliseconds since the Unix epoch (`game::format_time` for text).
+    pub time: u64,
 }
 
 /// Meant for broadcasting, hides passing cards.
