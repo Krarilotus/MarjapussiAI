@@ -9,7 +9,7 @@ use crate::game::cards::{get_all_cards, Card};
 /// Cards dealt to each player.
 pub const HAND_SIZE: usize = 9;
 
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct PlaceAtTable(pub u8);
 
 impl PlaceAtTable {
@@ -35,7 +35,6 @@ impl Debug for PlaceAtTable {
     }
 }
 
-#[derive(Clone)]
 pub struct Player {
     pub name: String,
     pub partner: PlaceAtTable,
@@ -46,6 +45,35 @@ pub struct Player {
     pub tricks: Vec<Vec<Card>>,
     pub trump: PlayerTrumpPossibilities,
     pub bidding: bool,
+}
+
+impl Clone for Player {
+    fn clone(&self) -> Self {
+        Player {
+            name: self.name.clone(),
+            partner: self.partner,
+            next_player: self.next_player,
+            place_at_table: self.place_at_table,
+            cards: self.cards.clone(),
+            last_played: self.last_played,
+            tricks: self.tricks.clone(),
+            trump: self.trump.clone(),
+            bidding: self.bidding,
+        }
+    }
+
+    /// Reuses the name and card buffers (see `GameState::clone_from`).
+    fn clone_from(&mut self, source: &Self) {
+        self.name.clone_from(&source.name);
+        self.partner = source.partner;
+        self.next_player = source.next_player;
+        self.place_at_table = source.place_at_table;
+        self.cards.clone_from(&source.cards);
+        self.last_played = source.last_played;
+        self.tricks.clone_from(&source.tricks);
+        self.trump = source.trump.clone();
+        self.bidding = source.bidding;
+    }
 }
 
 impl PartialEq for Player {
@@ -80,7 +108,7 @@ impl Player {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerTrumpPossibilities {
     Own,
     Yours,
