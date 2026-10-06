@@ -16,13 +16,11 @@ use crate::game::cards::{Card, Suit, CARDS};
 use crate::game::errors::GameError;
 use crate::game::gameevent::{ActionType, GameAction};
 use crate::game::gamestate::GamePhase;
-use crate::game::player::{PlaceAtTable, PlayerTrumpPossibilities};
-use crate::game::points::{CARD_POINTS, LAST_TRICK_BONUS, PAIR_POINTS};
+use crate::game::player::{PlaceAtTable, TRICKS};
+use crate::game::rules::{trick_points, trump_points};
 use crate::game::scoring;
 use crate::game::table::Game;
 
-/// Tricks in a game.
-pub const TRICKS: u8 = 9;
 const NO_TRUMP: u8 = 4;
 
 /// A move in card play.
@@ -222,7 +220,7 @@ impl FastState {
         fast.trump = s.trump.map_or(NO_TRUMP, |t| t as u8);
         fast.called = s.trump_called.iter().fold(0, |b, &t| b | 1 << t as u8);
         fast.may_announce = (0..4u8)
-            .filter(|&i| s.players[i as usize].trump == PlayerTrumpPossibilities::Own)
+            .filter(|&i| s.players[i as usize].trump.may_announce())
             .fold(0, |b, i| b | 1 << i);
         fast.announce_open = announce_open;
         fast.tricks_done = s.all_tricks.len() as u8;
@@ -319,7 +317,7 @@ impl FastState {
     /// The seat currently winning the trick, if a card has been played.
     #[inline]
     pub fn trick_winner(&self) -> Option<u8> {
-        (self.trick_len > 0).then(|| (self.leader + bits::trick_winner(self.trick(), self.trump()) as u8) & 3)
+        (self.trick_len > 0).then(|| bits::winning_seat(self.leader, self.trick(), self.trump()))
     }
 
     /// The cards the seat to move may play.
@@ -370,17 +368,9 @@ impl FastState {
 
     #[inline]
     fn finish_trick(&mut self) {
-        let winner = (self.leader + bits::trick_winner(&self.trick, self.trump()) as u8) & 3;
+        let winner = bits::winning_seat(self.leader, &self.trick, self.trump());
         let team = (winner & 1) as usize;
-        let t = self.trick;
-        let mut points = CARD_POINTS[t[0] as usize] as i16
-            + CARD_POINTS[t[1] as usize] as i16
-            + CARD_POINTS[t[2] as usize] as i16
-            + CARD_POINTS[t[3] as usize] as i16;
-        if self.tricks_done == TRICKS - 1 {
-            points += LAST_TRICK_BONUS as i16;
-        }
-        self.card_points[team] += points;
+        self.card_points[team] += trick_points(self.trick, self.tricks_done) as i16;
         self.tricks[team] += 1;
         self.tricks_done += 1;
         self.leader = winner;
@@ -397,9 +387,10 @@ impl FastState {
             self.announcements() >> suit as u8 & 1 == 1,
             "illegal announcement {suit:?}"
         );
+        let already_called = self.called >> suit as u8 & 1 == 1;
+        self.pair_points[(self.leader & 1) as usize] += trump_points(suit, already_called) as i16;
         self.trump = suit as u8;
         self.called |= 1 << suit as u8;
-        self.pair_points[(self.leader & 1) as usize] += PAIR_POINTS[suit as usize] as i16;
         self.announce_open = false;
     }
 

@@ -15,7 +15,7 @@
 
 use crate::game::gameevent::{GameCallback, GameEvent};
 use crate::game::gamestate::FinishedTrick;
-use crate::game::points::PAIR_POINTS;
+use crate::game::rules::trump_points;
 
 /// Running points per team (team 0 = seats 0 and 2) at any state of a game.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -46,7 +46,8 @@ pub fn team_points(tricks: &[FinishedTrick], events: &[GameEvent]) -> TeamPoints
     }
     for e in events {
         if let Some(GameCallback::NewTrump(suit)) = e.callback {
-            p.pairs[(e.last_action.player.0 % 2) as usize] += PAIR_POINTS[suit as usize];
+            // A `NewTrump` callback is a first call of the suit.
+            p.pairs[(e.last_action.player.0 % 2) as usize] += trump_points(suit, false);
         }
     }
     p
