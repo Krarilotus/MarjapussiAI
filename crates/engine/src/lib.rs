@@ -12,9 +12,9 @@ mod fast;
 mod game;
 mod inline;
 
-pub use bits::{next_seat, partner, play_levels, takes, trick_winner, CardSet, PlayLevels};
-pub use fast::{FastParts, FastState, Move, Moves, PublicState, TRICKS};
-pub use game::bidding::{bid_range, BID_STEP, MAX_BID, NO_BID};
+pub use bits::{next_seat, partner, play_levels, takes, trick_winner, winning_seat, CardSet, PlayLevels};
+pub use fast::{FastParts, FastState, Move, Moves, PublicState};
+pub use game::bidding::{bid_range, is_bid, BID_STEP, MAX_BID, NO_BID};
 pub use game::cards::{get_all_cards, suit_of, value_of, Card, Suit, Value, CARDS, SUITS, VALUES};
 pub use game::clock::{current_time_string, format_time, now_millis, Clock};
 pub use game::errors::GameError;
@@ -24,11 +24,12 @@ pub use game::gamestate::{FinishedTrick, GamePhase, GameState};
 pub use game::legal_actions::is_first_trick;
 pub use game::meta::GameMetaInfo;
 pub use game::parse::{parse_legacy_format, LegacyGameFormat};
-pub use game::player::{hands_from_deck, PlaceAtTable, Player, PlayerTrumpPossibilities, HAND_SIZE};
+pub use game::player::{hands_from_deck, PlaceAtTable, Player, PlayerTrumpPossibilities, HAND_SIZE, TRICKS};
 pub use game::points::{
     points_card, points_pair, points_set, points_trick, Points, CARD_POINTS, LAST_TRICK_BONUS, PAIR_POINTS,
     VALUE_POINTS,
 };
+pub use game::rules::{trick_points, trump_points};
 pub use game::scoring::{
     game_scores, round5, team_points, GameOutcome, SeriesLength, SeriesResult, SeriesSettings, SeriesTally, TeamPoints,
     SCHWARZ_FACTOR_FIFTHS,

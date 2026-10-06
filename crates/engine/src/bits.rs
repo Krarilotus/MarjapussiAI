@@ -177,6 +177,12 @@ impl PlayLevels {
     }
 }
 
+/// The seat that wins `trick` (bit indices in play order) led by `leader`, seats 0–3.
+#[inline]
+pub fn winning_seat(leader: u8, trick: &[u8], trump: Option<Suit>) -> u8 {
+    (leader + trick_winner(trick, trump) as u8) & 3
+}
+
 /// Whether `challenger` takes the trick from the current `winner`.
 #[inline]
 pub fn takes(challenger: u8, winner: u8, trump: Option<Suit>) -> bool {

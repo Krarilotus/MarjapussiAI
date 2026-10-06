@@ -14,5 +14,6 @@ pub(crate) mod meta;
 pub(crate) mod parse;
 pub(crate) mod player;
 pub(crate) mod points;
+pub(crate) mod rules;
 pub(crate) mod scoring;
 pub(crate) mod table;
