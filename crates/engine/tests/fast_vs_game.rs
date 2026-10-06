@@ -58,6 +58,12 @@ fn fast_matches_game_at_every_card_play_state() {
                 );
                 let seat = game.state.player_at_turn.0;
                 assert_eq!(fresh.to_move(), seat, "seed {seed}: seat to move");
+                let trick_leader = (!fresh.trick().is_empty()).then(|| fresh.leader());
+                assert_eq!(
+                    game.state.trick_leader().map(|p| p.0),
+                    trick_leader,
+                    "seed {seed}: trick leader"
+                );
                 let game_cards =
                     CardSet::from_cards(game.legal_actions().iter().filter_map(|a| match &a.action_type {
                         ActionType::CardPlayed(c) => Some(c),
@@ -84,6 +90,7 @@ fn fast_matches_game_at_every_card_play_state() {
             }
             let action = pick(&game, &mut rng);
             let tricks_before = game.state.all_tricks.len();
+            let leader_before = stepped.map(|s| s.leader());
             game.apply_action_mut(action);
             match (fast::from_action(&action.action_type), stepped.as_mut()) {
                 (Some(m), Some(s)) => {
@@ -96,6 +103,10 @@ fn fast_matches_game_at_every_card_play_state() {
                         tricks += 1;
                         let t = game.state.all_tricks.last().unwrap();
                         assert_eq!(s.leader(), t.winner.0, "seed {seed}: trick winner");
+                        assert_eq!(Some(t.leader.0), leader_before, "seed {seed}: trick leader");
+                        let seats = t.seats().map(|p| p.0);
+                        assert_eq!(seats, [0, 1, 2, 3].map(|i| (t.leader.0 + i) % 4));
+                        assert_eq!(t.seat_of_card(3).0, action.player.0, "seed {seed}: last card's seat");
                         assert_eq!(s.tricks_done() as usize, game.state.all_tricks.len());
                     }
                 }

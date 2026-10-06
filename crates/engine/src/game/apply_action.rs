@@ -255,6 +255,7 @@ pub(crate) fn act_card(card: Card, state: &mut GameState) {
         ];
         let idx = cards.map(|c| bits::index(&c));
         // After four plays the turn is back at the leader; the winner sits `winner` seats on.
+        let leader = state.player_at_turn;
         let winner = bits::trick_winner(&idx, state.trump);
         for _ in 0..winner {
             state.player_at_turn = state.player_at_turn.next();
@@ -266,6 +267,7 @@ pub(crate) fn act_card(card: Card, state: &mut GameState) {
         }
         state.all_tricks.push(FinishedTrick {
             cards,
+            leader,
             winner: state.player_at_turn,
             points: Points(points),
         });

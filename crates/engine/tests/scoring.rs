@@ -147,6 +147,7 @@ fn random_games_score_like_the_site() {
         }
         let info = GameFinishedInfo::from(game);
         assert_eq!(info.scores(), site_scores(&info), "seed {seed}");
+        assert_eq!(info.declarer.map(|p| p.0 % 2), info.playing_party.map(|p| p.0));
         schwarz += info.outcome().team_tricks.contains(&0) as u32;
         series.add(&info.outcome());
     }
