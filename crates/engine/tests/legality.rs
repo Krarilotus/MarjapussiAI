@@ -6,10 +6,10 @@
 mod common;
 
 use common::{new_game, pick_action};
-use marjapussi_engine::game::cards::{get_all_cards, Card, Suit};
-use marjapussi_engine::game::gameevent::{ActionType, AnswerType, GameAction, QuestionType};
-use marjapussi_engine::game::player::PlaceAtTable;
-use marjapussi_engine::game::Game;
+use marjapussi_engine::Game;
+use marjapussi_engine::PlaceAtTable;
+use marjapussi_engine::{get_all_cards, Card, Suit};
+use marjapussi_engine::{ActionType, AnswerType, GameAction, QuestionType};
 use rand::rngs::StdRng;
 use rand::seq::IndexedRandom;
 use rand::{Rng, SeedableRng};

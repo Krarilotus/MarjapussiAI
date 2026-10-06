@@ -227,3 +227,28 @@ Ratios are A/B against `main` 80eaf23 after each step, interleaved.
 | — | `Game.clock`, `Game::with_clock(Clock::Off)` | optional, for simulations |
 | scoring | declarers played schwarz lose −2A; pairs count in all-pass `team_points` | — |
 | `GameInfoPlayer`, `GameFinishedInfo` | unchanged types (`Vec` fields) | — |
+
+## E5: ownership and abstraction debt (same branch)
+| Debt | Change | Evidence |
+|---|---|---|
+| D4 privacy | `GameInfoPlayer.meta_info` (all four start hands) → `public_info: PublicInfo`; its `legal_actions` only for its own seat (another seat's card plays or passes showed that hand) | `tests/view_privacy.rs`: hand-swap test (500 deals, >5,000 states, equal views) and own-actions/own-hand check (300 games); both fail with the filter removed |
+| D10, D9 | `cards` is the leaf that owns the card codes (`Suit::code/from_code`, `Value::code/from_code`, `FromStr`), `CARDS`, `SUITS`, `VALUES`, `Card::index/from_index`; the `Vec` rule wrappers and the `Vec` oracle test are removed; knowledge uses `CARDS` instead of a bare 36; `itertools`, `strum`, `strum_macros` removed | digests unchanged |
+| D2 | `apply_action.rs`: one function per action kind over `{state, undo snapshot, meta info}`; legal actions work on the state and snapshot; answers follow from the phase instead of an event-log scan | `kg caps`: no engine function over the cap (was 182 lines); legality guard green |
+| D1 | `game.rs` only declares modules; `Game` in `game/table.rs`, time in `game/clock.rs`, `GameMetaInfo` in `game/meta.rs`; `inline.rs` is a leaf | `kg cycles`: the 12-file engine cycle is gone (one remains inside knowledge, not engine code) |
+| D3 | Façade: `lib.rs` re-exports the public API; `bits`, `fast`, `game`, `inline` are private; consumers import `engine::X` | `kg facade`: 0 deep-import targets (was 8 on main, 24 measured on the heuristic branch) |
+| Derived facts | `GameState::declarer()`, `playing_team()`, `trick_leader()`; `FinishedTrick.leader`, `seat_of_card(i)`, `seats()`; `GameFinishedInfo.declarer`; card codes from `cards` | digests unchanged (declarer from the bidding history equals the old event scan on all guard games); `fast_vs_game` checks leaders and seats at every card-play state |
+
+Speed after E5: unchanged within noise (A/B vs main: ×1.86 per action incl. the legal list, ×5.9 immutable, ×3.4 replay).
+
+### More API changes for the heuristic and devtool branches (E5)
+| Before | After |
+|---|---|
+| `engine::game::…::X`, `engine::bits::X`, `engine::fast::X` | `engine::X` (all public names at the root) |
+| `bits::index(&c)`, `bits::card(i)` | `c.index()`, `Card::from_index(i)` |
+| `fast::to_action(m, seat)`, `fast::from_action(&a)` | `m.to_action(seat)`, `Move::from_action(&a)` |
+| `GameInfoPlayer.meta_info` | `GameInfoPlayer.public_info` (no start hands); `legal_actions` only for that seat |
+| `cards::allowed_cards`, `allowed_first`, `high_card`, `is_higher_card`, `higher_cards`, `halves`, `pairs`, `print_cards`; `parse::parse_card(s)` | `play_levels(..).allowed(hand)`, `trick_winner`, `takes`, `CardSet::halves`; `s.parse::<Card>()` (strict `r-A` format) |
+| `GamePhase::legal_actions`, `legal_actions::{legal_bidding, legal_passing, legal_cards, legal_question, legal_answer}` | `Game::legal_actions()` / `legal_actions_into` / `is_legal` |
+| declarer derived from the event log | `game.state.declarer()`, `GameFinishedInfo.declarer` |
+| seats per trick rebuilt from the action log | `FinishedTrick.leader`, `seat_of_card(i)`, `seats()` |
+| `points_players` | removed (unused) |

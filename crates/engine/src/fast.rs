@@ -12,11 +12,11 @@
 //! The state is 56 bytes, and copying it measured faster than make/unmake.
 
 use crate::bits::{self, CardSet, SUITS};
-use crate::game::cards::Suit;
+use crate::game::cards::{Card, Suit};
 use crate::game::errors::GameError;
-use crate::game::gameevent::ActionType;
+use crate::game::gameevent::{ActionType, GameAction};
 use crate::game::gamestate::GamePhase;
-use crate::game::player::PlayerTrumpPossibilities;
+use crate::game::player::{PlaceAtTable, PlayerTrumpPossibilities};
 use crate::game::points::{CARD_POINTS, LAST_TRICK_BONUS, PAIR_POINTS};
 use crate::game::scoring;
 use crate::game::table::Game;
@@ -28,7 +28,7 @@ const NO_TRUMP: u8 = 4;
 /// A move in card play.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Move {
-    /// Play the card with this bit index (`bits::index`).
+    /// Play the card with this bit index (`Card::index`).
     Card(u8),
     /// The leader announces a pair at a trick start; the suit becomes trump.
     Announce(Suit),
@@ -178,7 +178,7 @@ impl FastState {
             (s.player_at_turn.0 + 4 - trick.len() as u8) % 4,
         );
         for (slot, c) in fast.trick.iter_mut().zip(trick) {
-            *slot = bits::index(c);
+            *slot = c.index();
         }
         fast.trick_len = trick.len() as u8;
         fast.trump = s.trump.map_or(NO_TRUMP, |t| t as u8);
@@ -414,22 +414,24 @@ impl Iterator for Moves {
 
 impl ExactSizeIterator for Moves {}
 
-/// The `Game` action for a move by `seat`.
-pub fn to_action(m: Move, seat: u8) -> crate::game::gameevent::GameAction {
-    crate::game::gameevent::GameAction {
-        action_type: match m {
-            Move::Card(c) => ActionType::CardPlayed(bits::card(c)),
-            Move::Announce(s) => ActionType::AnnounceTrump(s),
-        },
-        player: crate::game::player::PlaceAtTable(seat),
+impl Move {
+    /// The `Game` action for this move by `seat`.
+    pub fn to_action(self, seat: u8) -> GameAction {
+        GameAction {
+            action_type: match self {
+                Move::Card(c) => ActionType::CardPlayed(Card::from_index(c)),
+                Move::Announce(s) => ActionType::AnnounceTrump(s),
+            },
+            player: PlaceAtTable(seat),
+        }
     }
-}
 
-/// The move of a `Game` card-play action, if it is one.
-pub fn from_action(action: &ActionType) -> Option<Move> {
-    match action {
-        ActionType::CardPlayed(c) => Some(Move::Card(bits::index(c))),
-        ActionType::AnnounceTrump(s) => Some(Move::Announce(*s)),
-        _ => None,
+    /// The move of a `Game` card-play action, if it is one.
+    pub fn from_action(action: &ActionType) -> Option<Move> {
+        match action {
+            ActionType::CardPlayed(c) => Some(Move::Card(c.index())),
+            ActionType::AnnounceTrump(s) => Some(Move::Announce(*s)),
+            _ => None,
+        }
     }
 }

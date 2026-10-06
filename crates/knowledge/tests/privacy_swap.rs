@@ -7,10 +7,10 @@
 //! are replayed on the swapped deal. Where every action stays legal and every public event
 //! (action and callback) is unchanged, `s` must see the same events and know the same.
 
-use engine::bits::{index, CardSet};
-use engine::game::cards::{get_all_cards, Card};
-use engine::game::gameevent::{ActionType, GameAction};
-use engine::game::Game;
+use engine::CardSet;
+use engine::Game;
+use engine::{get_all_cards, Card};
+use engine::{ActionType, GameAction};
 use knowledge::Tracker;
 use observation::{seat_events, start_hand, Seat};
 use rand::rngs::StdRng;
@@ -91,7 +91,7 @@ fn hidden_cards_do_not_change_what_a_seat_knows() {
         let candidates = |from: u8, to: u8| -> Vec<Card> {
             hands[from as usize]
                 .iter()
-                .filter(|c| !touched.contains(index(c)) && known.may_hold(to).contains(index(c)))
+                .filter(|c| !touched.contains(c.index()) && known.may_hold(to).contains(c.index()))
                 .cloned()
                 .collect()
         };

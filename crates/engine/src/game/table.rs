@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::game::apply_action::{self, Target};
+use crate::game::apply_action::{self, Mutable};
 use crate::game::cards::Card;
 use crate::game::clock::{now_millis, Clock};
 use crate::game::errors::GameError;
@@ -122,7 +122,7 @@ impl Game {
     }
 
     fn apply_legal(&mut self, action: GameAction) {
-        let target = Target {
+        let target = Mutable {
             state: &mut self.state,
             last_state: &mut self.last_state,
             info: &mut self.info,

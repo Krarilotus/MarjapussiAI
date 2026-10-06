@@ -1,9 +1,9 @@
 //! Guard test (I11): a pass shows its cards to the giver and the receiver only.
 
-use engine::bits::{partner, CardSet};
-use engine::game::cards::get_all_cards;
-use engine::game::gameevent::ActionType;
-use engine::game::Game;
+use engine::get_all_cards;
+use engine::ActionType;
+use engine::Game;
+use engine::{partner, CardSet};
 use observation::{SeatEvent, SeatFilter};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;

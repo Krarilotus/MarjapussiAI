@@ -3,10 +3,10 @@
 
 use std::collections::HashMap;
 
-use engine::bits::CardSet;
-use engine::game::cards::get_all_cards;
-use engine::game::gameevent::{ActionType, GameAction};
-use engine::game::Game;
+use engine::get_all_cards;
+use engine::CardSet;
+use engine::Game;
+use engine::{ActionType, GameAction};
 use knowledge::{DealSpace, ExactSets, Hands, Knowledge, Tracker};
 use observation::SeatFilter;
 use rand::rngs::StdRng;

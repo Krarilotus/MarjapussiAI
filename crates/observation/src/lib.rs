@@ -4,10 +4,10 @@
 //! starting hand. Hidden passes carry no cards. Never read `Game.info.player_start_cards`
 //! (all four starting hands); the engine's per-seat view `GameInfoPlayer` is redacted.
 
-use engine::bits::{index, partner, CardSet};
-use engine::game::cards::Suit;
-use engine::game::gameevent::{ActionType, AnswerType, GameCallback, GameEvent, QuestionType};
-use engine::game::Game;
+use engine::Game;
+use engine::Suit;
+use engine::{partner, CardSet};
+use engine::{ActionType, AnswerType, GameCallback, GameEvent, QuestionType};
 
 pub type Seat = u8;
 
@@ -120,7 +120,7 @@ impl SeatFilter {
             }
             ActionType::CardPlayed(card) => SeatEvent::CardPlayed {
                 seat,
-                card: index(card),
+                card: card.index(),
             },
             ActionType::AnnounceTrump(suit) => SeatEvent::AnnounceTrump { seat, suit: *suit },
             ActionType::Question(QuestionType::Yours) => SeatEvent::AskPair { seat },

@@ -16,14 +16,14 @@ use crate::game::player::{PlaceAtTable, PlayerTrumpPossibilities};
 use crate::game::points::{Points, CARD_POINTS, LAST_TRICK_BONUS};
 
 /// What one action may change.
-pub(crate) struct Target<'a> {
+pub(crate) struct Mutable<'a> {
     pub state: &'a mut GameState,
     pub last_state: &'a mut Option<GameState>,
     pub info: &'a mut Arc<GameMetaInfo>,
 }
 
 /// Applies a legal action and returns its callback.
-pub(crate) fn apply(t: Target, action: &GameAction) -> Option<GameCallback> {
+pub(crate) fn apply(t: Mutable, action: &GameAction) -> Option<GameCallback> {
     let player = action.player;
     match action.action_type {
         ActionType::Start => start(t, player),
@@ -41,7 +41,7 @@ pub(crate) fn apply(t: Target, action: &GameAction) -> Option<GameCallback> {
     }
 }
 
-fn start(t: Target, player: PlaceAtTable) -> Option<GameCallback> {
+fn start(t: Mutable, player: PlaceAtTable) -> Option<GameCallback> {
     let state = t.state;
     if !state.players_started.contains(&player) {
         state.players_started.push(player);
@@ -55,7 +55,7 @@ fn start(t: Target, player: PlaceAtTable) -> Option<GameCallback> {
     None
 }
 
-fn bid(t: Target, action: &GameAction, value: i32) -> Option<GameCallback> {
+fn bid(t: Mutable, action: &GameAction, value: i32) -> Option<GameCallback> {
     snapshot(t.last_state, t.state);
     let state = t.state;
     state.bidding_history.push((action.action_type, action.player));
@@ -84,7 +84,7 @@ fn next_bidder(state: &GameState) -> PlaceAtTable {
     next
 }
 
-fn stop_bidding(t: Target, action: &GameAction) -> Option<GameCallback> {
+fn stop_bidding(t: Mutable, action: &GameAction) -> Option<GameCallback> {
     snapshot(t.last_state, t.state);
     let state = t.state;
     state.bidding_history.push((action.action_type, action.player));
@@ -111,7 +111,7 @@ fn stop_bidding(t: Target, action: &GameAction) -> Option<GameCallback> {
     None
 }
 
-fn pass(t: Target, player: PlaceAtTable, cards: [Card; 4]) -> Option<GameCallback> {
+fn pass(t: Mutable, player: PlaceAtTable, cards: [Card; 4]) -> Option<GameCallback> {
     let state = t.state;
     state.player_at_place_mut(player).cards.retain(|x| !cards.contains(x));
     state
@@ -128,7 +128,7 @@ fn pass(t: Target, player: PlaceAtTable, cards: [Card; 4]) -> Option<GameCallbac
     None
 }
 
-fn play(t: Target, player: PlaceAtTable, card: Card) -> Option<GameCallback> {
+fn play(t: Mutable, player: PlaceAtTable, card: Card) -> Option<GameCallback> {
     snapshot(t.last_state, t.state);
     let state = t.state;
     act_card(card, state);
@@ -148,7 +148,7 @@ fn new_trump(state: &mut GameState, suit: Suit) -> GameCallback {
     GameCallback::NewTrump(suit)
 }
 
-fn question(t: Target, player: PlaceAtTable, q: QuestionType) -> Option<GameCallback> {
+fn question(t: Mutable, player: PlaceAtTable, q: QuestionType) -> Option<GameCallback> {
     let state = t.state;
     let asker = state.player_at_place_mut(player);
     state.phase = match q {
@@ -168,7 +168,7 @@ fn question(t: Target, player: PlaceAtTable, q: QuestionType) -> Option<GameCall
     None
 }
 
-fn answer(t: Target, a: AnswerType) -> Option<GameCallback> {
+fn answer(t: Mutable, a: AnswerType) -> Option<GameCallback> {
     let state = t.state;
     *t.last_state = None;
     let callback = match a {
@@ -196,7 +196,7 @@ fn answer(t: Target, a: AnswerType) -> Option<GameCallback> {
     callback
 }
 
-fn undo(t: Target, action: &GameAction) -> Option<GameCallback> {
+fn undo(t: Mutable, action: &GameAction) -> Option<GameCallback> {
     let state = t.state;
     match action.action_type {
         ActionType::UndoAccept => {
@@ -253,7 +253,7 @@ pub(crate) fn act_card(card: Card, state: &mut GameState) {
             state.current_trick[2],
             state.current_trick[3],
         ];
-        let idx = cards.map(|c| bits::index(&c));
+        let idx = cards.map(|c| c.index());
         // After four plays the turn is back at the leader; the winner sits `winner` seats on.
         let leader = state.player_at_turn;
         let winner = bits::trick_winner(&idx, state.trump);

@@ -5,12 +5,12 @@
 mod common;
 
 use common::{new_game, pick_action, site_scores};
-use marjapussi_engine::game::gameinfo::GameFinishedInfo;
-use marjapussi_engine::game::points::{points_card, LAST_TRICK_BONUS, PAIR_POINTS};
-use marjapussi_engine::game::scoring::{
+use marjapussi_engine::GameFinishedInfo;
+use marjapussi_engine::{
     game_scores, round5, team_points, GameOutcome, SeriesLength, SeriesSettings, SeriesTally, TeamPoints,
     SCHWARZ_FACTOR_FIFTHS,
 };
+use marjapussi_engine::{points_card, LAST_TRICK_BONUS, PAIR_POINTS};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 

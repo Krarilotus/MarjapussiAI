@@ -8,11 +8,11 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use marjapussi_engine::bits::CardSet;
-use marjapussi_engine::fast::FastState;
-use marjapussi_engine::game::cards::{get_all_cards, Card};
-use marjapussi_engine::game::gameevent::ActionType;
-use marjapussi_engine::game::Game;
+use marjapussi_engine::ActionType;
+use marjapussi_engine::CardSet;
+use marjapussi_engine::FastState;
+use marjapussi_engine::Game;
+use marjapussi_engine::{get_all_cards, Card};
 
 struct Counting;
 
