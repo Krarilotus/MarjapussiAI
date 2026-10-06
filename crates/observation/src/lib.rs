@@ -1,8 +1,8 @@
 //! The privacy boundary: turns engine events into what one seat may observe.
 //!
 //! Everything above this crate sees the game only through `SeatEvent`s and the seat's own
-//! starting hand. Hidden passes carry no cards. Never use `GameInfoPlayer.meta_info`: it
-//! holds all four starting hands.
+//! starting hand. Hidden passes carry no cards. Never read `Game.info.player_start_cards`
+//! (all four starting hands); the engine's per-seat view `GameInfoPlayer` is redacted.
 
 use engine::bits::{index, partner, CardSet};
 use engine::game::cards::Suit;

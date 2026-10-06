@@ -26,7 +26,7 @@ All three are impossible by construction here.
 | Crate | Owns | Must not |
 |---|---|---|
 | `engine` (`bits` module, new) | `CardSet` (36-bit) and `play_levels`: the play rule as an ordered list of card sets, mirroring `cards::allowed_cards` exactly (differential test) | — |
-| `observation` (new) | The **privacy boundary**. Turns engine `GameEvent`s into `SeatEvent`s for one seat; hidden passes lose their cards. Detects completed undos | read hidden cards; use `GameInfoPlayer.meta_info` (it carries all start hands) |
+| `observation` (new) | The **privacy boundary**. Turns engine `GameEvent`s into `SeatEvent`s for one seat; hidden passes lose their cards. Detects completed undos | read hidden cards; read `Game.info.player_start_cards` (all start hands) |
 | `knowledge` (new) | `Knowledge` (`Copy`, ~0.3 KB): possible/certain per seat, played, hand sizes, trick, trump, cardinality constraints; `Tracker` (undo) | depend on `engine::game::Game` or `GameState` |
 
 ## Play-rule inversion (one owner)
