@@ -30,9 +30,9 @@ macro_rules! game_bench {
     ($engine:ident) => {
         use std::hint::black_box;
 
-        use $engine::game::cards::{get_all_cards, Card};
-        use $engine::game::gameevent::{ActionType, GameAction};
-        use $engine::game::Game;
+        use $engine::Game;
+        use $engine::{get_all_cards, Card};
+        use $engine::{ActionType, GameAction};
 
         pub struct Script {
             hands: [Vec<Card>; 4],

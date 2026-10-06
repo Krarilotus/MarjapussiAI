@@ -9,10 +9,10 @@
 
 use std::cell::Cell;
 
-use engine::bits::{next_seat, partner, play_levels, CardSet, SUITS};
-use engine::game::cards::Suit;
-use engine::game::legal_actions::is_first_trick;
-use engine::game::player::HAND_SIZE;
+use engine::is_first_trick;
+use engine::Suit;
+use engine::HAND_SIZE;
+use engine::{next_seat, partner, play_levels, CardSet, SUITS};
 use observation::{Seat, SeatEvent};
 
 mod sample;

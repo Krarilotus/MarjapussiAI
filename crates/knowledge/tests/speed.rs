@@ -3,10 +3,10 @@
 
 use std::time::Instant;
 
-use engine::bits::CardSet;
-use engine::game::cards::get_all_cards;
-use engine::game::gameevent::ActionType;
-use engine::game::Game;
+use engine::get_all_cards;
+use engine::ActionType;
+use engine::CardSet;
+use engine::Game;
 use knowledge::Tracker;
 use observation::{seat_events, start_hand, SeatEvent};
 use rand::rngs::StdRng;

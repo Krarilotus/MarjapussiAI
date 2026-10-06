@@ -12,11 +12,11 @@
 mod common;
 
 use common::new_game;
-use marjapussi_engine::bits::CardSet;
-use marjapussi_engine::fast::{self, FastState, Move};
-use marjapussi_engine::game::gameevent::{ActionType, GameAction};
-use marjapussi_engine::game::gameinfo::GameFinishedInfo;
-use marjapussi_engine::game::Game;
+use marjapussi_engine::CardSet;
+use marjapussi_engine::Game;
+use marjapussi_engine::GameFinishedInfo;
+use marjapussi_engine::{ActionType, GameAction};
+use marjapussi_engine::{FastState, Move};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -80,7 +80,7 @@ fn fast_matches_game_at_every_card_play_state() {
                 assert_eq!(moves.len() as u32, game_cards.len() + game_announce.count_ones());
                 for m in moves {
                     assert!(
-                        game.legal_actions().contains(&fast::to_action(m, seat)),
+                        game.legal_actions().contains(&m.to_action(seat)),
                         "seed {seed}: {m:?} not legal in Game"
                     );
                 }
@@ -92,7 +92,7 @@ fn fast_matches_game_at_every_card_play_state() {
             let tricks_before = game.state.all_tricks.len();
             let leader_before = stepped.map(|s| s.leader());
             game.apply_action_mut(action);
-            match (fast::from_action(&action.action_type), stepped.as_mut()) {
+            match (Move::from_action(&action.action_type), stepped.as_mut()) {
                 (Some(m), Some(s)) => {
                     s.apply(m);
                     match m {

@@ -1,8 +1,8 @@
 //! One small scenario per deduction rule (IDs from Investigator A's catalogue).
 //! Seat 0 is "me"; it holds only low cards, so every K/O/A is hidden.
 
-use engine::bits::{index, CardSet};
-use engine::game::cards::{Card, Suit, Value};
+use engine::CardSet;
+use engine::{Card, Suit, Value};
 use knowledge::Knowledge;
 use observation::SeatEvent;
 
@@ -10,7 +10,7 @@ use Suit::{Acorns as E, Bells as S, Green as G, Red as R};
 use Value::*;
 
 fn c(suit: Suit, value: Value) -> u8 {
-    index(&Card { suit, value })
+    Card { suit, value }.index()
 }
 
 fn set(cards: &[u8]) -> CardSet {

@@ -19,11 +19,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use common::{finished_line, site_scores, Digest};
-use marjapussi_engine::game::cards::{Card, Suit};
-use marjapussi_engine::game::gameevent::{ActionType, AnswerType, GameAction, QuestionType};
-use marjapussi_engine::game::gameinfo::GameFinishedInfo;
-use marjapussi_engine::game::player::PlaceAtTable;
-use marjapussi_engine::game::Game;
+use marjapussi_engine::Game;
+use marjapussi_engine::GameFinishedInfo;
+use marjapussi_engine::PlaceAtTable;
+use marjapussi_engine::{ActionType, AnswerType, GameAction, QuestionType};
+use marjapussi_engine::{Card, Suit};
 use serde_json::Value;
 
 /// Sum of `GameFinishedInfo::scores()` over the replayed games, per team (E1; recomputed for

@@ -7,11 +7,11 @@
 mod common;
 
 use common::{new_game, pick_action};
-use marjapussi_engine::game::cards::{get_all_cards, Card};
-use marjapussi_engine::game::gameevent::ActionType;
-use marjapussi_engine::game::gameinfo::GameInfoPlayer;
-use marjapussi_engine::game::player::PlaceAtTable;
-use marjapussi_engine::game::{Clock, Game};
+use marjapussi_engine::ActionType;
+use marjapussi_engine::GameInfoPlayer;
+use marjapussi_engine::PlaceAtTable;
+use marjapussi_engine::{get_all_cards, Card};
+use marjapussi_engine::{Clock, Game};
 use std::sync::Arc;
 
 use rand::rngs::StdRng;

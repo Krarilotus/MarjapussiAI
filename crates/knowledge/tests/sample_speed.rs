@@ -4,10 +4,10 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use engine::bits::CardSet;
-use engine::game::cards::get_all_cards;
-use engine::game::gameevent::ActionType;
-use engine::game::Game;
+use engine::get_all_cards;
+use engine::ActionType;
+use engine::CardSet;
+use engine::Game;
 use knowledge::{DealSpace, Knowledge, Tracker};
 use observation::{seat_events, start_hand};
 use rand::rngs::StdRng;

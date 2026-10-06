@@ -9,7 +9,7 @@ Layers, dependencies pointing down. Each crate has one façade (`lib.rs`) and ow
 | 4 search | `search`, `solver` | belief-sampled determinized search; exact endgame solver (last ~4 cards per player) | next |
 | 3 knowledge | `knowledge` | **what a seat can know**: set-theoretic deduction from its own observation (possible / certain cards per player, voids, pairs and halves, standing cards, bidding conventions) | v0 (hard rules) — `docs/design/knowledge.md` |
 | 2 observation | `observation` | the seat's view: own hand + public events. The **only** input to layers 3–6 | v0 |
-| 1 rules | `engine` | game rules, legal actions, scoring (`game::scoring`); the `engine::fast` card-play core for search (`docs/design/fast-core.md`, `performance.md`) | **done** |
+| 1 rules | `engine` | game rules, legal actions, scoring (marjapussi.de as source of truth); the `FastState` card-play core for search; a façade in `lib.rs` (inner modules private) (`docs/design/fast-core.md`, `performance.md`) | **done** |
 
 ## Invariants
 1. **No cheating (owner, 2026-10-06):** "The AI can NOT know what the actual cards are that everyone has, it can NOT cheat. It needs to be able to derive information itself." Layers 3–6 depend on `observation`, never on the full `GameState`. A test plays games where hidden hands are swapped consistently with the observation and checks that the decisions do not change.

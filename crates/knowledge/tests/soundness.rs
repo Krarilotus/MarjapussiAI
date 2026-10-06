@@ -1,10 +1,10 @@
 //! Guard test: the knowledge of every seat never contradicts the true hands.
 //! Random legal play through the engine, including undos; checked after every event.
 
-use engine::bits::CardSet;
-use engine::game::cards::get_all_cards;
-use engine::game::gameevent::{ActionType, GameAction};
-use engine::game::Game;
+use engine::get_all_cards;
+use engine::CardSet;
+use engine::Game;
+use engine::{ActionType, GameAction};
 use knowledge::Tracker;
 use observation::{start_hand, SeatFilter};
 use rand::rngs::StdRng;

@@ -9,19 +9,7 @@ use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not, Sub, SubAssign};
 
 use crate::game::cards::{Card, Suit, Value};
 
-pub use crate::game::cards::{CARDS, SUITS, VALUES};
-
-/// Bit index of a card: `suit * 9 + value` (`Card::index`).
-#[inline]
-pub fn index(card: &Card) -> u8 {
-    card.index()
-}
-
-/// The card with bit index `index` (`Card::from_index`).
-#[inline]
-pub fn card(index: u8) -> Card {
-    Card::from_index(index)
-}
+pub(crate) use crate::game::cards::{SUITS, VALUES};
 
 /// Seat helpers (seats are 0–3 clockwise; partners sit opposite).
 pub const fn partner(seat: u8) -> u8 {
@@ -45,7 +33,7 @@ impl CardSet {
     }
 
     pub fn of(card: &Card) -> CardSet {
-        CardSet::single(index(card))
+        CardSet::single(card.index())
     }
 
     pub fn from_cards<'a>(cards: impl IntoIterator<Item = &'a Card>) -> CardSet {
@@ -98,7 +86,7 @@ impl CardSet {
     }
 
     pub fn cards(self) -> Vec<Card> {
-        self.iter().map(card).collect()
+        self.iter().map(Card::from_index).collect()
     }
 }
 
@@ -258,7 +246,7 @@ pub fn play_levels(trick: &[u8], trump: Option<Suit>, first_trick: bool) -> Play
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::cards::get_all_cards;
+    use crate::game::cards::{get_all_cards, CARDS};
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::{Rng, SeedableRng};
@@ -266,7 +254,7 @@ mod tests {
     #[test]
     fn index_round_trips() {
         for c in get_all_cards() {
-            assert_eq!(card(index(&c)), c);
+            assert_eq!(Card::from_index(c.index()), c);
         }
         assert_eq!(CardSet::from_cards(&get_all_cards()), CardSet::ALL);
     }

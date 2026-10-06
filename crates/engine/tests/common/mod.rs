@@ -4,11 +4,11 @@
 
 use std::fmt::Write;
 
-use marjapussi_engine::game::cards::{get_all_cards, Card};
-use marjapussi_engine::game::gameevent::{ActionType, GameAction, GameEvent};
-use marjapussi_engine::game::gameinfo::GameFinishedInfo;
-use marjapussi_engine::game::gamestate::FinishedTrick;
-use marjapussi_engine::game::Game;
+use marjapussi_engine::FinishedTrick;
+use marjapussi_engine::Game;
+use marjapussi_engine::GameFinishedInfo;
+use marjapussi_engine::{get_all_cards, Card};
+use marjapussi_engine::{ActionType, GameAction, GameEvent};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::Rng;

@@ -11,7 +11,7 @@
 //!
 //! Counts fit `u64`: three hidden seats and at most 36 cards give at most 3^36 < 2^58 deals.
 
-use engine::bits::{CardSet, CARDS};
+use engine::{CardSet, CARDS};
 use observation::Seat;
 use rand::RngCore;
 
