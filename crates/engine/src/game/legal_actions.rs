@@ -3,7 +3,7 @@ use itertools::Itertools;
 use crate::game::cards::{allowed_cards, Card, Suit};
 use crate::game::gameevent::{ActionType, AnswerType, GameAction, QuestionType};
 use crate::game::gamestate::GamePhase;
-use crate::game::player::{Player, PlayerTrumpPossibilities};
+use crate::game::player::{Player, PlayerTrumpPossibilities, HAND_SIZE};
 use crate::game::points::Points;
 use crate::game::{cards, Game};
 
@@ -113,6 +113,11 @@ pub fn legal_passing(game: &Game) -> Vec<GameAction> {
     actions
 }
 
+/// The first trick is played while the player still holds a full hand.
+pub fn is_first_trick(hand_len: usize) -> bool {
+    hand_len == HAND_SIZE
+}
+
 pub fn legal_cards(game: &Game) -> Vec<GameAction> {
     let mut actions: Vec<GameAction> = vec![];
 
@@ -126,7 +131,7 @@ pub fn legal_cards(game: &Game) -> Vec<GameAction> {
         trick = vec![];
     }
     let trump = game.state.trump;
-    let first_trick = players_cards.len() == 9;
+    let first_trick = is_first_trick(players_cards.len());
 
     for card in allowed_cards(trick.iter().collect(), players_cards, trump, first_trick) {
         actions.push(GameAction {
