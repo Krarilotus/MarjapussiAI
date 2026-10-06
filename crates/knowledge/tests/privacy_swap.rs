@@ -99,17 +99,17 @@ fn hidden_cards_do_not_change_what_a_seat_knows() {
         if from_x.is_empty() || from_y.is_empty() {
             continue;
         }
-        let a = from_x[rng.random_range(0..from_x.len())].clone();
-        let b = from_y[rng.random_range(0..from_y.len())].clone();
+        let a = from_x[rng.random_range(0..from_x.len())];
+        let b = from_y[rng.random_range(0..from_y.len())];
         let mut swapped = hands.clone();
         for card in swapped[x as usize].iter_mut() {
             if *card == a {
-                *card = b.clone();
+                *card = b;
             }
         }
         for card in swapped[y as usize].iter_mut() {
             if *card == b {
-                *card = a.clone();
+                *card = a;
             }
         }
 
