@@ -1,10 +1,10 @@
 //! Guard test: the knowledge of every seat never contradicts the true hands.
 //! Random legal play through the engine, including undos; checked after every event.
 
-use engine::bits::CardSet;
-use engine::game::cards::get_all_cards;
-use engine::game::gameevent::ActionType;
-use engine::game::Game;
+use engine::get_all_cards;
+use engine::CardSet;
+use engine::Game;
+use engine::{hands_from_deck, ActionType, GameAction};
 use knowledge::Tracker;
 use observation::{start_hand, SeatFilter};
 use rand::rngs::StdRng;
@@ -16,25 +16,20 @@ const GAMES: u64 = 3_000;
 fn new_game(rng: &mut StdRng) -> Game {
     let mut deck = get_all_cards();
     deck.shuffle(rng);
-    let hands = [
-        deck[0..9].to_vec(),
-        deck[9..18].to_vec(),
-        deck[18..27].to_vec(),
-        deck[27..36].to_vec(),
-    ];
+    let hands = hands_from_deck(&deck);
     let names = ["S0", "S1", "S2", "S3"].map(String::from);
     Game::new("soundness".into(), names, Some(hands))
 }
 
-fn pick_action(game: &Game, rng: &mut StdRng) -> engine::game::gameevent::GameAction {
-    let legal = &game.legal_actions;
-    let (undo, normal): (Vec<_>, Vec<_>) = legal
+fn pick_action(game: &Game, rng: &mut StdRng) -> GameAction {
+    let legal = &game.legal_actions();
+    let (undo, normal): (Vec<&GameAction>, Vec<&GameAction>) = legal
         .iter()
         .partition(|a| matches!(a.action_type, ActionType::UndoRequest));
     if normal.is_empty() || (!undo.is_empty() && rng.random_bool(0.05)) {
-        return legal[rng.random_range(0..legal.len())].clone();
+        return legal[rng.random_range(0..legal.len())];
     }
-    normal[rng.random_range(0..normal.len())].clone()
+    *normal[rng.random_range(0..normal.len())]
 }
 
 #[derive(Default)]

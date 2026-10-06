@@ -4,6 +4,7 @@ use crate::game::cards::{Card, Suit};
 use crate::game::gameevent::ActionType;
 use crate::game::player::{PlaceAtTable, Player};
 use crate::game::points::Points;
+use crate::inline::{Filler, InlineVec};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GamePhase {
@@ -22,83 +23,119 @@ pub enum GamePhase {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct FinishedTrick {
+    /// In play order: `cards[i]` was played by `seat_of_card(i)`.
     pub cards: [Card; 4],
+    /// The seat that led the trick.
+    pub leader: PlaceAtTable,
     pub winner: PlaceAtTable,
+    /// Card points, plus the last-trick bonus on the ninth trick.
     pub points: Points,
 }
 
+impl FinishedTrick {
+    /// The seat that played `cards[i]`.
+    pub fn seat_of_card(&self, i: usize) -> PlaceAtTable {
+        PlaceAtTable((self.leader.0 + i as u8) % 4)
+    }
+
+    /// The seats in play order.
+    pub fn seats(&self) -> [PlaceAtTable; 4] {
+        [0, 1, 2, 3].map(|i| self.seat_of_card(i))
+    }
+}
+
+impl Filler for FinishedTrick {
+    const FILL: FinishedTrick = FinishedTrick {
+        cards: [Card::FILL; 4],
+        leader: PlaceAtTable(0),
+        winner: PlaceAtTable(0),
+        points: Points(0),
+    };
+}
+
+/// The state of one game. All lists except the bidding history are inline (`InlineVec`), so
+/// a clone (the undo snapshot on every bid and card) is one copy plus the bidding history.
 #[derive(Debug)]
 pub struct GameState {
     pub phase: GamePhase,
     pub started: bool,
-    pub players_started: Vec<PlaceAtTable>,
-    pub players_accept_undo: Vec<PlaceAtTable>,
+    pub players_started: InlineVec<PlaceAtTable, 4>,
+    pub players_accept_undo: InlineVec<PlaceAtTable, 4>,
     pub bidding_players: u8, //starts at 4
     pub bidding_history: Vec<(ActionType, PlaceAtTable)>,
     pub trump: Option<Suit>,
-    pub trump_called: Vec<Suit>,
+    pub trump_called: InlineVec<Suit, 4>,
     pub player_at_turn: PlaceAtTable,
     pub players: [Player; 4],
     pub value: Points,
-    pub all_tricks: Vec<FinishedTrick>,
-    pub current_trick: Vec<Card>,
+    pub all_tricks: InlineVec<FinishedTrick, 9>,
+    pub current_trick: InlineVec<Card, 4>,
 }
 
 impl Clone for GameState {
     fn clone(&self) -> Self {
         GameState {
             phase: self.phase.clone(),
-            started: self.started,
-            players_started: self.players_started.clone(),
-            players_accept_undo: self.players_accept_undo.clone(),
-            bidding_players: self.bidding_players,
             bidding_history: self.bidding_history.clone(),
-            trump: self.trump,
-            trump_called: self.trump_called.clone(),
-            player_at_turn: self.player_at_turn,
             players: self.players.clone(),
-            value: self.value,
-            all_tricks: self.all_tricks.clone(),
-            current_trick: self.current_trick.clone(),
+            ..*self
         }
     }
 
-    /// Reuses this state's buffers: the undo snapshot is refreshed on every bid and card.
+    /// Reuses the bidding history's buffer: the undo snapshot is refreshed on every bid and card.
     fn clone_from(&mut self, source: &Self) {
-        self.phase.clone_from(&source.phase);
-        self.started = source.started;
-        self.players_started.clone_from(&source.players_started);
-        self.players_accept_undo.clone_from(&source.players_accept_undo);
-        self.bidding_players = source.bidding_players;
-        self.bidding_history.clone_from(&source.bidding_history);
-        self.trump = source.trump;
-        self.trump_called.clone_from(&source.trump_called);
-        self.player_at_turn = source.player_at_turn;
-        for (p, q) in self.players.iter_mut().zip(&source.players) {
-            p.clone_from(q);
-        }
-        self.value = source.value;
-        self.all_tricks.clone_from(&source.all_tricks);
-        self.current_trick.clone_from(&source.current_trick);
+        let mut history = std::mem::take(&mut self.bidding_history);
+        history.clone_from(&source.bidding_history);
+        *self = GameState {
+            phase: source.phase.clone(),
+            bidding_history: history,
+            players: source.players.clone(),
+            ..*source
+        };
     }
 }
 
 impl GameState {
+    /// The declarer: the player whose bid set the game value; `None` if all passed.
+    pub fn declarer(&self) -> Option<PlaceAtTable> {
+        if self.value == Points(115) {
+            return None;
+        }
+        self.bidding_history
+            .iter()
+            .rev()
+            .find(|(action, _)| matches!(action, ActionType::NewBid(_)))
+            .map(|&(_, player)| player)
+    }
+
+    /// The declarer's team (team 0 = seats 0 and 2); `None` if all passed.
+    pub fn playing_team(&self) -> Option<u8> {
+        self.declarer().map(|p| p.0 % 2)
+    }
+
+    /// The seat that led the current trick, once its first card is played.
+    pub fn trick_leader(&self) -> Option<PlaceAtTable> {
+        let n = self.current_trick.len();
+        (1..4)
+            .contains(&n)
+            .then(|| PlaceAtTable((self.player_at_turn.0 + 4 - n as u8) % 4))
+    }
+
     pub fn create(players: [Player; 4]) -> Self {
         GameState {
             started: false,
-            players_started: vec![],
-            players_accept_undo: vec![],
+            players_started: InlineVec::new(),
+            players_accept_undo: InlineVec::new(),
             phase: GamePhase::WaitingForStart,
             trump: None,
-            trump_called: vec![],
+            trump_called: InlineVec::new(),
             player_at_turn: PlaceAtTable(0),
             value: Points(115),
             bidding_players: 4,
             bidding_history: vec![],
             players,
-            all_tricks: vec![],
-            current_trick: vec![],
+            all_tricks: InlineVec::new(),
+            current_trick: InlineVec::new(),
         }
     }
     pub fn player_at_turn(&self) -> &Player {
@@ -132,10 +169,10 @@ impl GameState {
 
     pub fn players_perspective(&self, place: PlaceAtTable) -> [String; 4] {
         [
-            self.player_at_place(place).name.clone(),
-            self.player_at_place(place.next()).name.clone(),
-            self.player_at_place(place.partner()).name.clone(),
-            self.player_at_place(place.prev()).name.clone(),
+            self.player_at_place(place).name.to_string(),
+            self.player_at_place(place.next()).name.to_string(),
+            self.player_at_place(place.partner()).name.to_string(),
+            self.player_at_place(place.prev()).name.to_string(),
         ]
     }
 
@@ -152,7 +189,7 @@ impl GameState {
         let mut started = vec![];
         for player in &self.players {
             if self.players_started.contains(&player.place_at_table) {
-                started.push(player.name.clone());
+                started.push(player.name.to_string());
             }
         }
         started

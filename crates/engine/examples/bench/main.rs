@@ -8,8 +8,8 @@ mod game;
 use std::hint::black_box;
 
 use game::{best_ns, Rng};
-use marjapussi_engine::bits::CardSet;
-use marjapussi_engine::fast::FastState;
+use marjapussi_engine::CardSet;
+use marjapussi_engine::FastState;
 
 mod game_b {
     use crate::game::{best_ns, Rng};

@@ -10,7 +10,7 @@
 mod common;
 
 use common::{event_line, finished_line, new_game, pick_action, state_line, Digest};
-use marjapussi_engine::game::gameinfo::GameFinishedInfo;
+use marjapussi_engine::GameFinishedInfo;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 

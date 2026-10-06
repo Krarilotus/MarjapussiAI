@@ -7,10 +7,10 @@
 //! are replayed on the swapped deal. Where every action stays legal and every public event
 //! (action and callback) is unchanged, `s` must see the same events and know the same.
 
-use engine::bits::{index, CardSet};
-use engine::game::cards::{get_all_cards, Card};
-use engine::game::gameevent::{ActionType, GameAction};
-use engine::game::Game;
+use engine::CardSet;
+use engine::Game;
+use engine::{get_all_cards, hands_from_deck, Card};
+use engine::{ActionType, GameAction};
 use knowledge::Tracker;
 use observation::{seat_events, start_hand, Seat};
 use rand::rngs::StdRng;
@@ -30,7 +30,7 @@ fn game_from(hands: &[Vec<Card>; 4]) -> Game {
 fn replay(hands: &[Vec<Card>; 4], actions: &[GameAction]) -> Option<Game> {
     let mut game = game_from(hands);
     for action in actions {
-        game = game.apply_action(action.clone()).ok()?;
+        game = game.apply_action(*action).ok()?;
     }
     Some(game)
 }
@@ -60,19 +60,14 @@ fn hidden_cards_do_not_change_what_a_seat_knows() {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut deck = get_all_cards();
         deck.shuffle(&mut rng);
-        let hands: [Vec<Card>; 4] = [
-            deck[0..9].to_vec(),
-            deck[9..18].to_vec(),
-            deck[18..27].to_vec(),
-            deck[27..36].to_vec(),
-        ];
+        let hands: [Vec<Card>; 4] = hands_from_deck(&deck);
         let mut game = game_from(&hands);
         let mut actions = vec![];
         let stop = rng.random_range(1..60);
         while !game.ended() && actions.len() < stop {
-            let legal = game.legal_actions.clone();
-            let action = legal[rng.random_range(0..legal.len())].clone();
-            game.apply_action_mut(action.clone());
+            let legal = game.legal_actions();
+            let action = legal[rng.random_range(0..legal.len())];
+            game.apply_action_mut(action);
             actions.push(action);
         }
 
@@ -91,7 +86,7 @@ fn hidden_cards_do_not_change_what_a_seat_knows() {
         let candidates = |from: u8, to: u8| -> Vec<Card> {
             hands[from as usize]
                 .iter()
-                .filter(|c| !touched.contains(index(c)) && known.may_hold(to).contains(index(c)))
+                .filter(|c| !touched.contains(c.index()) && known.may_hold(to).contains(c.index()))
                 .cloned()
                 .collect()
         };

@@ -4,7 +4,6 @@ use serde::Serialize;
 
 use crate::bits::{CardSet, VALUES};
 use crate::game::cards::{Card, Suit};
-use crate::game::player::PlaceAtTable;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Points(pub i32);
@@ -32,7 +31,7 @@ pub const PAIR_POINTS: [i32; 4] = [40, 60, 80, 100];
 /// Bonus for winning the last trick.
 pub const LAST_TRICK_BONUS: i32 = 20;
 
-/// Points of each card by bit index (`bits::index`), derived from `VALUE_POINTS`.
+/// Points of each card by bit index (`Card::index`), derived from `VALUE_POINTS`.
 pub const CARD_POINTS: [u8; 36] = {
     let mut t = [0u8; 36];
     let mut i = 0;
@@ -67,18 +66,9 @@ pub fn points_trick(trick: Vec<Card>) -> Points {
     trick.into_iter().fold(Points(0), |acc, c| acc + points_card(c))
 }
 
-pub fn points_players(tricks: Vec<(Vec<Card>, PlaceAtTable)>) -> [Points; 4] {
-    let mut points = [Points(0); 4];
-    for (trick, place) in tricks {
-        points[place.0 as usize] += points_trick(trick);
-    }
-    points
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bits::index;
     use crate::game::cards::{get_all_cards, Value};
 
     #[test]
@@ -87,7 +77,7 @@ mod tests {
         assert_eq!(points_trick(deck.clone()), Points(120));
         assert_eq!(points_set(CardSet::ALL), 120);
         for c in &deck {
-            assert_eq!(CARD_POINTS[index(c) as usize] as i32, points_card(*c).0);
+            assert_eq!(CARD_POINTS[c.index() as usize] as i32, points_card(*c).0);
             assert_eq!(points_set(CardSet::of(c)), points_card(*c).0);
         }
         assert_eq!(points_card("r-A".parse().unwrap()), Points(11));

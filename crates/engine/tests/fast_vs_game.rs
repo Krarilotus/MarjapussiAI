@@ -12,11 +12,11 @@
 mod common;
 
 use common::new_game;
-use marjapussi_engine::bits::CardSet;
-use marjapussi_engine::fast::{self, FastState, Move};
-use marjapussi_engine::game::gameevent::{ActionType, GameAction};
-use marjapussi_engine::game::gameinfo::GameFinishedInfo;
-use marjapussi_engine::game::Game;
+use marjapussi_engine::CardSet;
+use marjapussi_engine::Game;
+use marjapussi_engine::GameFinishedInfo;
+use marjapussi_engine::{ActionType, GameAction};
+use marjapussi_engine::{FastState, Move};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -24,18 +24,18 @@ const GAMES: u64 = 5_000;
 
 /// Random action; an announcement 90 % of the time when possible, undo 4 %.
 fn pick(game: &Game, rng: &mut StdRng) -> GameAction {
-    let legal = &game.legal_actions;
+    let legal = &game.legal_actions();
     let of = |f: fn(&ActionType) -> bool| legal.iter().filter(|a| f(&a.action_type)).collect::<Vec<_>>();
     let announce = of(|t| matches!(t, ActionType::AnnounceTrump(_)));
     if !announce.is_empty() && rng.random_bool(0.9) {
-        return announce[rng.random_range(0..announce.len())].clone();
+        return *announce[rng.random_range(0..announce.len())];
     }
     let undo = of(|t| matches!(t, ActionType::UndoRequest));
     if !undo.is_empty() && rng.random_bool(0.04) {
-        return undo[0].clone();
+        return *undo[0];
     }
     let normal = of(|t| !matches!(t, ActionType::UndoRequest));
-    normal[rng.random_range(0..normal.len())].clone()
+    *normal[rng.random_range(0..normal.len())]
 }
 
 #[test]
@@ -58,12 +58,19 @@ fn fast_matches_game_at_every_card_play_state() {
                 );
                 let seat = game.state.player_at_turn.0;
                 assert_eq!(fresh.to_move(), seat, "seed {seed}: seat to move");
-                let game_cards = CardSet::from_cards(game.legal_actions.iter().filter_map(|a| match &a.action_type {
-                    ActionType::CardPlayed(c) => Some(c),
-                    _ => None,
-                }));
+                let trick_leader = (!fresh.trick().is_empty()).then(|| fresh.leader());
+                assert_eq!(
+                    game.state.trick_leader().map(|p| p.0),
+                    trick_leader,
+                    "seed {seed}: trick leader"
+                );
+                let game_cards =
+                    CardSet::from_cards(game.legal_actions().iter().filter_map(|a| match &a.action_type {
+                        ActionType::CardPlayed(c) => Some(c),
+                        _ => None,
+                    }));
                 assert_eq!(fresh.legal_cards(), game_cards, "seed {seed}: legal cards");
-                let game_announce = game.legal_actions.iter().fold(0u8, |b, a| match a.action_type {
+                let game_announce = game.legal_actions().iter().fold(0u8, |b, a| match a.action_type {
                     ActionType::AnnounceTrump(s) => b | 1 << s as u8,
                     _ => b,
                 });
@@ -72,8 +79,10 @@ fn fast_matches_game_at_every_card_play_state() {
                 assert_eq!(moves.len(), fresh.moves().len());
                 assert_eq!(moves.len() as u32, game_cards.len() + game_announce.count_ones());
                 for m in moves {
+                    assert_eq!(Move::from_code(m.code()), m);
+                    assert!((m.code() as usize) < Move::CODES);
                     assert!(
-                        game.legal_actions.contains(&fast::to_action(m, seat)),
+                        game.legal_actions().contains(&m.to_action(seat)),
                         "seed {seed}: {m:?} not legal in Game"
                     );
                 }
@@ -83,8 +92,9 @@ fn fast_matches_game_at_every_card_play_state() {
             }
             let action = pick(&game, &mut rng);
             let tricks_before = game.state.all_tricks.len();
-            game.apply_action_mut(action.clone());
-            match (fast::from_action(&action.action_type), stepped.as_mut()) {
+            let leader_before = stepped.map(|s| s.leader());
+            game.apply_action_mut(action);
+            match (Move::from_action(&action.action_type), stepped.as_mut()) {
                 (Some(m), Some(s)) => {
                     s.apply(m);
                     match m {
@@ -95,6 +105,10 @@ fn fast_matches_game_at_every_card_play_state() {
                         tricks += 1;
                         let t = game.state.all_tricks.last().unwrap();
                         assert_eq!(s.leader(), t.winner.0, "seed {seed}: trick winner");
+                        assert_eq!(Some(t.leader.0), leader_before, "seed {seed}: trick leader");
+                        let seats = t.seats().map(|p| p.0);
+                        assert_eq!(seats, [0, 1, 2, 3].map(|i| (t.leader.0 + i) % 4));
+                        assert_eq!(t.seat_of_card(3).0, action.player.0, "seed {seed}: last card's seat");
                         assert_eq!(s.tricks_done() as usize, game.state.all_tricks.len());
                     }
                 }
@@ -147,10 +161,10 @@ fn from_parts_rejects_impossible_states() {
     p.hands[1] = p.hands[0];
     assert!(FastState::from_parts(p).is_err(), "shared cards");
     let mut p = good.parts();
-    p.tricks_done = 1;
+    p.public.tricks_done = 1;
     assert!(FastState::from_parts(p).is_err(), "hand sizes vs tricks done");
     let mut p = good.parts();
-    p.trick_len = 1;
-    p.trick[0] = p.hands[0].iter().next().unwrap();
+    p.public.trick_len = 1;
+    p.public.trick[0] = p.hands[0].iter().next().unwrap();
     assert!(FastState::from_parts(p).is_err(), "card both in trick and hand");
 }

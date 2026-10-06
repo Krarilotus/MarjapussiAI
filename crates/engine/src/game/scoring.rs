@@ -1,13 +1,14 @@
 //! Scoring, single owner: the score of one game and the standings of a series.
 //!
-//! Sources: the rules page (marjapussi.de/rules, "Spielbewertung") and the site's series table
-//! (`marjapussi-online`, `SeriesTable.vue`).
+//! Source of truth: marjapussi.de (owner decision D2, 2026-10-06): the site's series table
+//! (`marjapussi-online`, `SeriesTable.vue`), which refines the rules page ("Spielbewertung").
 //! - The playing party (S) scores `+value` if its points (cards + announced pairs) reach the
 //!   game value, else `-value`.
 //! - The other party (N) scores its points rounded to a multiple of 5 (137 → 135, 138 → 140).
-//! - Schwarz: if N took no trick and S made its contract, N scores
-//!   `-SCHWARZ_FACTOR_FIFTHS / 5 × value` (= −2 × value) instead.
-//! - No contract (all passed): each team scores its rounded points (as on the site).
+//! - Schwarz: a party that took no trick scores `-SCHWARZ_FACTOR_FIFTHS / 5 × value`
+//!   (= −2 × value) while the other party scored positive: N when S made its contract, and S
+//!   always (S without a trick cannot make it, and N then scores its 140 or more).
+//! - No contract (all passed): each team scores its rounded points, announced pairs included.
 //! - Series: by a fixed number of games (tournament round) or until a team reaches a target.
 //!   After a tournament round: ±1/5 of the point difference to the other team, and +300
 //!   (other team −300) for the team that first reached 500 (`SeriesSettings`).
@@ -77,10 +78,17 @@ pub fn game_scores(o: &GameOutcome, schwarz_factor_fifths: i32) -> [i32; 2] {
     };
     let n = 1 - s;
     let made = o.team_points[s] >= o.game_value;
+    let schwarz = -schwarz_factor_fifths * o.game_value / 5;
     let mut scores = [0; 2];
-    scores[s] = if made { o.game_value } else { -o.game_value };
+    scores[s] = if o.team_tricks[s] == 0 {
+        schwarz
+    } else if made {
+        o.game_value
+    } else {
+        -o.game_value
+    };
     scores[n] = if made && o.team_tricks[n] == 0 {
-        -schwarz_factor_fifths * o.game_value / 5
+        schwarz
     } else {
         round5(o.team_points[n])
     };

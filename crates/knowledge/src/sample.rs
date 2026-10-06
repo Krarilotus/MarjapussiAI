@@ -11,7 +11,7 @@
 //!
 //! Counts fit `u64`: three hidden seats and at most 36 cards give at most 3^36 < 2^58 deals.
 
-use engine::bits::CardSet;
+use engine::{CardSet, CARDS};
 use observation::Seat;
 use rand::RngCore;
 
@@ -80,7 +80,7 @@ pub struct DealSpace {
     cumulative: Vec<u64>,
     /// Untied classes, counted by the DP.
     classes: Vec<Class>,
-    pool: [u8; 36],
+    pool: [u8; CARDS],
     /// Cards in classes `i..`.
     suffix: Vec<u8>,
     /// `ways[i * TABLE + r0 * DIM + r1]`: deals of classes `i..` into remaining capacity
@@ -204,7 +204,7 @@ impl DealSpace {
             leaf_splits: vec![],
             cumulative: vec![],
             classes: vec![],
-            pool: [0; 36],
+            pool: [0; CARDS],
             suffix: vec![0],
             ways: vec![],
             total: 0,
@@ -292,7 +292,7 @@ impl DealSpace {
         // The last class is dealt without a choice, so the one with most splits goes last.
         classes.sort_by_key(|&(sig, cards)| (sig.count_ones(), cards.len()));
         let mut start = 0u8;
-        let mut lay_out = |sig: u8, cards: CardSet, pool: &mut [u8; 36]| {
+        let mut lay_out = |sig: u8, cards: CardSet, pool: &mut [u8; CARDS]| {
             for c in cards.iter() {
                 pool[start as usize] = c;
                 start += 1;
@@ -434,7 +434,7 @@ impl DealSpace {
     /// Deals the cards of `class` to the hidden seats by `split`, uniformly.
     fn deal<R: RngCore + ?Sized>(&self, class: Class, split: [u8; 3], hands: &mut Hands, rng: &mut R) {
         let (start, n) = (class.start as usize, class.n as usize);
-        let mut cards = [0u8; 36];
+        let mut cards = [0u8; CARDS];
         cards[..n].copy_from_slice(&self.pool[start..start + n]);
         let mut left = n;
         for (&seat, &k) in self.hidden.iter().zip(&split).take(2) {
@@ -468,8 +468,8 @@ impl DealSpace {
     }
 
     /// `[seat][card]`: the number of consistent deals in which `seat` holds `card`.
-    pub fn holder_counts(&self) -> [[u64; 36]; 4] {
-        let mut out = [[0u64; 36]; 4];
+    pub fn holder_counts(&self) -> [[u64; CARDS]; 4] {
+        let mut out = [[0u64; CARDS]; 4];
         if self.total == 0 {
             return out;
         }
@@ -527,7 +527,7 @@ impl DealSpace {
 
     /// Cards of one class are exchangeable, so each is held in an equal share of the deals
     /// (`held[j]`: deals times cards of the class at hidden seat `j`).
-    fn share(&self, class: Class, held: &[u64; 3], out: &mut [[u64; 36]; 4]) {
+    fn share(&self, class: Class, held: &[u64; 3], out: &mut [[u64; CARDS]; 4]) {
         let (start, n) = (class.start as usize, class.n as usize);
         for j in 0..3 {
             debug_assert_eq!(held[j] % n as u64, 0);
@@ -558,7 +558,7 @@ impl DealSpace {
 
     /// `[seat][card]`: the exact probability that `seat` holds `card` under the uniform
     /// distribution over consistent deals (all zero if there is none).
-    pub fn marginals(&self) -> [[f64; 36]; 4] {
+    pub fn marginals(&self) -> [[f64; CARDS]; 4] {
         let counts = self.holder_counts();
         let total = self.total.max(1) as f64;
         counts.map(|seat| seat.map(|n| n as f64 / total))

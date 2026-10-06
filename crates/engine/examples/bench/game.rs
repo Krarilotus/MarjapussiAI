@@ -30,13 +30,19 @@ macro_rules! game_bench {
     ($engine:ident) => {
         use std::hint::black_box;
 
-        use $engine::game::cards::{get_all_cards, Card};
-        use $engine::game::gameevent::ActionType;
-        use $engine::game::Game;
+        use $engine::Game;
+        use $engine::{get_all_cards, hands_from_deck, Card};
+        use $engine::{ActionType, GameAction};
 
         pub struct Script {
             hands: [Vec<Card>; 4],
             picks: Vec<usize>,
+        }
+
+        /// The `i`-th legal action, through a reused buffer (legal actions are computed on demand).
+        fn nth(game: &Game, i: usize, buf: &mut Vec<GameAction>) -> GameAction {
+            game.legal_actions_into(buf);
+            buf[i]
         }
 
         fn new_game(hands: &[Vec<Card>; 4]) -> Game {
@@ -56,21 +62,17 @@ macro_rules! game_bench {
                     for i in (1..deck.len()).rev() {
                         deck.swap(i, rng.below(i + 1));
                     }
-                    let hands = [
-                        deck[0..9].to_vec(),
-                        deck[9..18].to_vec(),
-                        deck[18..27].to_vec(),
-                        deck[27..36].to_vec(),
-                    ];
+                    let hands = hands_from_deck(&deck);
                     let mut game = new_game(&hands);
                     let mut picks = vec![];
                     while !game.ended() {
-                        let normal: Vec<usize> = (0..game.legal_actions.len())
-                            .filter(|&i| game.legal_actions[i].action_type != ActionType::UndoRequest)
+                        let legal = game.legal_actions();
+                        let normal: Vec<usize> = (0..legal.len())
+                            .filter(|&i| legal[i].action_type != ActionType::UndoRequest)
                             .collect();
                         let pick = normal[rng.below(normal.len())];
                         picks.push(pick);
-                        game.apply_action_mut(game.legal_actions[pick].clone());
+                        game.apply_action_mut(legal[pick]);
                     }
                     Script { hands, picks }
                 })
@@ -87,8 +89,9 @@ macro_rules! game_bench {
             let per_action_mut = best_ns(reps, actions, || {
                 for s in scripts {
                     let mut game = new_game(&s.hands);
+                    let mut buf = Vec::new();
                     for &p in &s.picks {
-                        let a = game.legal_actions[p].clone();
+                        let a = nth(&game, p, &mut buf);
                         game.apply_action_mut(a);
                     }
                     black_box(&game);
@@ -98,8 +101,9 @@ macro_rules! game_bench {
             let per_action_imm = best_ns(reps, actions, || {
                 for s in scripts {
                     let mut game = new_game(&s.hands);
+                    let mut buf = Vec::new();
                     for &p in &s.picks {
-                        let a = game.legal_actions[p].clone();
+                        let a = nth(&game, p, &mut buf);
                         game = game.apply_action(a).unwrap();
                     }
                     black_box(&game);
@@ -110,14 +114,15 @@ macro_rules! game_bench {
             let mut cards = vec![];
             for s in scripts.iter().take(50) {
                 let mut game = new_game(&s.hands);
+                let mut buf = Vec::new();
                 for &p in &s.picks {
-                    let a = game.legal_actions[p].clone();
+                    let a = nth(&game, p, &mut buf);
                     game.apply_action_mut(a);
                     if game.ended() {
                         break;
                     }
                     if game
-                        .legal_actions
+                        .legal_actions()
                         .iter()
                         .all(|a| matches!(a.action_type, ActionType::CardPlayed(_) | ActionType::UndoRequest))
                     {
@@ -159,11 +164,12 @@ macro_rules! game_bench {
                 .iter()
                 .filter_map(|s| {
                     let mut game = new_game(&s.hands);
+                    let mut buf = Vec::new();
                     for &p in &s.picks {
                         if game.state.all_tricks.len() == 1 {
                             return Some(game);
                         }
-                        let a = game.legal_actions[p].clone();
+                        let a = nth(&game, p, &mut buf);
                         game.apply_action_mut(a);
                     }
                     None
@@ -174,10 +180,11 @@ macro_rules! game_bench {
         /// Plays random legal cards (no questions) to the end; returns the tricks played.
         pub fn card_playout(mut game: Game, rng: &mut Rng) -> usize {
             while !game.ended() {
-                let cards: Vec<usize> = (0..game.legal_actions.len())
-                    .filter(|&i| matches!(game.legal_actions[i].action_type, ActionType::CardPlayed(_)))
+                let legal = game.legal_actions();
+                let cards: Vec<usize> = (0..legal.len())
+                    .filter(|&i| matches!(legal[i].action_type, ActionType::CardPlayed(_)))
                     .collect();
-                let a = game.legal_actions[cards[rng.below(cards.len())]].clone();
+                let a = legal[cards[rng.below(cards.len())]];
                 game.apply_action_mut(a);
             }
             game.state.all_tricks.len()

@@ -1,55 +1,20 @@
 use std::collections::HashMap;
 use std::io::Error;
-use std::iter::zip;
 
 use serde::Deserialize;
-use strum::IntoEnumIterator;
 
-use crate::game::cards::{Card, Suit, Value};
+use crate::game::cards::{Card, Suit};
 use crate::game::gameevent::{ActionType, AnswerType, GameAction, QuestionType};
 use crate::game::gameinfo::GameFinishedInfo;
 use crate::game::player::PlaceAtTable;
-use crate::game::Game;
+use crate::game::table::Game;
 
-pub fn parse_card(card: String) -> Result<Card, Error> {
-    if card.len() != 3 {
-        return Err(Error::other("wrong card format"));
-    }
-    let suit_char = card.chars().next().unwrap();
-    let value_char = card.chars().last().unwrap();
-    let suits_str = "gesr".chars();
-    let values_str = "6789UOKZA".chars();
-
-    let mut suit: Option<Suit> = None;
-    let mut value: Option<Value> = None;
-
-    let suits = Suit::iter();
-    let values = Value::iter();
-
-    for (c, s) in zip(suits_str, suits) {
-        if c == suit_char {
-            suit = Some(s);
-        }
-    }
-
-    for (c, v) in zip(values_str, values) {
-        if c == value_char {
-            value = Some(v);
-        }
-    }
-
-    if value.is_none() || suit.is_none() {
-        return Err(Error::other("Wrong card format"));
-    }
-
-    Ok(Card {
-        suit: suit.unwrap(),
-        value: value.unwrap(),
-    })
+fn parse_card(card: &str) -> Result<Card, Error> {
+    card.parse().map_err(|_| Error::other(format!("not a card: {card}")))
 }
 
-pub fn parse_cards(cards: Vec<String>) -> Vec<Card> {
-    cards.into_iter().map(|c| parse_card(c).unwrap()).collect()
+fn parse_cards(cards: &[String]) -> Result<Vec<Card>, Error> {
+    cards.iter().map(|c| parse_card(c)).collect()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -95,7 +60,7 @@ fn parse_action(action: String) -> Result<GameAction, Error> {
         }
         "PRMO" => ActionType::NewBid(action_value.parse::<i32>().unwrap()),
         "TRCK" => {
-            let card = parse_card(action_value.to_string())?;
+            let card = parse_card(action_value)?;
             ActionType::CardPlayed(card)
         }
         "QUES" => parse_ques(action.clone()),
@@ -114,25 +79,20 @@ fn parse_pass(actions: Vec<String>) -> GameAction {
     let mut cards = vec![];
     for action in actions {
         let parts: Vec<&str> = action.split(',').collect();
-        let card = parse_card(parts[2].to_string()).unwrap();
+        let card = parse_card(parts[2]).unwrap();
         cards.push(card);
     }
     cards.sort();
     cards.reverse();
     GameAction {
-        action_type: ActionType::Pass(cards),
+        action_type: ActionType::Pass(cards.try_into().expect("four passed cards")),
         player: PlaceAtTable(*player_seat),
     }
 }
 
 fn parse_suit(suit: &str) -> Suit {
-    match suit {
-        "g" => Suit::Green,
-        "e" => Suit::Acorns,
-        "s" => Suit::Bells,
-        "r" => Suit::Red,
-        _ => Suit::Red,
-    }
+    // The legacy log falls back to red for unknown codes.
+    suit.chars().next().and_then(Suit::from_code).unwrap_or(Suit::Red)
 }
 
 fn parse_ques(action: String) -> ActionType {
@@ -169,16 +129,16 @@ pub fn parse_legacy_format(game_data: LegacyGameFormat) -> Result<GameFinishedIn
     let names: [String; 4] = game_data.players.clone().try_into().unwrap();
 
     let cards = [
-        parse_cards(game_data.cards.get(&names[0]).unwrap().clone()),
-        parse_cards(game_data.cards.get(&names[1]).unwrap().clone()),
-        parse_cards(game_data.cards.get(&names[2]).unwrap().clone()),
-        parse_cards(game_data.cards.get(&names[3]).unwrap().clone()),
+        parse_cards(&game_data.cards[&names[0]])?,
+        parse_cards(&game_data.cards[&names[1]])?,
+        parse_cards(&game_data.cards[&names[2]])?,
+        parse_cards(&game_data.cards[&names[3]])?,
     ];
 
     let mut game_replay = Game::new(game_data.name, names, Some(cards));
 
     for _ in 0..4 {
-        game_replay.apply_action_mut(game_replay.legal_actions[0].clone());
+        game_replay.apply_action_mut(game_replay.legal_actions()[0]);
     }
 
     let mut pass_collect = vec![];
@@ -212,31 +172,6 @@ pub fn parse_legacy_format(game_data: LegacyGameFormat) -> Result<GameFinishedIn
 mod tests {
     use super::*;
     use crate::game::points::Points;
-
-    #[test]
-    pub fn test_parse_card() {
-        assert_eq!(
-            parse_card(String::from("r-A")).unwrap(),
-            Card {
-                suit: Suit::Red,
-                value: Value::Ace,
-            }
-        );
-        assert_eq!(
-            parse_card(String::from("g-O")).unwrap(),
-            Card {
-                suit: Suit::Green,
-                value: Value::Ober,
-            }
-        );
-        assert_eq!(
-            parse_card(String::from("s-6")).unwrap(),
-            Card {
-                suit: Suit::Bells,
-                value: Value::Six,
-            }
-        );
-    }
 
     #[test]
     pub fn test_parse_python_game() {

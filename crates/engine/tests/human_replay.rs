@@ -1,4 +1,4 @@
-//! Guard: the 1,579 human games from marjapussi.de replay to the same outcomes as on `main`.
+//! Guard: the 1,579 human games from marjapussi.de replay to the recorded outcomes.
 //!
 //! The records hold real player names; they are read only to look up the hands, and only
 //! aggregates and a digest are printed. The dataset path comes from `MARJA_GAMES`, else the
@@ -18,19 +18,22 @@ mod common;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use common::{finished_line, scores_264fa3d, Digest};
-use marjapussi_engine::game::cards::{Card, Suit};
-use marjapussi_engine::game::gameevent::{ActionType, AnswerType, GameAction, QuestionType};
-use marjapussi_engine::game::gameinfo::GameFinishedInfo;
-use marjapussi_engine::game::player::PlaceAtTable;
-use marjapussi_engine::game::Game;
+use common::{finished_line, site_scores, Digest};
+use marjapussi_engine::Game;
+use marjapussi_engine::GameFinishedInfo;
+use marjapussi_engine::PlaceAtTable;
+use marjapussi_engine::{ActionType, AnswerType, GameAction, QuestionType};
+use marjapussi_engine::{Card, Suit};
 use serde_json::Value;
 
-/// Sum of `GameFinishedInfo::scores()` over the replayed games, per team (E1).
-const SCORE_TOTALS: [i64; 2] = [35_710, 29_005];
+/// Sum of `GameFinishedInfo::scores()` over the replayed games, per team (E1; recomputed for
+/// the site's scoring, E4).
+const SCORE_TOTALS: [i64; 2] = [34_630, 28_255];
 
-/// Recorded on `main` at 68c98f0.
-const EXPECTED: u64 = 0x9a38_7d77_f3bc_8e2d;
+/// Recorded on `main` at 68c98f0 as 0x9a38_7d77_f3bc_8e2d; recomputed once on feat/engine-v2
+/// for owner decision D2: announced pairs now count in all-pass games, which changes
+/// `team_points` of one replayed game (+40). With that line reverted the old digest returns.
+const EXPECTED: u64 = 0xcb8c_f66a_3bd2_9d91;
 
 fn dataset() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("MARJA_GAMES") {
@@ -44,13 +47,7 @@ fn dataset() -> Option<PathBuf> {
 }
 
 fn suit(c: char) -> Option<Suit> {
-    Some(match c {
-        'g' => Suit::Green,
-        'e' => Suit::Acorns,
-        's' => Suit::Bells,
-        'r' => Suit::Red,
-        _ => return None,
-    })
+    Suit::from_code(c)
 }
 
 fn split(raw: &str) -> Option<(u8, &str, &str)> {
@@ -88,8 +85,8 @@ fn answer(val: &str) -> Option<ActionType> {
 fn same(a: &GameAction, b: &GameAction) -> bool {
     match (&a.action_type, &b.action_type) {
         (ActionType::Pass(x), ActionType::Pass(y)) => {
-            let mut x = x.clone();
-            let mut y = y.clone();
+            let mut x = *x;
+            let mut y = *y;
             x.sort();
             y.sort();
             x == y
@@ -133,7 +130,7 @@ fn replay(rec: &Value) -> Result<Game, String> {
         Some(hands(rec)?),
     );
     for _ in 0..4 {
-        let start = game.legal_actions[0].clone();
+        let start = game.legal_actions()[0];
         game.apply_action_mut(start);
     }
     let mut pass_group: Vec<Card> = vec![];
@@ -153,7 +150,7 @@ fn replay(rec: &Value) -> Result<Game, String> {
                 let mut cards = std::mem::take(&mut pass_group);
                 cards.sort();
                 cards.reverse();
-                ActionType::Pass(cards)
+                ActionType::Pass(cards.try_into().unwrap())
             }
             "PROV" => match val.parse::<i32>().map_err(|_| "bid")? {
                 0 => ActionType::StopBidding,
@@ -173,7 +170,7 @@ fn replay(rec: &Value) -> Result<Game, String> {
         }
         let turn = game.state.player_at_turn.0;
         let legal: Vec<GameAction> = game
-            .legal_actions
+            .legal_actions()
             .iter()
             .filter(|a| a.player.0 == turn && a.action_type != ActionType::UndoRequest)
             .cloned()
@@ -246,8 +243,9 @@ fn replay(rec: &Value) -> Result<Game, String> {
     }
 }
 
-/// The site's per-game scoring (`SeriesTable.vue`), on the record's own fields, by team.
-fn site_scores(rec: &Value) -> Option<[i32; 2]> {
+/// The site's per-game scoring (`SeriesTable.vue`), on the record's own fields (the record's
+/// points and schwarz flag, which old site versions got wrong), by team.
+fn record_site_scores(rec: &Value) -> Option<[i32; 2]> {
     let names: Vec<&str> = rec["players"].as_array()?.iter().filter_map(|v| v.as_str()).collect();
     let pts = |i: usize| rec["players_points"][names[i]].as_i64().map(|p| p as i32);
     let points = [pts(0)? + pts(2)?, pts(1)? + pts(3)?];
@@ -276,7 +274,7 @@ fn site_scores(rec: &Value) -> Option<[i32; 2]> {
 }
 
 #[test]
-fn human_games_replay_like_main() {
+fn human_games_replay_like_recorded() {
     let Some(path) = dataset() else {
         eprintln!("SKIPPED: games.ndjson not found (set MARJA_GAMES)");
         return;
@@ -302,7 +300,7 @@ fn human_games_replay_like_main() {
                 team_points[1] += info.team_points[1] as i64;
                 digest.add(&finished_line(&info));
                 let scores = info.scores();
-                assert_eq!(scores, scores_264fa3d(&info), "scores differ from 264fa3d");
+                assert_eq!(scores, site_scores(&info), "scores differ from the site's table");
                 score_totals[0] += scores[0] as i64;
                 score_totals[1] += scores[1] as i64;
                 let outcome = info.outcome();
@@ -320,19 +318,15 @@ fn human_games_replay_like_main() {
                     p(t) + p(t + 2)
                 });
                 site_points_equal += (recorded == info.team_points) as u32;
-                site_scores_equal += (site_scores(&rec) == Some(scores)) as u32;
-                // Every difference to the site's scoring must have a known cause (E1).
-                if site_scores(&rec) != Some(scores) {
+                site_scores_equal += (record_site_scores(&rec) == Some(scores)) as u32;
+                // Every difference to the site's table on the record's own fields must have a
+                // known cause (old site versions recorded other points or no schwarz flag).
+                if record_site_scores(&rec) != Some(scores) {
                     let flagged = rec["schwarz_game"].as_bool().unwrap_or(false);
                     let cause = if recorded != info.team_points {
                         "team points differ from the record (old site version)"
                     } else if !flagged && outcome.team_tricks.contains(&0) {
                         "N schwarz, record without the schwarz flag (old site version)"
-                    } else if outcome
-                        .playing_team
-                        .is_some_and(|p| outcome.team_tricks[p as usize] == 0)
-                    {
-                        "playing party schwarz: site -2A, rules text -A"
                     } else {
                         "unexplained"
                     };
