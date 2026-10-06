@@ -12,7 +12,7 @@
 //! The state is 56 bytes, and copying it measured faster than make/unmake.
 
 use crate::bits::{self, CardSet, SUITS};
-use crate::game::cards::{Card, Suit};
+use crate::game::cards::{Card, Suit, CARDS};
 use crate::game::errors::GameError;
 use crate::game::gameevent::{ActionType, GameAction};
 use crate::game::gamestate::GamePhase;
@@ -56,11 +56,11 @@ pub struct FastState {
     pair_points: [i16; 2],
 }
 
-/// All fields of a `FastState`, for building one from a sampled world (search) or reading it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FastParts {
-    pub hands: [CardSet; 4],
-    /// Cards already in the current trick, in play order (at most 3).
+/// The public part of a card-play state: everything except the hands, i.e. what every seat
+/// sees. A sampled world adds hands (`FastState::from_public`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PublicState {
+    /// Cards already in the current trick, in play order (at most 3); the rest is 0.
     pub trick: [u8; 4],
     pub trick_len: u8,
     pub leader: u8,
@@ -77,6 +77,32 @@ pub struct FastParts {
     pub card_points: [i16; 2],
     /// Announced pair points per team.
     pub pair_points: [i16; 2],
+}
+
+impl PublicState {
+    /// The seat to move.
+    #[inline]
+    pub fn to_move(&self) -> u8 {
+        seat_to_move(self.leader, self.trick_len)
+    }
+
+    /// The cards of the current trick, in play order.
+    pub fn trick(&self) -> &[u8] {
+        &self.trick[..self.trick_len.min(3) as usize]
+    }
+}
+
+/// The one formula for the seat to move.
+#[inline]
+const fn seat_to_move(leader: u8, trick_len: u8) -> u8 {
+    (leader + trick_len) & 3
+}
+
+/// All of a `FastState`: the hands and the public part.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FastParts {
+    pub hands: [CardSet; 4],
+    pub public: PublicState,
 }
 
 impl FastState {
@@ -100,13 +126,18 @@ impl FastState {
 
     /// Builds a state from its parts; checks that the cards are disjoint and the hand sizes
     /// fit the trick.
-    pub fn from_parts(p: FastParts) -> Result<FastState, GameError> {
+    pub fn from_parts(parts: FastParts) -> Result<FastState, GameError> {
+        FastState::from_public(parts.public, parts.hands)
+    }
+
+    /// A world: the public state with these hands (checked like `from_parts`).
+    pub fn from_public(p: PublicState, hands: [CardSet; 4]) -> Result<FastState, GameError> {
         let n = p.trick_len as usize;
         let mut ok = n < 4
             && p.leader < 4
             && (p.tricks_done < TRICKS || p.tricks_done == TRICKS && n == 0)
             && p.tricks[0] as u32 + p.tricks[1] as u32 == p.tricks_done as u32
-            && p.trick[..n.min(4)].iter().all(|&c| c < 36);
+            && p.trick[..n.min(4)].iter().all(|&c| (c as usize) < CARDS);
         if !ok {
             return Err(GameError::InvalidState);
         }
@@ -115,7 +146,7 @@ impl FastState {
         let mut seen = in_trick;
         let left = (TRICKS - p.tricks_done) as u32;
         for seat in 0..4u8 {
-            let hand = p.hands[seat as usize];
+            let hand = hands[seat as usize];
             ok &= (hand & seen).is_empty() && hand.is_subset(CardSet::ALL);
             seen |= hand;
             let has_played = ((seat + 4 - p.leader) % 4) < p.trick_len;
@@ -127,7 +158,7 @@ impl FastState {
         let mut trick = [0; 4];
         trick[..n].copy_from_slice(&p.trick[..n]);
         Ok(FastState {
-            hands: p.hands,
+            hands,
             trick,
             trick_len: p.trick_len,
             leader: p.leader,
@@ -145,6 +176,13 @@ impl FastState {
     pub fn parts(&self) -> FastParts {
         FastParts {
             hands: self.hands,
+            public: self.public(),
+        }
+    }
+
+    /// Everything except the hands.
+    pub fn public(&self) -> PublicState {
+        PublicState {
             trick: self.trick,
             trick_len: self.trick_len,
             leader: self.leader,
@@ -218,7 +256,7 @@ impl FastState {
 
     #[inline]
     pub fn to_move(&self) -> u8 {
-        (self.leader + self.trick_len) & 3
+        seat_to_move(self.leader, self.trick_len)
     }
 
     #[inline]
@@ -415,6 +453,29 @@ impl Iterator for Moves {
 impl ExactSizeIterator for Moves {}
 
 impl Move {
+    /// Codes `0..ANNOUNCE` are cards (their bit index); `ANNOUNCE + suit` an announcement.
+    pub const ANNOUNCE: u8 = CARDS as u8;
+    /// Number of move codes.
+    pub const CODES: usize = CARDS + 4;
+
+    /// A compact code for tables and keys (`Move::from_code` inverts it).
+    #[inline]
+    pub const fn code(self) -> u8 {
+        match self {
+            Move::Card(c) => c,
+            Move::Announce(s) => Move::ANNOUNCE + s as u8,
+        }
+    }
+
+    #[inline]
+    pub const fn from_code(code: u8) -> Move {
+        if code >= Move::ANNOUNCE {
+            Move::Announce(SUITS[(code - Move::ANNOUNCE) as usize])
+        } else {
+            Move::Card(code)
+        }
+    }
+
     /// The `Game` action for this move by `seat`.
     pub fn to_action(self, seat: u8) -> GameAction {
         GameAction {

@@ -231,7 +231,7 @@ Ratios are A/B against `main` 80eaf23 after each step, interleaved.
 ## E5: ownership and abstraction debt (same branch)
 | Debt | Change | Evidence |
 |---|---|---|
-| D4 privacy | `GameInfoPlayer.meta_info` (all four start hands) → `public_info: PublicInfo`; its `legal_actions` only for its own seat (another seat's card plays or passes showed that hand) | `tests/view_privacy.rs`: hand-swap test (500 deals, >5,000 states, equal views) and own-actions/own-hand check (300 games); both fail with the filter removed |
+| D4 privacy | First redacted (E5.1: no start hands, only the seat's own legal actions, with a hand-swap test that failed on the leak), then **deleted** with `series.rs` in E6 (J18/J19): the engine offers no per-seat view | the type no longer exists |
 | D10, D9 | `cards` is the leaf that owns the card codes (`Suit::code/from_code`, `Value::code/from_code`, `FromStr`), `CARDS`, `SUITS`, `VALUES`, `Card::index/from_index`; the `Vec` rule wrappers and the `Vec` oracle test are removed; knowledge uses `CARDS` instead of a bare 36; `itertools`, `strum`, `strum_macros` removed | digests unchanged |
 | D2 | `apply_action.rs`: one function per action kind over `{state, undo snapshot, meta info}`; legal actions work on the state and snapshot; answers follow from the phase instead of an event-log scan | `kg caps`: no engine function over the cap (was 182 lines); legality guard green |
 | D1 | `game.rs` only declares modules; `Game` in `game/table.rs`, time in `game/clock.rs`, `GameMetaInfo` in `game/meta.rs`; `inline.rs` is a leaf | `kg cycles`: the 12-file engine cycle is gone (one remains inside knowledge, not engine code) |
@@ -246,9 +246,18 @@ Speed after E5: unchanged within noise (A/B vs main: ×1.86 per action incl. the
 | `engine::game::…::X`, `engine::bits::X`, `engine::fast::X` | `engine::X` (all public names at the root) |
 | `bits::index(&c)`, `bits::card(i)` | `c.index()`, `Card::from_index(i)` |
 | `fast::to_action(m, seat)`, `fast::from_action(&a)` | `m.to_action(seat)`, `Move::from_action(&a)` |
-| `GameInfoPlayer.meta_info` | `GameInfoPlayer.public_info` (no start hands); `legal_actions` only for that seat |
 | `cards::allowed_cards`, `allowed_first`, `high_card`, `is_higher_card`, `higher_cards`, `halves`, `pairs`, `print_cards`; `parse::parse_card(s)` | `play_levels(..).allowed(hand)`, `trick_winner`, `takes`, `CardSet::halves`; `s.parse::<Card>()` (strict `r-A` format) |
 | `GamePhase::legal_actions`, `legal_actions::{legal_bidding, legal_passing, legal_cards, legal_question, legal_answer}` | `Game::legal_actions()` / `legal_actions_into` / `is_legal` |
 | declarer derived from the event log | `game.state.declarer()`, `GameFinishedInfo.declarer` |
 | seats per trick rebuilt from the action log | `FinishedTrick.leader`, `seat_of_card(i)`, `seats()` |
 | `points_players` | removed (unused) |
+
+### E6 (Judge J18/J19, same branch)
+| Before | After |
+|---|---|
+| `GameInfoPlayer`, `PublicInfo`, `GameEventPlayer`, `game/series.rs` (`Series`) | deleted (series scoring is `SeriesTally`; a per-seat view belongs to the server/observation layer) |
+| `c / 9`, `c % 9`, `deck[27..36]`, bare `36` in consumers | `suit_of(i)`, `value_of(i)`, `Card::index/from_index`, `CARDS`, `hands_from_deck(&deck)` |
+| `FastParts { hands, trick, …, pair_points }` | `FastParts { hands, public: PublicState }`; `FastState::public()`, `FastState::from_public(public, hands)`, `PublicState::to_move()` |
+| solver-side move codes (`ANNOUNCE = 36`) and `Table` | `Move::code()`, `Move::from_code()`, `Move::ANNOUNCE`, `Move::CODES`; `PublicState` replaces `solver::Table` |
+
+`fast` after E6 (2 runs): 20–27 ns per move, 14–17 ns per play in a full tree walk; unchanged.
