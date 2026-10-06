@@ -93,7 +93,10 @@ pub struct GameFinishedInfo {
     pub won: Option<bool>,
     pub no_one_played: bool,
     pub schwarz_game: bool,
+    /// The declarer's party as seat 0 or 1 (team).
     pub playing_party: Option<PlaceAtTable>,
+    /// The declarer (`GameState::declarer`).
+    pub declarer: Option<PlaceAtTable>,
     pub after_passing: Option<[Vec<Card>; 4]>,
     pub passed_cards: Option<(Vec<Card>, Vec<Card>)>,
     pub bidding_history: Vec<(ActionType, PlaceAtTable)>,
@@ -118,14 +121,11 @@ impl From<Game> for GameFinishedInfo {
         let mut passed_cards: Option<(Vec<Card>, Vec<Card>)> = None;
         let mut after_passing: Option<[Vec<Card>; 4]> = None;
         if !no_one_played {
-            let mut playing_player = PlaceAtTable(0);
+            let playing_player = game.state.declarer().expect("a bid was made");
+            playing_party = Some(playing_player.party());
             let mut passed_forth: Option<Vec<Card>> = None;
             let mut passed_back: Option<Vec<Card>> = None;
             for event in &game.all_events {
-                if ActionType::NewBid(game.state.value.0) == event.last_action.action_type {
-                    playing_player = event.last_action.player;
-                    playing_party = Some(event.last_action.player.party());
-                }
                 if let ActionType::Pass(cards) = event.last_action.action_type {
                     if passed_forth.is_none() {
                         passed_forth = Some(cards.to_vec());
@@ -168,6 +168,7 @@ impl From<Game> for GameFinishedInfo {
             no_one_played,
             schwarz_game,
             playing_party,
+            declarer: game.state.declarer(),
             after_passing,
             passed_cards,
             bidding_history: game.state.bidding_history,

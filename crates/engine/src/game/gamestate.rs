@@ -23,14 +23,31 @@ pub enum GamePhase {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct FinishedTrick {
+    /// In play order: `cards[i]` was played by `seat_of_card(i)`.
     pub cards: [Card; 4],
+    /// The seat that led the trick.
+    pub leader: PlaceAtTable,
     pub winner: PlaceAtTable,
+    /// Card points, plus the last-trick bonus on the ninth trick.
     pub points: Points,
+}
+
+impl FinishedTrick {
+    /// The seat that played `cards[i]`.
+    pub fn seat_of_card(&self, i: usize) -> PlaceAtTable {
+        PlaceAtTable((self.leader.0 + i as u8) % 4)
+    }
+
+    /// The seats in play order.
+    pub fn seats(&self) -> [PlaceAtTable; 4] {
+        [0, 1, 2, 3].map(|i| self.seat_of_card(i))
+    }
 }
 
 impl Filler for FinishedTrick {
     const FILL: FinishedTrick = FinishedTrick {
         cards: [Card::FILL; 4],
+        leader: PlaceAtTable(0),
         winner: PlaceAtTable(0),
         points: Points(0),
     };
@@ -79,6 +96,31 @@ impl Clone for GameState {
 }
 
 impl GameState {
+    /// The declarer: the player whose bid set the game value; `None` if all passed.
+    pub fn declarer(&self) -> Option<PlaceAtTable> {
+        if self.value == Points(115) {
+            return None;
+        }
+        self.bidding_history
+            .iter()
+            .rev()
+            .find(|(action, _)| matches!(action, ActionType::NewBid(_)))
+            .map(|&(_, player)| player)
+    }
+
+    /// The declarer's team (team 0 = seats 0 and 2); `None` if all passed.
+    pub fn playing_team(&self) -> Option<u8> {
+        self.declarer().map(|p| p.0 % 2)
+    }
+
+    /// The seat that led the current trick, once its first card is played.
+    pub fn trick_leader(&self) -> Option<PlaceAtTable> {
+        let n = self.current_trick.len();
+        (1..4)
+            .contains(&n)
+            .then(|| PlaceAtTable((self.player_at_turn.0 + 4 - n as u8) % 4))
+    }
+
     pub fn create(players: [Player; 4]) -> Self {
         GameState {
             started: false,

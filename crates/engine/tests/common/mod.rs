@@ -7,6 +7,7 @@ use std::fmt::Write;
 use marjapussi_engine::game::cards::{get_all_cards, Card};
 use marjapussi_engine::game::gameevent::{ActionType, GameAction, GameEvent};
 use marjapussi_engine::game::gameinfo::GameFinishedInfo;
+use marjapussi_engine::game::gamestate::FinishedTrick;
 use marjapussi_engine::game::Game;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -77,7 +78,7 @@ pub fn state_line(game: &Game) -> String {
         s.trump_called,
         s.player_at_turn,
         s.value,
-        s.all_tricks,
+        Tricks(&s.all_tricks),
         s.current_trick,
     )
     .unwrap();
@@ -99,6 +100,26 @@ pub fn state_line(game: &Game) -> String {
     out
 }
 
+/// Tricks in the Debug format of main 68c98f0 (without the `leader` field added in E5), so the
+/// pinned digests compare the same facts.
+pub struct Tricks<'a>(pub &'a [FinishedTrick]);
+
+impl std::fmt::Debug for Tricks<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let items: Vec<String> = self
+            .0
+            .iter()
+            .map(|t| {
+                format!(
+                    "FinishedTrick {{ cards: {:?}, winner: {:?}, points: {:?} }}",
+                    t.cards, t.winner, t.points
+                )
+            })
+            .collect();
+        write!(f, "[{}]", items.join(", "))
+    }
+}
+
 pub fn event_line(e: &GameEvent) -> String {
     format!("{:?} {:?} {:?}", e.last_action, e.callback, e.player_at_turn)
 }
@@ -117,7 +138,7 @@ pub fn finished_line(f: &GameFinishedInfo) -> String {
         f.after_passing,
         f.passed_cards,
         f.bidding_history,
-        f.tricks,
+        Tricks(&f.tricks),
         f.team_points,
     );
     for e in &f.all_events {
