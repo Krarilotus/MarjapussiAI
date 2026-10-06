@@ -70,7 +70,7 @@ fn hidden_cards_do_not_change_what_a_seat_knows() {
         let mut actions = vec![];
         let stop = rng.random_range(1..60);
         while !game.ended() && actions.len() < stop {
-            let legal = game.legal_actions.clone();
+            let legal = game.legal_actions();
             let action = legal[rng.random_range(0..legal.len())];
             game.apply_action_mut(action);
             actions.push(action);

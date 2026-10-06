@@ -1,35 +1,10 @@
 use crate::bits::{self, CardSet};
 use crate::game::cards::Card;
 use crate::game::gameevent::{ActionType, AnswerType, GameAction, GameCallback, QuestionType};
-use crate::game::gameinfo::GameMetaInfo;
 use crate::game::gamestate::{FinishedTrick, GamePhase, GameState};
 use crate::game::player::PlayerTrumpPossibilities;
 use crate::game::points::{Points, CARD_POINTS, LAST_TRICK_BONUS};
 use crate::game::{current_time_string, Game};
-
-impl ActionType {
-    /// Returns the next meta info, state, callback and undo snapshot without changing `game`.
-    #[deprecated(note = "use Game::apply_action_mut (in place) or Game::apply_action")]
-    pub fn apply_action(
-        self,
-        action: &GameAction,
-        game: &Game,
-    ) -> (GameMetaInfo, GameState, Option<GameCallback>, Option<GameState>) {
-        let action = GameAction {
-            action_type: self,
-            player: action.player,
-        };
-        let mut next = Game {
-            info: game.info.clone(),
-            state: game.state.clone(),
-            legal_actions: vec![],
-            last_state: game.last_state.clone(),
-            all_events: vec![],
-        };
-        let callback = next.apply_in_place(&action);
-        (next.info, next.state, callback, next.last_state)
-    }
-}
 
 impl Game {
     /// Applies a legal action to `info`, `state` and `last_state` in place and returns the

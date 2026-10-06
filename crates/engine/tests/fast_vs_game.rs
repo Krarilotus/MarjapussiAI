@@ -24,7 +24,7 @@ const GAMES: u64 = 5_000;
 
 /// Random action; an announcement 90 % of the time when possible, undo 4 %.
 fn pick(game: &Game, rng: &mut StdRng) -> GameAction {
-    let legal = &game.legal_actions;
+    let legal = &game.legal_actions();
     let of = |f: fn(&ActionType) -> bool| legal.iter().filter(|a| f(&a.action_type)).collect::<Vec<_>>();
     let announce = of(|t| matches!(t, ActionType::AnnounceTrump(_)));
     if !announce.is_empty() && rng.random_bool(0.9) {
@@ -58,12 +58,13 @@ fn fast_matches_game_at_every_card_play_state() {
                 );
                 let seat = game.state.player_at_turn.0;
                 assert_eq!(fresh.to_move(), seat, "seed {seed}: seat to move");
-                let game_cards = CardSet::from_cards(game.legal_actions.iter().filter_map(|a| match &a.action_type {
-                    ActionType::CardPlayed(c) => Some(c),
-                    _ => None,
-                }));
+                let game_cards =
+                    CardSet::from_cards(game.legal_actions().iter().filter_map(|a| match &a.action_type {
+                        ActionType::CardPlayed(c) => Some(c),
+                        _ => None,
+                    }));
                 assert_eq!(fresh.legal_cards(), game_cards, "seed {seed}: legal cards");
-                let game_announce = game.legal_actions.iter().fold(0u8, |b, a| match a.action_type {
+                let game_announce = game.legal_actions().iter().fold(0u8, |b, a| match a.action_type {
                     ActionType::AnnounceTrump(s) => b | 1 << s as u8,
                     _ => b,
                 });
@@ -73,7 +74,7 @@ fn fast_matches_game_at_every_card_play_state() {
                 assert_eq!(moves.len() as u32, game_cards.len() + game_announce.count_ones());
                 for m in moves {
                     assert!(
-                        game.legal_actions.contains(&fast::to_action(m, seat)),
+                        game.legal_actions().contains(&fast::to_action(m, seat)),
                         "seed {seed}: {m:?} not legal in Game"
                     );
                 }

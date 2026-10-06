@@ -64,12 +64,12 @@ fn play(seed: usize) -> ((u64, u64), (u64, u64)) {
     );
     let (mut card, mut pass) = ((0, 0), (0, 0));
     while !game.ended() {
-        let action = *game
-            .legal_actions
+        // The legal list is built outside the measured window (it is computed on demand).
+        let legal = game.legal_actions();
+        let action = *legal
             .iter()
             .find(|a| a.action_type != ActionType::UndoRequest && a.action_type != ActionType::StopBidding)
-            .or_else(|| game.legal_actions.first())
-            .unwrap();
+            .unwrap_or(&legal[0]);
         let card_play = matches!(action.action_type, ActionType::CardPlayed(_));
         let passing = matches!(action.action_type, ActionType::Pass(_));
         let before = allocs();

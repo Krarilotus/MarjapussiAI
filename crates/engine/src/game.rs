@@ -7,7 +7,7 @@ use chrono::DateTime;
 use crate::game::errors::GameError;
 use crate::game::gameevent::{ActionType, GameAction, GameEvent};
 use crate::game::gamestate::GamePhase;
-use crate::game::player::create_players;
+use crate::game::player::{create_players, PlaceAtTable};
 use crate::game::points::Points;
 
 use self::{cards::Card, gameinfo::GameMetaInfo, gamestate::GameState};
@@ -25,12 +25,12 @@ pub mod points;
 pub mod scoring;
 pub mod series;
 
-/// Wrapper for Game and all of its details.
+/// Wrapper for Game and all of its details. Legal actions are computed on demand
+/// (`legal_actions`, `legal_actions_into`, `is_legal`).
 #[derive(Debug, Clone)]
 pub struct Game {
     pub info: GameMetaInfo,
     pub state: GameState,
-    pub legal_actions: Vec<GameAction>,
     pub last_state: Option<GameState>,
     pub all_events: Vec<GameEvent>,
 }
@@ -38,53 +38,53 @@ pub struct Game {
 impl Game {
     pub fn new(name: String, player_names: [String; 4], cards: Option<[Vec<Card>; 4]>) -> Self {
         let players = create_players(player_names.clone(), cards);
-
-        let mut game = Game {
+        Game {
             info: GameMetaInfo::create(name, player_names, players.clone()),
-            state: GameState::create(players.clone()),
-            legal_actions: vec![],
+            state: GameState::create(players),
             last_state: None,
             all_events: vec![],
-        };
-        game.legal_actions = game.legal_actions();
-        game
+        }
     }
 
-    /// Creates list with all legal actions in the current state of the game.
+    /// All legal actions in the current state.
     pub fn legal_actions(&self) -> Vec<GameAction> {
         let mut legal = vec![];
-        self.push_legal_actions(&mut legal);
+        self.legal_actions_into(&mut legal);
         legal
     }
 
-    fn push_legal_actions(&self, legal: &mut Vec<GameAction>) {
+    /// Replaces the contents of `legal` with the legal actions (reuses its buffer).
+    pub fn legal_actions_into(&self, legal: &mut Vec<GameAction>) {
+        legal.clear();
         self.state.phase.push_legal_actions(self, legal);
+        if let Some(player) = self.undo_requester() {
+            legal.push(GameAction {
+                action_type: ActionType::UndoRequest,
+                player,
+            });
+        }
+    }
+
+    /// The player who may request an undo now, if any.
+    fn undo_requester(&self) -> Option<PlaceAtTable> {
         match self.state.phase {
             GamePhase::WaitingForStart
             | GamePhase::Ended
             | GamePhase::PassingBack
             | GamePhase::Raising
-            | GamePhase::PendingUndo(_) => return,
-            GamePhase::Bidding if self.state.value == Points(115) => return,
-            _ => {}
-        }
-        if let Some(last) = &self.last_state {
-            legal.push(GameAction {
-                action_type: ActionType::UndoRequest,
-                player: last.player_at_turn,
-            });
+            | GamePhase::PendingUndo(_) => None,
+            GamePhase::Bidding if self.state.value == Points(115) => None,
+            _ => self.last_state.as_ref().map(|last| last.player_at_turn),
         }
     }
 
-    /// Whether `action` is in `legal_actions`. A pass is checked directly when the list is
-    /// that player's passing list (up to 715 four-card passes).
-    fn is_legal(&self, action: &GameAction) -> bool {
-        if let (ActionType::Pass(cards), Some(first)) = (&action.action_type, self.legal_actions.first()) {
-            if matches!(first.action_type, ActionType::Pass(_)) && first.player == action.player {
-                return legal_actions::is_legal_pass(self, cards);
-            }
+    /// Whether `action` is legal now: exactly `legal_actions().contains(action)`, without
+    /// building the list (tests/legality.rs checks the equivalence).
+    pub fn is_legal(&self, action: &GameAction) -> bool {
+        if action.action_type == ActionType::UndoRequest {
+            return self.undo_requester() == Some(action.player);
         }
-        self.legal_actions.contains(action)
+        legal_actions::is_legal_in_phase(self, action)
     }
 
     /// Tries creating a new Game with state after applying a given action.
@@ -100,7 +100,6 @@ impl Game {
         let mut next_game = Game {
             info: self.info.clone(),
             state: self.state.clone(),
-            legal_actions: vec![],
             last_state: if keeps_snapshot { self.last_state.clone() } else { None },
             all_events,
         };
@@ -130,10 +129,6 @@ impl Game {
             player_at_turn: self.state.player_at_turn,
             time: now_millis(),
         });
-        let mut legal = std::mem::take(&mut self.legal_actions);
-        legal.clear();
-        self.push_legal_actions(&mut legal);
-        self.legal_actions = legal;
     }
 }
 
@@ -203,13 +198,13 @@ mod tests {
     #[test]
     fn test_starting() {
         let mut game = helper_create_game();
-        let mut actions = game.legal_actions.clone();
+        let mut actions = game.legal_actions();
         assert_eq!(actions.len(), 4);
         for _ in 0..4 {
             let act = actions.pop().unwrap();
             let res = game.apply_action(act);
             game = res.ok().unwrap();
-            actions = game.legal_actions.clone();
+            actions = game.legal_actions();
         }
         assert_eq!(game.state.phase, GamePhase::Bidding);
     }
@@ -221,10 +216,10 @@ mod tests {
         assert_eq!(actions.len(), 4);
         for _ in 0..4 {
             game = game.apply_action(actions.pop().unwrap()).ok().unwrap();
-            actions.clone_from(&game.legal_actions);
+            actions = game.legal_actions();
         }
         assert_eq!(game.state.phase, GamePhase::Bidding);
-        actions.clone_from(&game.legal_actions);
+        actions = game.legal_actions();
         assert_eq!(actions.len(), 62);
         let bid140 = GameAction {
             action_type: ActionType::NewBid(140),
@@ -235,12 +230,12 @@ mod tests {
         let res = game.apply_action(forbidden_action);
         assert!(res.is_err());
         for _ in 0..4 {
-            actions = game.legal_actions.clone();
+            actions = game.legal_actions();
             let res = game.apply_action(actions[3]);
             game = res.ok().unwrap();
         }
         for _ in 0..3 {
-            actions = game.legal_actions.clone();
+            actions = game.legal_actions();
             assert_eq!(game.state.phase, GamePhase::Bidding);
             let res = game.apply_action(actions[0]);
             game = res.ok().unwrap();
@@ -251,8 +246,8 @@ mod tests {
         assert_eq!(game.state.player_at_turn().name, String::from("S3"));
         assert_eq!(game.state.phase, GamePhase::PassingForth);
         assert_eq!(game.state.player_at_turn().cards.len(), 9);
-        assert_eq!(game.legal_actions.len(), 127); //nCr(9,4) + 1
-        actions = game.legal_actions.clone();
+        assert_eq!(game.legal_actions().len(), 127); //nCr(9,4) + 1
+        actions = game.legal_actions();
         let res = game.apply_action(actions[2]);
         game = res.ok().unwrap();
         assert_eq!(game.state.player_at_turn().cards.len(), 13);
@@ -266,7 +261,7 @@ mod tests {
         //passing back
         assert_eq!(game.state.player_at_turn().name, String::from("S1"));
         assert_eq!(game.state.phase, GamePhase::PassingBack);
-        actions.clone_from(&game.legal_actions);
+        actions = game.legal_actions();
         let res = game.apply_action(actions[9]);
         game = res.ok().unwrap();
         assert_eq!(game.state.player_at_turn().cards.len(), 9);
@@ -278,11 +273,11 @@ mod tests {
             9
         );
         assert_eq!(game.state.phase, GamePhase::Raising);
-        actions.clone_from(&game.legal_actions);
+        actions = game.legal_actions();
         let res = game.apply_action(actions[2]);
         game = res.ok().unwrap();
         assert_eq!(game.state.phase, GamePhase::Trick);
-        actions.clone_from(&game.legal_actions);
+        actions = game.legal_actions();
         let _res = game.apply_action(actions[0]);
     }
 
@@ -348,13 +343,12 @@ mod tests {
         game.state.started = true;
         game.state.phase = GamePhase::StartTrick;
         game.state.player_at_turn = p0;
-        game.legal_actions = game.legal_actions();
 
-        assert!(game.legal_actions.contains(&GameAction {
+        assert!(game.legal_actions().contains(&GameAction {
             action_type: ActionType::AnnounceTrump(Suit::Red),
             player: p0,
         }));
-        assert!(game.legal_actions.contains(&GameAction {
+        assert!(game.legal_actions().contains(&GameAction {
             action_type: ActionType::Question(QuestionType::Yours),
             player: p0,
         }));
@@ -369,12 +363,11 @@ mod tests {
 
         game.state.phase = GamePhase::StartTrick;
         game.state.player_at_turn = p0;
-        game.legal_actions = game.legal_actions();
-        assert!(game.legal_actions.contains(&GameAction {
+        assert!(game.legal_actions().contains(&GameAction {
             action_type: ActionType::Question(QuestionType::Yours),
             player: p0,
         }));
-        assert!(!game.legal_actions.contains(&GameAction {
+        assert!(!game.legal_actions().contains(&GameAction {
             action_type: ActionType::AnnounceTrump(Suit::Red),
             player: p0,
         }));
@@ -389,12 +382,11 @@ mod tests {
 
         game.state.phase = GamePhase::StartTrick;
         game.state.player_at_turn = p0;
-        game.legal_actions = game.legal_actions();
-        assert!(!game.legal_actions.contains(&GameAction {
+        assert!(!game.legal_actions().contains(&GameAction {
             action_type: ActionType::Question(QuestionType::Yours),
             player: p0,
         }));
-        assert!(game.legal_actions.contains(&GameAction {
+        assert!(game.legal_actions().contains(&GameAction {
             action_type: ActionType::Question(QuestionType::YourHalf(Suit::Red)),
             player: p0,
         }));
@@ -402,11 +394,11 @@ mod tests {
 
     pub fn test_random_game_random() {
         let mut game = helper_create_game();
-        let mut actions = game.legal_actions.clone();
+        let mut actions = game.legal_actions();
         assert_eq!(actions.len(), 4);
         for _ in 0..4 {
             game = game.apply_action(actions.pop().unwrap()).ok().unwrap();
-            actions.clone_from(&game.legal_actions);
+            actions = game.legal_actions();
         }
         let mut i = 0;
         while game.state.phase != GamePhase::Ended {
@@ -414,7 +406,7 @@ mod tests {
             if i >= 200 {
                 panic!("Too many moves! Game: {:#?}\n ", game,);
             }
-            actions.clone_from(&game.legal_actions);
+            actions = game.legal_actions();
             let opt_select = actions.choose_mut(&mut rand::rng());
             if opt_select.is_none() {
                 panic!("Game: {:#?}\n Action: {:?}", game, opt_select);

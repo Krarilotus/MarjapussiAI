@@ -136,7 +136,7 @@ fn replay(rec: &Value) -> Result<Game, String> {
         Some(hands(rec)?),
     );
     for _ in 0..4 {
-        let start = game.legal_actions[0];
+        let start = game.legal_actions()[0];
         game.apply_action_mut(start);
     }
     let mut pass_group: Vec<Card> = vec![];
@@ -176,7 +176,7 @@ fn replay(rec: &Value) -> Result<Game, String> {
         }
         let turn = game.state.player_at_turn.0;
         let legal: Vec<GameAction> = game
-            .legal_actions
+            .legal_actions()
             .iter()
             .filter(|a| a.player.0 == turn && a.action_type != ActionType::UndoRequest)
             .cloned()
