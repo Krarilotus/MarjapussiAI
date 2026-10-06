@@ -522,6 +522,17 @@ impl DealSpace {
         }
     }
 
+    /// Per seat, the cards it holds in some but not every consistent deal: `possible` made
+    /// exact. Cards held in every deal are certain and left out, as in `Knowledge::possible`.
+    /// All empty if there is no consistent deal.
+    pub fn exact_possible(&self) -> [CardSet; 4] {
+        self.holder_counts().map(|seat| {
+            (0..36u8)
+                .filter(|&c| (1..self.total).contains(&seat[c as usize]))
+                .fold(CardSet::EMPTY, |set, c| set | CardSet::single(c))
+        })
+    }
+
     /// `[seat][card]`: the exact probability that `seat` holds `card` under the uniform
     /// distribution over consistent deals (all zero if there is none).
     pub fn marginals(&self) -> [[f64; 36]; 4] {

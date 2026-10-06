@@ -36,8 +36,8 @@ fn pick_action(game: &Game, rng: &mut StdRng) -> GameAction {
     normal[rng.random_range(0..normal.len())].clone()
 }
 
-/// Plays one random game and calls `visit(knowledge, true hands)` for every seat after every event.
-fn for_each_state(seed: u64, mut visit: impl FnMut(&Knowledge, &Hands)) {
+/// Plays one random game and calls `visit(tracker, true hands)` for every seat after every event.
+fn for_each_state(seed: u64, mut visit: impl FnMut(&Tracker, &Hands)) {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut game = new_game(&mut rng);
     let mut filters: Vec<SeatFilter> = (0..4).map(SeatFilter::new).collect();
@@ -57,7 +57,7 @@ fn for_each_state(seed: u64, mut visit: impl FnMut(&Knowledge, &Hands)) {
         }
         let truth: Hands = std::array::from_fn(|x| CardSet::from_cards(&game.state.players[x].cards));
         for t in &trackers {
-            visit(t.knowledge(), &truth);
+            visit(t, &truth);
         }
     }
 }
@@ -124,8 +124,10 @@ fn has_tied_cards(k: &Knowledge) -> bool {
 fn sampler_is_sound_in_random_games() {
     let mut rng = StdRng::seed_from_u64(7);
     let (mut states, mut tied) = (0u64, 0u64);
+    let (mut possible_bits, mut exact_bits) = (0u64, 0u64);
     for seed in 0..300 {
-        for_each_state(seed, |k, truth| {
+        for_each_state(seed, |t, truth| {
+            let k = t.knowledge();
             assert!(consistent(k, truth), "seed {seed}: the true deal breaks the facts");
             let space = DealSpace::new(k);
             let total = space.count();
@@ -146,11 +148,28 @@ fn sampler_is_sound_in_random_games() {
                 let hands = space.sample(&mut rng).unwrap();
                 assert!(consistent(k, &hands), "seed {seed}: sample breaks the facts");
             }
+            // The cached accessor is never stale (the first call after each event) and stays sound.
+            let exact = t.exact_possible();
+            assert_eq!(exact, space.exact_possible(), "seed {seed}: stale exact_possible cache");
+            assert_eq!(t.exact_possible(), exact);
+            for x in 0..4u8 {
+                assert!(
+                    exact[x as usize].is_subset(k.possible(x)),
+                    "seed {seed}: exact adds a card"
+                );
+                possible_bits += k.possible(x).len() as u64;
+                exact_bits += exact[x as usize].len() as u64;
+            }
             states += 1;
             tied += has_tied_cards(k) as u64;
         });
     }
     eprintln!("{states} states checked, {tied} with constrained cards");
+    eprintln!(
+        "exact_possible removes {} of {possible_bits} possible bits ({:.3} %)",
+        possible_bits - exact_bits,
+        100.0 * (possible_bits - exact_bits) as f64 / possible_bits as f64
+    );
     assert!(tied >= 1_000, "too little constraint coverage: {tied}");
 }
 
@@ -159,7 +178,8 @@ fn counts_and_marginals_match_enumeration() {
     let mut rng = StdRng::seed_from_u64(11);
     let (mut states, mut tied, mut deals) = (0u64, 0u64, 0u64);
     for seed in 0..200 {
-        for_each_state(seed, |k, _| {
+        for_each_state(seed, |t, _| {
+            let k = t.knowledge();
             if unknown(k).len() > 12 {
                 return;
             }
@@ -175,6 +195,12 @@ fn counts_and_marginals_match_enumeration() {
                 }
             }
             assert_eq!(space.holder_counts(), counts, "seed {seed}: holder counts");
+            let exact: Hands = std::array::from_fn(|x| {
+                (0..36u8)
+                    .filter(|&c| (1..all.len() as u64).contains(&counts[x][c as usize]))
+                    .fold(CardSet::EMPTY, |set, c| set | CardSet::single(c))
+            });
+            assert_eq!(space.exact_possible(), exact, "seed {seed}: exact possible sets");
             let marginals = space.marginals();
             for x in 0..4 {
                 for c in 0..36 {
@@ -212,7 +238,8 @@ fn samples_are_exactly_uniform() {
     let mut rng = StdRng::seed_from_u64(13);
     let (mut plain, mut tied) = (vec![], vec![]);
     for seed in 0..400 {
-        for_each_state(seed, |k, _| {
+        for_each_state(seed, |t, _| {
+            let k = t.knowledge();
             if unknown(k).len() > 12 {
                 return;
             }
@@ -242,7 +269,8 @@ fn samples_are_exactly_uniform() {
 fn belief_weights_are_importance_weights() {
     // Belief: deals where the next seat holds the lowest unknown card count 3 times.
     let mut state = None;
-    for_each_state(5, |k, _| {
+    for_each_state(5, |t, _| {
+        let k = t.knowledge();
         if state.is_none() && unknown(k).len() <= 12 && DealSpace::new(k).count() >= 100 {
             state = Some(*k);
         }
