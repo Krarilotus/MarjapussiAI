@@ -43,7 +43,7 @@ More: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/design/`](docs/d
 ```sh
 cargo test --workspace
 ```
-- Tests that need the recorded human games skip themselves when the dataset isn't present. Set `MARJA_GAMES` to a `games.ndjson` to run them.
+- **Recorded human games:** some tests and the evaluation tools use 1,579 games played on marjapussi.de. **That dataset is private** (it contains player names) and isn't part of this repository. If you have it, set `MARJA_GAMES` to the path of its `games.ndjson` (one game per line, as exported from the site). Without it, those tests skip themselves and everything else runs.
 - On a shared machine, limit the build: `CARGO_BUILD_JOBS=2 cargo test -j 2`.
 
 ## What's planned
