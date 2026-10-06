@@ -34,18 +34,19 @@ pub enum GameCallback {
 }
 
 /// This is what a player can create.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct GameAction {
     pub action_type: ActionType,
     pub player: PlaceAtTable,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ActionType {
     Start,
     NewBid(i32),
     StopBidding,
-    Pass(Vec<Card>),
+    /// Four cards from high to low.
+    Pass([Card; 4]),
     CardPlayed(Card),
     Question(QuestionType),
     Answer(AnswerType),

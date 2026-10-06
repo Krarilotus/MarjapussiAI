@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-
 use crate::bits::{self, CardSet};
 use crate::game::cards::{Card, Suit};
 use crate::game::gameevent::{ActionType, AnswerType, GameAction, QuestionType};
@@ -104,25 +102,19 @@ fn push_passing(game: &Game, out: &mut Vec<GameAction>) {
     out.reserve(n * (n - 1) * (n - 2) * (n - 3) / 24);
     // `bits::index` orders cards like `Card`'s `Ord` (suit, then value).
     let idx: Vec<u8> = cards.iter().map(bits::index).collect();
-    PASS_POOL.with(|pool| {
-        let mut pool = pool.borrow_mut();
-        for a in 0..n {
-            for b in a + 1..n {
-                for c in b + 1..n {
-                    for d in c + 1..n {
-                        let [w, x, y, z] = sorted_desc([idx[a], idx[b], idx[c], idx[d]]);
-                        let mut pass = pool.pop().unwrap_or_else(|| Vec::with_capacity(4));
-                        pass.clear();
-                        pass.extend_from_slice(&[bits::card(w), bits::card(x), bits::card(y), bits::card(z)]);
-                        out.push(GameAction {
-                            action_type: ActionType::Pass(pass),
-                            player,
-                        })
-                    }
+    for a in 0..n {
+        for b in a + 1..n {
+            for c in b + 1..n {
+                for d in c + 1..n {
+                    let pass = sorted_desc([idx[a], idx[b], idx[c], idx[d]]).map(bits::card);
+                    out.push(GameAction {
+                        action_type: ActionType::Pass(pass),
+                        player,
+                    })
                 }
             }
         }
-    });
+    }
 }
 
 /// Four card indices from high to low (a sorting network).
@@ -133,33 +125,6 @@ fn sorted_desc(mut x: [u8; 4]) -> [u8; 4] {
         }
     }
     x
-}
-
-// A game generates 126 + 715 four-card passes, each a `Vec<Card>` by the public type. Their
-// buffers are recycled per thread (at most `PASS_POOL_MAX`), so a simulation loop does not
-// allocate them again; measured in docs/design/performance.md.
-const PASS_POOL_MAX: usize = 1024;
-
-thread_local! {
-    static PASS_POOL: RefCell<Vec<Vec<Card>>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Empties `actions`, keeping the buffers of passes for the next passing list.
-pub(crate) fn recycle(actions: &mut Vec<GameAction>) {
-    if !matches!(actions.first().map(|a| &a.action_type), Some(ActionType::Pass(_))) {
-        actions.clear();
-        return;
-    }
-    PASS_POOL.with(|pool| {
-        let mut pool = pool.borrow_mut();
-        for action in actions.drain(..) {
-            if let ActionType::Pass(v) = action.action_type {
-                if pool.len() < PASS_POOL_MAX {
-                    pool.push(v);
-                }
-            }
-        }
-    });
 }
 
 /// Whether `cards` is a pass the player at turn may make: four cards of their hand from high

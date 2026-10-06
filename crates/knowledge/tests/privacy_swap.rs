@@ -30,7 +30,7 @@ fn game_from(hands: &[Vec<Card>; 4]) -> Game {
 fn replay(hands: &[Vec<Card>; 4], actions: &[GameAction]) -> Option<Game> {
     let mut game = game_from(hands);
     for action in actions {
-        game = game.apply_action(action.clone()).ok()?;
+        game = game.apply_action(*action).ok()?;
     }
     Some(game)
 }
@@ -71,8 +71,8 @@ fn hidden_cards_do_not_change_what_a_seat_knows() {
         let stop = rng.random_range(1..60);
         while !game.ended() && actions.len() < stop {
             let legal = game.legal_actions.clone();
-            let action = legal[rng.random_range(0..legal.len())].clone();
-            game.apply_action_mut(action.clone());
+            let action = legal[rng.random_range(0..legal.len())];
+            game.apply_action_mut(action);
             actions.push(action);
         }
 

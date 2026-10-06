@@ -33,7 +33,7 @@ fn recorded_streams(games: u64) -> Vec<(u8, CardSet, Vec<SeatEvent>)> {
                 .filter(|a| !matches!(a.action_type, ActionType::UndoRequest))
                 .cloned()
                 .collect();
-            game.apply_action_mut(legal[rng.random_range(0..legal.len())].clone());
+            game.apply_action_mut(legal[rng.random_range(0..legal.len())]);
         }
         for seat in 0..4 {
             streams.push((seat, start_hand(&game, seat), seat_events(&game, seat)));

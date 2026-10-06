@@ -34,7 +34,7 @@ fn recorded_states(games: u64) -> Vec<Knowledge> {
                 .filter(|a| !matches!(a.action_type, ActionType::UndoRequest))
                 .cloned()
                 .collect();
-            game.apply_action_mut(legal[rng.random_range(0..legal.len())].clone());
+            game.apply_action_mut(legal[rng.random_range(0..legal.len())]);
         }
         for seat in 0..4 {
             let mut tracker = Tracker::new(seat, start_hand(&game, seat));

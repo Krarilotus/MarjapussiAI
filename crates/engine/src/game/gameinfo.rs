@@ -73,7 +73,7 @@ impl GameInfoPlayer {
                 None => None,
                 Some(event) => {
                     //hide last event if cards were passed
-                    if let ActionType::Pass(_cards) = event.last_action.action_type.clone() {
+                    if let ActionType::Pass(_cards) = event.last_action.action_type {
                         Some(GameEventPlayer::HiddenEvent)
                     } else {
                         Some(GameEventPlayer::PublicEvent((*event).clone()))
@@ -127,11 +127,11 @@ impl From<Game> for GameFinishedInfo {
                     playing_player = event.last_action.player;
                     playing_party = Some(event.last_action.player.party());
                 }
-                if let ActionType::Pass(cards) = event.last_action.action_type.clone() {
+                if let ActionType::Pass(cards) = event.last_action.action_type {
                     if passed_forth.is_none() {
-                        passed_forth = Some(cards);
+                        passed_forth = Some(cards.to_vec());
                     } else {
-                        passed_back = Some(cards);
+                        passed_back = Some(cards.to_vec());
                     }
                 }
             }

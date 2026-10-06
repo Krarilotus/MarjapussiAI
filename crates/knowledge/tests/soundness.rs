@@ -3,7 +3,7 @@
 
 use engine::bits::CardSet;
 use engine::game::cards::get_all_cards;
-use engine::game::gameevent::ActionType;
+use engine::game::gameevent::{ActionType, GameAction};
 use engine::game::Game;
 use knowledge::Tracker;
 use observation::{start_hand, SeatFilter};
@@ -26,15 +26,15 @@ fn new_game(rng: &mut StdRng) -> Game {
     Game::new("soundness".into(), names, Some(hands))
 }
 
-fn pick_action(game: &Game, rng: &mut StdRng) -> engine::game::gameevent::GameAction {
+fn pick_action(game: &Game, rng: &mut StdRng) -> GameAction {
     let legal = &game.legal_actions;
-    let (undo, normal): (Vec<_>, Vec<_>) = legal
+    let (undo, normal): (Vec<&GameAction>, Vec<&GameAction>) = legal
         .iter()
         .partition(|a| matches!(a.action_type, ActionType::UndoRequest));
     if normal.is_empty() || (!undo.is_empty() && rng.random_bool(0.05)) {
-        return legal[rng.random_range(0..legal.len())].clone();
+        return legal[rng.random_range(0..legal.len())];
     }
-    normal[rng.random_range(0..normal.len())].clone()
+    *normal[rng.random_range(0..normal.len())]
 }
 
 #[derive(Default)]
