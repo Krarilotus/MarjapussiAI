@@ -9,7 +9,7 @@
 
 use engine::CardSet;
 use engine::Game;
-use engine::{get_all_cards, Card};
+use engine::{get_all_cards, hands_from_deck, Card};
 use engine::{ActionType, GameAction};
 use knowledge::Tracker;
 use observation::{seat_events, start_hand, Seat};
@@ -60,12 +60,7 @@ fn hidden_cards_do_not_change_what_a_seat_knows() {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut deck = get_all_cards();
         deck.shuffle(&mut rng);
-        let hands: [Vec<Card>; 4] = [
-            deck[0..9].to_vec(),
-            deck[9..18].to_vec(),
-            deck[18..27].to_vec(),
-            deck[27..36].to_vec(),
-        ];
+        let hands: [Vec<Card>; 4] = hands_from_deck(&deck);
         let mut game = game_from(&hands);
         let mut actions = vec![];
         let stop = rng.random_range(1..60);

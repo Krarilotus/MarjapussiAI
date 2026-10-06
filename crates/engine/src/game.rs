@@ -14,5 +14,4 @@ pub(crate) mod parse;
 pub(crate) mod player;
 pub(crate) mod points;
 pub(crate) mod scoring;
-pub(crate) mod series;
 pub(crate) mod table;

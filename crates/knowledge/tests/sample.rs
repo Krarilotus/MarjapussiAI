@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use engine::get_all_cards;
 use engine::CardSet;
 use engine::Game;
-use engine::{ActionType, GameAction};
+use engine::{hands_from_deck, ActionType, GameAction, CARDS};
 use knowledge::{DealSpace, ExactSets, Hands, Knowledge, Tracker};
 use observation::SeatFilter;
 use rand::rngs::StdRng;
@@ -16,12 +16,7 @@ use rand::{Rng, SeedableRng};
 fn new_game(rng: &mut StdRng) -> Game {
     let mut deck = get_all_cards();
     deck.shuffle(rng);
-    let hands = [
-        deck[0..9].to_vec(),
-        deck[9..18].to_vec(),
-        deck[18..27].to_vec(),
-        deck[27..36].to_vec(),
-    ];
+    let hands = hands_from_deck(&deck);
     Game::new("sample".into(), ["S0", "S1", "S2", "S3"].map(String::from), Some(hands))
 }
 
@@ -200,7 +195,7 @@ fn counts_and_marginals_match_enumeration() {
             let all = enumerate(k);
             let space = DealSpace::new(k);
             assert_eq!(space.count(), all.len() as u64, "seed {seed}: count");
-            let mut counts = [[0u64; 36]; 4];
+            let mut counts = [[0u64; CARDS]; 4];
             for hands in &all {
                 for x in 0..4 {
                     for c in hands[x].iter() {
@@ -222,7 +217,7 @@ fn counts_and_marginals_match_enumeration() {
             assert_eq!(space.exact_sets(), exact, "seed {seed}: exact sets");
             let marginals = space.marginals();
             for x in 0..4 {
-                for c in 0..36 {
+                for c in 0..CARDS {
                     let exact = counts[x][c] as f64 / all.len() as f64;
                     assert!((marginals[x][c] - exact).abs() <= 1e-12, "seed {seed}: marginal");
                 }

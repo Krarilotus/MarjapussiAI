@@ -109,12 +109,17 @@ fn create_player(name: String, cards: Vec<Card>, place: u8) -> Player {
     }
 }
 
+/// The four hands of a dealt deck (36 cards): seat `s` gets cards `9s..9s + 9`.
+pub fn hands_from_deck(deck: &[Card]) -> [Vec<Card>; 4] {
+    assert_eq!(deck.len(), 4 * HAND_SIZE, "a full deck");
+    [0, 1, 2, 3].map(|i| deck[i * HAND_SIZE..(i + 1) * HAND_SIZE].to_vec())
+}
+
 pub fn create_players(names: [String; 4], cards: Option<[Vec<Card>; 4]>) -> [Player; 4] {
     let players_cards = cards.unwrap_or_else(|| {
-        //random shuffled cads
         let mut deck = get_all_cards();
         deck.shuffle(&mut rng());
-        [0, 1, 2, 3].map(|i| deck[i * HAND_SIZE..(i + 1) * HAND_SIZE].to_vec())
+        hands_from_deck(&deck)
     });
 
     let p0 = create_player(names[0].clone(), players_cards[0].clone(), 0);

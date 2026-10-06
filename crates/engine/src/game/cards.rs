@@ -104,8 +104,8 @@ impl Card {
     #[inline]
     pub const fn from_index(index: u8) -> Card {
         Card {
-            suit: SUITS[(index / 9) as usize],
-            value: VALUES[(index % 9) as usize],
+            suit: suit_of(index),
+            value: value_of(index),
         }
     }
 }
@@ -116,6 +116,16 @@ impl Filler for Card {
 
 impl Filler for Suit {
     const FILL: Suit = Suit::Green;
+}
+
+/// The suit of the card with bit index `index`.
+pub const fn suit_of(index: u8) -> Suit {
+    SUITS[(index / 9) as usize]
+}
+
+/// The value of the card with bit index `index`.
+pub const fn value_of(index: u8) -> Value {
+    VALUES[(index % 9) as usize]
 }
 
 /// The 36 cards in index order.

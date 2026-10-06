@@ -17,13 +17,6 @@ pub struct GameEvent {
     pub time: u64,
 }
 
-/// Meant for broadcasting, hides passing cards.
-#[derive(Debug, Clone)]
-pub enum GameEventPlayer {
-    PublicEvent(GameEvent),
-    HiddenEvent,
-}
-
 /// Internal information after each action, i.e. questions, answers and trump changes.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub enum GameCallback {
