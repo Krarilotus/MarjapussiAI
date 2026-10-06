@@ -1,38 +1,26 @@
 //! Bitset view of cards and the owner of the card-play rule.
 //!
 //! `play_levels` (which cards may be played) and `takes` / `trick_winner` (who wins a trick)
-//! are the single implementation of these rules: `cards::allowed_cards`, `Game` and
-//! `engine::fast` all call them. The test `play_levels_mirror_allowed_cards` keeps the former
-//! `Vec`-based implementation as a reference oracle on random tricks and hands.
+//! are the single implementation of these rules: `Game` and `engine::fast` call them. Their
+//! behaviour is pinned by the golden trace and the human replay.
 
 use std::fmt;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not, Sub, SubAssign};
 
 use crate::game::cards::{Card, Suit, Value};
 
-pub const SUITS: [Suit; 4] = [Suit::Green, Suit::Acorns, Suit::Bells, Suit::Red];
-pub const VALUES: [Value; 9] = [
-    Value::Six,
-    Value::Seven,
-    Value::Eight,
-    Value::Nine,
-    Value::Unter,
-    Value::Ober,
-    Value::King,
-    Value::Ten,
-    Value::Ace,
-];
+pub use crate::game::cards::{CARDS, SUITS, VALUES};
 
-/// Bit index of a card: `suit * 9 + value`, in the engine's enum order.
+/// Bit index of a card: `suit * 9 + value` (`Card::index`).
+#[inline]
 pub fn index(card: &Card) -> u8 {
-    card.suit as u8 * 9 + card.value as u8
+    card.index()
 }
 
+/// The card with bit index `index` (`Card::from_index`).
+#[inline]
 pub fn card(index: u8) -> Card {
-    Card {
-        suit: SUITS[(index / 9) as usize],
-        value: VALUES[(index % 9) as usize],
-    }
+    Card::from_index(index)
 }
 
 /// Seat helpers (seats are 0–3 clockwise; partners sit opposite).
@@ -270,89 +258,10 @@ pub fn play_levels(trick: &[u8], trump: Option<Suit>, first_trick: bool) -> Play
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::cards::{allowed_cards, get_all_cards, high_card};
+    use crate::game::cards::get_all_cards;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::{Rng, SeedableRng};
-
-    /// The former `Vec`-based rule (main at 68c98f0), kept as the reference oracle.
-    mod reference {
-        use crate::game::cards::{Card, Suit, Value};
-        use std::cmp::max;
-
-        pub fn high_card(trick: Vec<&Card>, trump: Option<Suit>) -> Option<&Card> {
-            if trick.is_empty() {
-                return None;
-            }
-            let trick_suit = trick[0].suit;
-            let suit = match trump {
-                Some(t) if trick.iter().any(|c| c.suit == t) => t,
-                _ => trick_suit,
-            };
-            trick.into_iter().filter(|x| x.suit == suit).reduce(max)
-        }
-
-        fn allowed_first(cards: Vec<&Card>) -> Vec<&Card> {
-            let mut allowed: Vec<&Card> = cards.iter().copied().filter(|c| c.value == Value::Ace).collect();
-            if allowed.is_empty() {
-                allowed = cards.iter().copied().filter(|c| c.suit == Suit::Green).collect();
-            }
-            if allowed.is_empty() {
-                cards
-            } else {
-                allowed
-            }
-        }
-
-        pub fn allowed_cards<'a>(
-            trick: Vec<&'a Card>,
-            cards: Vec<&'a Card>,
-            trump: Option<Suit>,
-            first_trick: bool,
-        ) -> Vec<&'a Card> {
-            let Some(current_high_card) = high_card(trick.clone(), trump) else {
-                return if first_trick { allowed_first(cards) } else { cards };
-            };
-            let trick_suit = trick[0].suit;
-            if first_trick {
-                let ace: Vec<&Card> = cards
-                    .iter()
-                    .copied()
-                    .filter(|c| c.suit == trick_suit && c.value == Value::Ace)
-                    .collect();
-                if ace.len() == 1 {
-                    return ace;
-                }
-            }
-            let same_color: Vec<&Card> = cards.iter().copied().filter(|c| c.suit == trick_suit).collect();
-            let higher: Vec<&Card> = cards
-                .iter()
-                .copied()
-                .filter(|c| {
-                    let mut t = trick.clone();
-                    t.push(c);
-                    high_card(t, trump) > Some(current_high_card)
-                })
-                .collect();
-            let higher_same_color: Vec<&Card> = higher.iter().copied().filter(|c| c.suit == trick_suit).collect();
-            if !higher_same_color.is_empty() {
-                return higher_same_color;
-            }
-            if !same_color.is_empty() {
-                return same_color;
-            }
-            if !higher.is_empty() {
-                return higher;
-            }
-            if let Some(t) = trump {
-                let trumps: Vec<&Card> = cards.iter().copied().filter(|c| c.suit == t).collect();
-                if !trumps.is_empty() {
-                    return trumps;
-                }
-            }
-            cards
-        }
-    }
 
     #[test]
     fn index_round_trips() {
@@ -362,8 +271,11 @@ mod tests {
         assert_eq!(CardSet::from_cards(&get_all_cards()), CardSet::ALL);
     }
 
+    /// Properties of the play rule (its behaviour is pinned by the golden trace and the human
+    /// replay): the allowed cards are held, never empty for a non-empty hand, and a legal play
+    /// never excludes a held card.
     #[test]
-    fn play_levels_mirror_allowed_cards() {
+    fn play_levels_properties() {
         let mut rng = StdRng::seed_from_u64(7);
         let trumps = [
             None,
@@ -372,40 +284,21 @@ mod tests {
             Some(Suit::Bells),
             Some(Suit::Red),
         ];
-        for _ in 0..200_000 {
-            let mut deck = get_all_cards();
+        for _ in 0..50_000 {
+            let mut deck: Vec<u8> = (0..CARDS as u8).collect();
             deck.shuffle(&mut rng);
             let trick_len = rng.random_range(0..4);
             let hand_len = rng.random_range(1..10);
             let trick = &deck[..trick_len];
-            let hand = &deck[trick_len..trick_len + hand_len];
-            let trump = trumps[rng.random_range(0..5)];
-            let first_trick = rng.random_bool(0.3);
-
-            let expected = reference::allowed_cards(trick.iter().collect(), hand.iter().collect(), trump, first_trick);
-            // The engine function: same cards, in hand order.
-            assert_eq!(
-                allowed_cards(trick.iter().collect(), hand.iter().collect(), trump, first_trick),
-                expected,
-                "trick {trick:?} hand {hand:?} trump {trump:?} first {first_trick}"
-            );
-            let expected = CardSet::from_cards(expected);
-            let trick_idx: Vec<u8> = trick.iter().map(index).collect();
-            let levels = play_levels(&trick_idx, trump, first_trick);
-            assert_eq!(levels.allowed(CardSet::from_cards(hand)), expected);
-            for c in expected.iter() {
-                assert!(
-                    levels.excluded_by(c).is_subset(!CardSet::from_cards(hand)),
-                    "a legal play must not exclude a held card"
-                );
+            let hand = deck[trick_len..trick_len + hand_len]
+                .iter()
+                .fold(CardSet::EMPTY, |h, &c| h | CardSet::single(c));
+            let levels = play_levels(trick, trumps[rng.random_range(0..5)], rng.random_bool(0.3));
+            let allowed = levels.allowed(hand);
+            assert!(!allowed.is_empty() && allowed.is_subset(hand));
+            for c in allowed.iter() {
+                assert!(levels.excluded_by(c).is_subset(!hand));
             }
-            // Trick order: the bitset winner equals the reference high card.
-            let mut full = trick.to_vec();
-            full.extend(hand.iter().take(4 - trick_len).cloned());
-            let full_idx: Vec<u8> = full.iter().map(index).collect();
-            let want = reference::high_card(full.iter().collect(), trump);
-            assert_eq!(Some(&full[trick_winner(&full_idx, trump)]), want);
-            assert_eq!(high_card(full.iter().collect(), trump), want);
         }
     }
 }

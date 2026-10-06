@@ -47,13 +47,7 @@ fn dataset() -> Option<PathBuf> {
 }
 
 fn suit(c: char) -> Option<Suit> {
-    Some(match c {
-        'g' => Suit::Green,
-        'e' => Suit::Acorns,
-        's' => Suit::Bells,
-        'r' => Suit::Red,
-        _ => return None,
-    })
+    Suit::from_code(c)
 }
 
 fn split(raw: &str) -> Option<(u8, &str, &str)> {

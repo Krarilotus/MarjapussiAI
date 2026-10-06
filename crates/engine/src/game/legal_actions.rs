@@ -84,7 +84,8 @@ fn push_bidding(game: &Game, out: &mut Vec<GameAction>) {
     }
 }
 
-/// Every 4-card subset of the hand, in the order of `itertools::combinations` over the hand,
+/// Every 4-card subset of the hand, in lexicographic order of hand positions (as
+/// `itertools::combinations` gave on main),
 /// each sorted from high to low.
 pub fn legal_passing(game: &Game) -> Vec<GameAction> {
     let mut out = vec![];
