@@ -40,7 +40,11 @@ macro_rules! game_bench {
         }
 
         fn new_game(hands: &[Vec<Card>; 4]) -> Game {
-            Game::new("bench".into(), ["S0", "S1", "S2", "S3"].map(String::from), Some(hands.clone()))
+            Game::new(
+                "bench".into(),
+                ["S0", "S1", "S2", "S3"].map(String::from),
+                Some(hands.clone()),
+            )
         }
 
         /// Random games without undo, recorded as indices into `legal_actions`.
@@ -52,7 +56,12 @@ macro_rules! game_bench {
                     for i in (1..deck.len()).rev() {
                         deck.swap(i, rng.below(i + 1));
                     }
-                    let hands = [deck[0..9].to_vec(), deck[9..18].to_vec(), deck[18..27].to_vec(), deck[27..36].to_vec()];
+                    let hands = [
+                        deck[0..9].to_vec(),
+                        deck[9..18].to_vec(),
+                        deck[18..27].to_vec(),
+                        deck[27..36].to_vec(),
+                    ];
                     let mut game = new_game(&hands);
                     let mut picks = vec![];
                     while !game.ended() {
@@ -107,7 +116,11 @@ macro_rules! game_bench {
                     if game.ended() {
                         break;
                     }
-                    if game.legal_actions.iter().all(|a| matches!(a.action_type, ActionType::CardPlayed(_) | ActionType::UndoRequest)) {
+                    if game
+                        .legal_actions
+                        .iter()
+                        .all(|a| matches!(a.action_type, ActionType::CardPlayed(_) | ActionType::UndoRequest))
+                    {
                         cards.push(game.clone());
                     }
                     all.push(game.clone());
@@ -130,7 +143,14 @@ macro_rules! game_bench {
                     black_box(card_playout(g.clone(), &mut rng));
                 }
             });
-            [per_action_mut, per_action_imm, total_mut, legal_all, legal_cards, playout]
+            [
+                per_action_mut,
+                per_action_imm,
+                total_mut,
+                legal_all,
+                legal_cards,
+                playout,
+            ]
         }
 
         /// The state after the first trick (8 tricks left) of each script.

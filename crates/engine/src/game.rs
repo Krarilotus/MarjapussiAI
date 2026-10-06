@@ -94,21 +94,14 @@ impl Game {
             return Err(GameError::IllegalAction);
         }
         // Every action except these two replaces the undo snapshot, so it is cloned only here.
-        let keeps_snapshot = matches!(
-            action.action_type,
-            ActionType::UndoRequest | ActionType::UndoAccept
-        );
+        let keeps_snapshot = matches!(action.action_type, ActionType::UndoRequest | ActionType::UndoAccept);
         let mut all_events = Vec::with_capacity(self.all_events.len() + 1);
         all_events.extend_from_slice(&self.all_events);
         let mut next_game = Game {
             info: self.info.clone(),
             state: self.state.clone(),
             legal_actions: vec![],
-            last_state: if keeps_snapshot {
-                self.last_state.clone()
-            } else {
-                None
-            },
+            last_state: if keeps_snapshot { self.last_state.clone() } else { None },
             all_events,
         };
         next_game.apply_legal(action);
@@ -180,23 +173,13 @@ mod tests {
     }
 
     fn helper_create_game() -> Game {
-        let names = [
-            "S1".to_string(),
-            "S2".to_string(),
-            "S3".to_string(),
-            "S4".to_string(),
-        ];
+        let names = ["S1".to_string(), "S2".to_string(), "S3".to_string(), "S4".to_string()];
         Game::new(String::from("Testgame"), names, None)
     }
 
     #[test]
     fn test_creating() {
-        let names = [
-            "S1".to_string(),
-            "S2".to_string(),
-            "S3".to_string(),
-            "S4".to_string(),
-        ];
+        let names = ["S1".to_string(), "S2".to_string(), "S3".to_string(), "S4".to_string()];
         let game = Game::new(String::from("Game Name"), names, None);
         assert_eq!(game.info.name, String::from("Game Name"));
     }
@@ -229,7 +212,7 @@ mod tests {
         assert_eq!(actions.len(), 62);
         let bid140 = GameAction {
             action_type: ActionType::NewBid(140),
-            player: game.state.player_at_turn.clone(),
+            player: game.state.player_at_turn,
         };
         game = game.apply_action(bid140).ok().unwrap();
         let forbidden_action = actions.pop().unwrap();
@@ -296,12 +279,7 @@ mod tests {
 
     #[test]
     fn test_trump_possibilities_only_move_upwards() {
-        let names = [
-            "S1".to_string(),
-            "S2".to_string(),
-            "S3".to_string(),
-            "S4".to_string(),
-        ];
+        let names = ["S1".to_string(), "S2".to_string(), "S3".to_string(), "S4".to_string()];
         let cards = [
             vec![
                 "r-O".parse().unwrap(),
@@ -353,58 +331,52 @@ mod tests {
 
         game.state.started = true;
         game.state.phase = GamePhase::StartTrick;
-        game.state.player_at_turn = p0.clone();
+        game.state.player_at_turn = p0;
         game.legal_actions = game.legal_actions();
 
         assert!(game.legal_actions.contains(&GameAction {
             action_type: ActionType::AnnounceTrump(Suit::Red),
-            player: p0.clone(),
+            player: p0,
         }));
         assert!(game.legal_actions.contains(&GameAction {
             action_type: ActionType::Question(QuestionType::Yours),
-            player: p0.clone(),
+            player: p0,
         }));
 
         game = game
             .apply_action(GameAction {
                 action_type: ActionType::Question(QuestionType::Yours),
-                player: p0.clone(),
+                player: p0,
             })
             .unwrap();
-        assert_eq!(
-            game.state.player_at_place(p0.clone()).trump,
-            PlayerTrumpPossibilities::Yours
-        );
+        assert_eq!(game.state.player_at_place(p0).trump, PlayerTrumpPossibilities::Yours);
 
         game.state.phase = GamePhase::StartTrick;
-        game.state.player_at_turn = p0.clone();
+        game.state.player_at_turn = p0;
         game.legal_actions = game.legal_actions();
         assert!(game.legal_actions.contains(&GameAction {
             action_type: ActionType::Question(QuestionType::Yours),
-            player: p0.clone(),
+            player: p0,
         }));
         assert!(!game.legal_actions.contains(&GameAction {
             action_type: ActionType::AnnounceTrump(Suit::Red),
-            player: p0.clone(),
+            player: p0,
         }));
 
         game = game
             .apply_action(GameAction {
                 action_type: ActionType::Question(QuestionType::YourHalf(Suit::Green)),
-                player: p0.clone(),
+                player: p0,
             })
             .unwrap();
-        assert_eq!(
-            game.state.player_at_place(p0.clone()).trump,
-            PlayerTrumpPossibilities::Ours
-        );
+        assert_eq!(game.state.player_at_place(p0).trump, PlayerTrumpPossibilities::Ours);
 
         game.state.phase = GamePhase::StartTrick;
-        game.state.player_at_turn = p0.clone();
+        game.state.player_at_turn = p0;
         game.legal_actions = game.legal_actions();
         assert!(!game.legal_actions.contains(&GameAction {
             action_type: ActionType::Question(QuestionType::Yours),
-            player: p0.clone(),
+            player: p0,
         }));
         assert!(game.legal_actions.contains(&GameAction {
             action_type: ActionType::Question(QuestionType::YourHalf(Suit::Red)),

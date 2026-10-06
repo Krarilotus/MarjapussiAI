@@ -94,7 +94,7 @@ pub fn state_line(game: &Game) -> String {
         out,
         " | legal {:?} | undo {:?}",
         game.legal_actions,
-        game.last_state.as_ref().map(|l| (l.phase.clone(), l.player_at_turn.clone()))
+        game.last_state.as_ref().map(|l| (l.phase.clone(), l.player_at_turn))
     )
     .unwrap();
     out
@@ -139,6 +139,10 @@ pub fn scores_264fa3d(info: &GameFinishedInfo) -> [i32; 2] {
     let n_tricks = info.tricks.iter().filter(|t| t.winner.0 as usize % 2 == n).count();
     let mut scores = [0; 2];
     scores[s] = if won { value } else { -value };
-    scores[n] = if n_tricks == 0 && won { -2 * value } else { rounded(info.team_points[n]) };
+    scores[n] = if n_tricks == 0 && won {
+        -2 * value
+    } else {
+        rounded(info.team_points[n])
+    };
     scores
 }

@@ -51,7 +51,11 @@ fn fast_matches_game_at_every_card_play_state() {
                 if let Some(s) = stepped {
                     assert_eq!(s, fresh, "seed {seed}: stepped fast state differs from Game");
                 }
-                assert_eq!(FastState::from_parts(fresh.parts()), Ok(fresh), "seed {seed}: parts round trip");
+                assert_eq!(
+                    FastState::from_parts(fresh.parts()),
+                    Ok(fresh),
+                    "seed {seed}: parts round trip"
+                );
                 let seat = game.state.player_at_turn.0;
                 assert_eq!(fresh.to_move(), seat, "seed {seed}: seat to move");
                 let game_cards = CardSet::from_cards(game.legal_actions.iter().filter_map(|a| match &a.action_type {
@@ -68,7 +72,10 @@ fn fast_matches_game_at_every_card_play_state() {
                 assert_eq!(moves.len(), fresh.moves().len());
                 assert_eq!(moves.len() as u32, game_cards.len() + game_announce.count_ones());
                 for m in moves {
-                    assert!(game.legal_actions.contains(&fast::to_action(m, seat)), "seed {seed}: {m:?} not legal in Game");
+                    assert!(
+                        game.legal_actions.contains(&fast::to_action(m, seat)),
+                        "seed {seed}: {m:?} not legal in Game"
+                    );
                 }
                 stepped = Some(fresh);
             } else {
@@ -102,7 +109,11 @@ fn fast_matches_game_at_every_card_play_state() {
         assert!(fresh.is_over() && fresh.tricks_done() == 9);
         let info = GameFinishedInfo::from(game);
         let card_points: [i32; 2] = [0, 1].map(|team| {
-            info.tricks.iter().filter(|t| t.winner.0 % 2 == team).map(|t| t.points.0).sum()
+            info.tricks
+                .iter()
+                .filter(|t| t.winner.0 % 2 == team)
+                .map(|t| t.points.0)
+                .sum()
         });
         for team in 0..2u8 {
             assert_eq!(fresh.card_points(team), card_points[team as usize], "seed {seed}");
@@ -112,7 +123,11 @@ fn fast_matches_game_at_every_card_play_state() {
             );
             if !info.no_one_played {
                 // GameFinishedInfo counts announced pairs only when a contract was played.
-                assert_eq!(fresh.points(team), info.team_points[team as usize], "seed {seed}: team points");
+                assert_eq!(
+                    fresh.points(team),
+                    info.team_points[team as usize],
+                    "seed {seed}: team points"
+                );
             }
         }
         assert_eq!(fresh.card_points(0) + fresh.card_points(1), 140);

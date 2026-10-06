@@ -132,7 +132,7 @@ impl GameState {
 
     pub fn players_perspective(&self, place: PlaceAtTable) -> [String; 4] {
         [
-            self.player_at_place(place.clone()).name.clone(),
+            self.player_at_place(place).name.clone(),
             self.player_at_place(place.next()).name.clone(),
             self.player_at_place(place.partner()).name.clone(),
             self.player_at_place(place.prev()).name.clone(),
@@ -141,7 +141,7 @@ impl GameState {
 
     pub fn players_perspective_cards(&self, place: PlaceAtTable) -> [u8; 4] {
         [
-            self.player_at_place(place.clone()).cards.len() as u8,
+            self.player_at_place(place).cards.len() as u8,
             self.player_at_place(place.next()).cards.len() as u8,
             self.player_at_place(place.partner()).cards.len() as u8,
             self.player_at_place(place.prev()).cards.len() as u8,

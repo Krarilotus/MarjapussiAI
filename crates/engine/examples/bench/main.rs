@@ -21,7 +21,11 @@ fn random_deal(rng: &mut Rng) -> [CardSet; 4] {
     for i in (1..36).rev() {
         deck.swap(i, rng.below(i + 1));
     }
-    [0, 1, 2, 3].map(|s| deck[s * 9..s * 9 + 9].iter().fold(CardSet::EMPTY, |h, &c| h | CardSet::single(c)))
+    [0, 1, 2, 3].map(|s| {
+        deck[s * 9..s * 9 + 9]
+            .iter()
+            .fold(CardSet::EMPTY, |h, &c| h | CardSet::single(c))
+    })
 }
 
 /// The `k`-th card of `set` (ascending index).
@@ -115,7 +119,9 @@ fn main() {
     });
     println!("| fast | ns per random card playout, 8 tricks left (same positions) | {ns:.0} |");
 
-    let deals: Vec<FastState> = (0..10_000).map(|i| FastState::new(random_deal(&mut rng), (i % 4) as u8)).collect();
+    let deals: Vec<FastState> = (0..10_000)
+        .map(|i| FastState::new(random_deal(&mut rng), (i % 4) as u8))
+        .collect();
     let mut moves = 0u64;
     let ns_playout = best_ns(reps, deals.len() as u64, || {
         let mut rng = Rng(7);
@@ -126,7 +132,10 @@ fn main() {
     });
     let ns_move = ns_playout * deals.len() as f64 / moves as f64;
     println!("| fast | ns per full 9-trick random playout (announcements included) | {ns_playout:.0} |");
-    println!("| fast | full playouts per second, one thread | {:.0} |", 1e9 / ns_playout);
+    println!(
+        "| fast | full playouts per second, one thread | {:.0} |",
+        1e9 / ns_playout
+    );
     println!("| fast | ns per move (generation + apply + random pick) | {ns_move:.1} |");
     println!("| fast | moves per second, one thread | {:.0} |", 1e9 / ns_move);
 

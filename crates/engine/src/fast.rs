@@ -168,7 +168,11 @@ impl FastState {
             GamePhase::Raising | GamePhase::Trick | GamePhase::Ended => false,
             _ => return None,
         };
-        let trick: &[_] = if s.current_trick.len() == 4 { &[] } else { &s.current_trick };
+        let trick: &[_] = if s.current_trick.len() == 4 {
+            &[]
+        } else {
+            &s.current_trick
+        };
         let mut fast = FastState::new(
             [0, 1, 2, 3].map(|i| CardSet::from_cards(&s.players[i].cards)),
             (s.player_at_turn.0 + 4 - trick.len() as u8) % 4,
@@ -357,7 +361,10 @@ impl FastState {
     /// (checked in debug builds).
     #[inline]
     pub fn announce(&mut self, suit: Suit) {
-        debug_assert!(self.announcements() >> suit as u8 & 1 == 1, "illegal announcement {suit:?}");
+        debug_assert!(
+            self.announcements() >> suit as u8 & 1 == 1,
+            "illegal announcement {suit:?}"
+        );
         self.trump = suit as u8;
         self.called |= 1 << suit as u8;
         self.pair_points[(self.leader & 1) as usize] += PAIR_POINTS[suit as usize] as i16;
