@@ -4,7 +4,7 @@ use crate::game::cards::{Card, Suit};
 use crate::game::gameevent::ActionType;
 use crate::game::player::{PlaceAtTable, Player};
 use crate::game::points::Points;
-use crate::inline::InlineVec;
+use crate::inline::{Filler, InlineVec};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GamePhase {
@@ -26,6 +26,14 @@ pub struct FinishedTrick {
     pub cards: [Card; 4],
     pub winner: PlaceAtTable,
     pub points: Points,
+}
+
+impl Filler for FinishedTrick {
+    const FILL: FinishedTrick = FinishedTrick {
+        cards: [Card::FILL; 4],
+        winner: PlaceAtTable(0),
+        points: Points(0),
+    };
 }
 
 /// The state of one game. All lists except the bidding history are inline (`InlineVec`), so

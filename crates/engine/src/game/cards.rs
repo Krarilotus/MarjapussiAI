@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use crate::game::errors::GameError;
+use crate::inline::Filler;
 
 /// Cards in the deck.
 pub const CARDS: usize = 36;
@@ -107,6 +108,14 @@ impl Card {
             value: VALUES[(index % 9) as usize],
         }
     }
+}
+
+impl Filler for Card {
+    const FILL: Card = Card::from_index(0);
+}
+
+impl Filler for Suit {
+    const FILL: Suit = Suit::Green;
 }
 
 /// The 36 cards in index order.

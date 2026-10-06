@@ -19,7 +19,7 @@ use crate::game::gamestate::GamePhase;
 use crate::game::player::PlayerTrumpPossibilities;
 use crate::game::points::{CARD_POINTS, LAST_TRICK_BONUS, PAIR_POINTS};
 use crate::game::scoring;
-use crate::game::Game;
+use crate::game::table::Game;
 
 /// Tricks in a game.
 pub const TRICKS: u8 = 9;

@@ -6,13 +6,17 @@ use rand::seq::SliceRandom;
 use serde::Serialize;
 
 use crate::game::cards::{get_all_cards, Card};
-use crate::inline::InlineVec;
+use crate::inline::{Filler, InlineVec};
 
 /// Cards dealt to each player.
 pub const HAND_SIZE: usize = 9;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct PlaceAtTable(pub u8);
+
+impl Filler for PlaceAtTable {
+    const FILL: PlaceAtTable = PlaceAtTable(0);
+}
 
 impl PlaceAtTable {
     pub fn partner(&self) -> Self {

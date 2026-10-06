@@ -7,7 +7,7 @@ use crate::game::cards::{Card, Suit};
 use crate::game::gameevent::{ActionType, AnswerType, GameAction, QuestionType};
 use crate::game::gameinfo::GameFinishedInfo;
 use crate::game::player::PlaceAtTable;
-use crate::game::Game;
+use crate::game::table::Game;
 
 fn parse_card(card: &str) -> Result<Card, Error> {
     card.parse().map_err(|_| Error::other(format!("not a card: {card}")))
