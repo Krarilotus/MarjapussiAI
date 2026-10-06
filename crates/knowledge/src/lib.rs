@@ -7,6 +7,8 @@
 //! set-logic counting); see `docs/design/knowledge.md`. Only `SeatEvent`s go in, so this
 //! crate cannot see hidden cards.
 
+use std::cell::Cell;
+
 use engine::bits::{next_seat, partner, play_levels, CardSet, SUITS};
 use engine::game::cards::Suit;
 use engine::game::legal_actions::is_first_trick;
@@ -15,7 +17,7 @@ use observation::{Seat, SeatEvent};
 
 mod sample;
 
-pub use sample::{Belief, DealSpace, Hands, Uniform, World};
+pub use sample::{Belief, DealSpace, ExactSets, Hands, Uniform, World};
 
 const MAX_CONSTRAINTS: usize = 16;
 
@@ -386,11 +388,16 @@ impl Knowledge {
     }
 }
 
-/// `Knowledge` plus the engine's one-step undo.
+/// `Knowledge` plus the engine's one-step undo, and the lazy exact layer beside it.
+/// The cache is a `Cell`, so a `Tracker` is `Send` but not `Sync`: share it across threads
+/// by cloning, or share the `Knowledge` (`Copy`).
 #[derive(Clone, Debug)]
 pub struct Tracker {
     now: Knowledge,
     before_last_undoable: Option<Knowledge>,
+    /// Events applied, undos included; never decreases, so it keys the caches.
+    events: u32,
+    exact: Cell<Option<(u32, ExactSets)>>,
 }
 
 impl Tracker {
@@ -398,6 +405,8 @@ impl Tracker {
         Tracker {
             now: Knowledge::new(me, hand),
             before_last_undoable: None,
+            events: 0,
+            exact: Cell::new(None),
         }
     }
 
@@ -405,7 +414,21 @@ impl Tracker {
         &self.now
     }
 
+    /// `DealSpace::exact_sets` of the current knowledge, computed on the first call after an
+    /// event and cached until the next one.
+    pub fn exact_sets(&self) -> ExactSets {
+        if let Some((events, sets)) = self.exact.get() {
+            if events == self.events {
+                return sets;
+            }
+        }
+        let sets = self.now.deals().exact_sets();
+        self.exact.set(Some((self.events, sets)));
+        sets
+    }
+
     pub fn apply(&mut self, event: &SeatEvent) -> Result<(), Contradiction> {
+        self.events += 1;
         match event {
             SeatEvent::Undone => {
                 self.now = self

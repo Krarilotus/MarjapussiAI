@@ -7,7 +7,7 @@ use engine::bits::CardSet;
 use engine::game::cards::get_all_cards;
 use engine::game::gameevent::{ActionType, GameAction};
 use engine::game::Game;
-use knowledge::{DealSpace, Hands, Knowledge, Tracker};
+use knowledge::{DealSpace, ExactSets, Hands, Knowledge, Tracker};
 use observation::SeatFilter;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -36,8 +36,8 @@ fn pick_action(game: &Game, rng: &mut StdRng) -> GameAction {
     normal[rng.random_range(0..normal.len())].clone()
 }
 
-/// Plays one random game and calls `visit(knowledge, true hands)` for every seat after every event.
-fn for_each_state(seed: u64, mut visit: impl FnMut(&Knowledge, &Hands)) {
+/// Plays one random game and calls `visit(tracker, true hands)` for every seat after every event.
+fn for_each_state(seed: u64, mut visit: impl FnMut(&Tracker, &Hands)) {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut game = new_game(&mut rng);
     let mut filters: Vec<SeatFilter> = (0..4).map(SeatFilter::new).collect();
@@ -57,7 +57,7 @@ fn for_each_state(seed: u64, mut visit: impl FnMut(&Knowledge, &Hands)) {
         }
         let truth: Hands = std::array::from_fn(|x| CardSet::from_cards(&game.state.players[x].cards));
         for t in &trackers {
-            visit(t.knowledge(), &truth);
+            visit(t, &truth);
         }
     }
 }
@@ -124,8 +124,10 @@ fn has_tied_cards(k: &Knowledge) -> bool {
 fn sampler_is_sound_in_random_games() {
     let mut rng = StdRng::seed_from_u64(7);
     let (mut states, mut tied) = (0u64, 0u64);
+    let (mut possible_bits, mut exact_bits, mut newly_certain) = (0u64, 0u64, 0u64);
     for seed in 0..300 {
-        for_each_state(seed, |k, truth| {
+        for_each_state(seed, |t, truth| {
+            let k = t.knowledge();
             assert!(consistent(k, truth), "seed {seed}: the true deal breaks the facts");
             let space = DealSpace::new(k);
             let total = space.count();
@@ -146,11 +148,42 @@ fn sampler_is_sound_in_random_games() {
                 let hands = space.sample(&mut rng).unwrap();
                 assert!(consistent(k, &hands), "seed {seed}: sample breaks the facts");
             }
+            // The cached accessor is never stale (the first call after each event) and stays sound.
+            let exact = t.exact_sets();
+            assert_eq!(exact, space.exact_sets(), "seed {seed}: stale exact_sets cache");
+            assert_eq!(t.exact_sets(), exact);
+            let mut owned = CardSet::EMPTY;
+            for x in 0..4u8 {
+                let may = exact.may_hold(x);
+                assert!(
+                    truth[x as usize].is_subset(may),
+                    "seed {seed}: true card of seat {x} not in the exact sets"
+                );
+                owned |= may;
+            }
+            assert_eq!(owned, !k.played(), "seed {seed}: a live card belongs to no seat");
+            for x in 0..4u8 {
+                let (c, p) = (exact.certain[x as usize], exact.possible[x as usize]);
+                assert!(k.certain(x).is_subset(c), "seed {seed}: exact drops a certain card");
+                assert!(p.is_subset(k.possible(x)), "seed {seed}: exact adds a possible card");
+                assert!(
+                    (c & p).is_empty() && c.is_subset(k.may_hold(x)),
+                    "seed {seed}: exact sets"
+                );
+                possible_bits += k.possible(x).len() as u64;
+                exact_bits += p.len() as u64;
+                newly_certain += (c - k.certain(x)).len() as u64;
+            }
             states += 1;
             tied += has_tied_cards(k) as u64;
         });
     }
     eprintln!("{states} states checked, {tied} with constrained cards");
+    eprintln!(
+        "exact sets: {} of {possible_bits} possible bits leave possible ({:.3} %), {newly_certain} of them become certain",
+        possible_bits - exact_bits,
+        100.0 * (possible_bits - exact_bits) as f64 / possible_bits as f64
+    );
     assert!(tied >= 1_000, "too little constraint coverage: {tied}");
 }
 
@@ -159,7 +192,8 @@ fn counts_and_marginals_match_enumeration() {
     let mut rng = StdRng::seed_from_u64(11);
     let (mut states, mut tied, mut deals) = (0u64, 0u64, 0u64);
     for seed in 0..200 {
-        for_each_state(seed, |k, _| {
+        for_each_state(seed, |t, _| {
+            let k = t.knowledge();
             if unknown(k).len() > 12 {
                 return;
             }
@@ -175,6 +209,17 @@ fn counts_and_marginals_match_enumeration() {
                 }
             }
             assert_eq!(space.holder_counts(), counts, "seed {seed}: holder counts");
+            let n = all.len() as u64;
+            let held = |x: usize, keep: &dyn Fn(u64) -> bool| {
+                (0..36u8)
+                    .filter(|&c| keep(counts[x][c as usize]))
+                    .fold(CardSet::EMPTY, |set, c| set | CardSet::single(c))
+            };
+            let exact = ExactSets {
+                certain: std::array::from_fn(|x| held(x, &|m| m == n)),
+                possible: std::array::from_fn(|x| held(x, &|m| m > 0 && m < n)),
+            };
+            assert_eq!(space.exact_sets(), exact, "seed {seed}: exact sets");
             let marginals = space.marginals();
             for x in 0..4 {
                 for c in 0..36 {
@@ -212,7 +257,8 @@ fn samples_are_exactly_uniform() {
     let mut rng = StdRng::seed_from_u64(13);
     let (mut plain, mut tied) = (vec![], vec![]);
     for seed in 0..400 {
-        for_each_state(seed, |k, _| {
+        for_each_state(seed, |t, _| {
+            let k = t.knowledge();
             if unknown(k).len() > 12 {
                 return;
             }
@@ -242,7 +288,8 @@ fn samples_are_exactly_uniform() {
 fn belief_weights_are_importance_weights() {
     // Belief: deals where the next seat holds the lowest unknown card count 3 times.
     let mut state = None;
-    for_each_state(5, |k, _| {
+    for_each_state(5, |t, _| {
+        let k = t.knowledge();
         if state.is_none() && unknown(k).len() <= 12 && DealSpace::new(k).count() >= 100 {
             state = Some(*k);
         }

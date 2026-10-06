@@ -81,6 +81,7 @@ Measured v0 baseline (tier 0 only, release build, PC under load from other proje
 - `count()`: the exact number of such deals;
 - `holder_counts()` / `marginals()`: the exact number (probability) of deals in which seat y holds card c; a zero count means the card is impossible there, so this also gives the exact possible sets;
 - `sample(rng)`: one deal, exactly uniform, without rejection;
+- `exact_sets()`: `certain` and `possible` made exact (cards held in every deal, and in some but not all). `Tracker::exact_sets()` caches it by event count, which only grows (undos included), so the cache cannot go stale. The cache is a `Cell`, so `Tracker` is `Send` but not `Sync`. Guards after every event: cache = fresh computation; true hand ⊆ exact may_hold; every live card has a holder; tier-0 certain ⊆ exact certain, exact possible ⊆ tier-0 possible; equal to enumeration on small states;
 - `sample_worlds(rng, n, belief)`: uniform samples weighted by a `Belief` (a likelihood hook for the soft layer; the weights are importance weights).
 
 Method (Investigator A §6.4–6.5):

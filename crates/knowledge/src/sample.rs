@@ -89,6 +89,21 @@ pub struct DealSpace {
     total: u64,
 }
 
+/// Exact tier-1 sets with the meaning of `Knowledge::certain` and `Knowledge::possible`: per
+/// seat, the cards it holds in every consistent deal, and those it holds in some but not all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ExactSets {
+    pub certain: [CardSet; 4],
+    pub possible: [CardSet; 4],
+}
+
+impl ExactSets {
+    /// Every card `seat` holds in some consistent deal.
+    pub fn may_hold(&self, seat: Seat) -> CardSet {
+        self.certain[seat as usize] | self.possible[seat as usize]
+    }
+}
+
 /// A sampled deal with its importance weight (`Belief::weight`; normalise over the sample).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct World {
@@ -520,6 +535,25 @@ impl DealSpace {
                 out[self.hidden[j] as usize][c as usize] = held[j] / n as u64;
             }
         }
+    }
+
+    /// `certain` and `possible` made exact. A card in every deal is certain, even if tier 0
+    /// still lists it as possible. All empty if there is no consistent deal.
+    pub fn exact_sets(&self) -> ExactSets {
+        let mut sets = ExactSets::default();
+        if self.total == 0 {
+            return sets;
+        }
+        for (x, seat) in self.holder_counts().iter().enumerate() {
+            for (c, &n) in seat.iter().enumerate() {
+                if n == self.total {
+                    sets.certain[x] |= CardSet::single(c as u8);
+                } else if n > 0 {
+                    sets.possible[x] |= CardSet::single(c as u8);
+                }
+            }
+        }
+        sets
     }
 
     /// `[seat][card]`: the exact probability that `seat` holds `card` under the uniform
