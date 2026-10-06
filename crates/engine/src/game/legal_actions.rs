@@ -127,6 +127,40 @@ fn sorted_desc(mut x: [u8; 4]) -> [u8; 4] {
     x
 }
 
+/// Whether `action` (not an undo request) is in this phase's legal actions. Cards, passes,
+/// bids and starts are checked directly; the rest against the phase's short list.
+pub(crate) fn is_legal_in_phase(game: &Game, action: &GameAction) -> bool {
+    let state = &game.state;
+    let at_turn = action.player == state.player_at_turn;
+    let bid_ok = |v: i32| {
+        let lowest = state.value.0 + 5;
+        at_turn && v >= lowest && v <= 420 && (v - lowest) % 5 == 0
+    };
+    match (&state.phase, &action.action_type) {
+        (GamePhase::Raising | GamePhase::StartTrick | GamePhase::Trick, ActionType::CardPlayed(card)) => {
+            at_turn && allowed_cards(game).contains(bits::index(card))
+        }
+        (_, ActionType::CardPlayed(_)) => false,
+        (GamePhase::PassingForth | GamePhase::PassingBack, ActionType::Pass(cards)) => {
+            at_turn && is_legal_pass(game, cards)
+        }
+        (_, ActionType::Pass(_)) => false,
+        (GamePhase::Bidding | GamePhase::Raising, ActionType::NewBid(v)) => bid_ok(*v),
+        (_, ActionType::NewBid(_)) => false,
+        (GamePhase::Bidding, ActionType::StopBidding) => at_turn,
+        (_, ActionType::StopBidding) => false,
+        (GamePhase::WaitingForStart, ActionType::Start) => {
+            action.player.0 < 4 && !state.players_started.contains(&action.player)
+        }
+        (_, ActionType::Start) => false,
+        (phase, _) => {
+            let mut list = Vec::with_capacity(16);
+            phase.push_legal_actions(game, &mut list);
+            list.contains(action)
+        }
+    }
+}
+
 /// Whether `cards` is a pass the player at turn may make: four cards of their hand from high
 /// to low, i.e. exactly the members of `legal_passing`.
 pub(crate) fn is_legal_pass(game: &Game, cards: &[Card]) -> bool {
@@ -146,9 +180,9 @@ pub fn legal_cards(game: &Game) -> Vec<GameAction> {
     out
 }
 
-fn push_cards(game: &Game, out: &mut Vec<GameAction>) {
+/// The cards the player at turn may play, as a set (rule owner: `bits::play_levels`).
+fn allowed_cards(game: &Game) -> CardSet {
     let state = &game.state;
-    let player = state.player_at_turn;
     let cards = &state.player_at_turn().cards;
     let trick = if state.current_trick.len() == 4 {
         &[][..]
@@ -160,8 +194,13 @@ fn push_cards(game: &Game, out: &mut Vec<GameAction>) {
         *slot = bits::index(c);
     }
     let hand = CardSet::from_cards(cards);
-    let first_trick = is_first_trick(cards.len());
-    let allowed = bits::play_levels(&idx[..trick.len()], state.trump, first_trick).allowed(hand);
+    bits::play_levels(&idx[..trick.len()], state.trump, is_first_trick(cards.len())).allowed(hand)
+}
+
+fn push_cards(game: &Game, out: &mut Vec<GameAction>) {
+    let player = game.state.player_at_turn;
+    let cards = &game.state.player_at_turn().cards;
+    let allowed = allowed_cards(game);
     for &card in cards {
         if allowed.contains(bits::index(&card)) {
             out.push(GameAction {

@@ -55,6 +55,7 @@ pub struct GameInfoPlayer {
 
 impl GameInfoPlayer {
     pub fn from_game(game: Game, place: PlaceAtTable) -> Self {
+        let legal_actions = game.legal_actions();
         GameInfoPlayer {
             meta_info: game.info.clone(),
             players_pressed_start: game.state.players_started(),
@@ -80,7 +81,7 @@ impl GameInfoPlayer {
                     }
                 }
             },
-            legal_actions: game.legal_actions.clone(),
+            legal_actions,
         }
     }
 }

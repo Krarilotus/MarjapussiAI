@@ -27,7 +27,7 @@ fn new_game(rng: &mut StdRng) -> Game {
 }
 
 fn pick_action(game: &Game, rng: &mut StdRng) -> GameAction {
-    let legal = &game.legal_actions;
+    let legal = &game.legal_actions();
     let (undo, normal): (Vec<&GameAction>, Vec<&GameAction>) = legal
         .iter()
         .partition(|a| matches!(a.action_type, ActionType::UndoRequest));

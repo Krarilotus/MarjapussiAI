@@ -29,7 +29,7 @@ fn recorded_states(games: u64) -> Vec<Knowledge> {
         let mut game = Game::new("speed".into(), ["S0", "S1", "S2", "S3"].map(String::from), Some(hands));
         while !game.ended() {
             let legal: Vec<_> = game
-                .legal_actions
+                .legal_actions()
                 .iter()
                 .filter(|a| !matches!(a.action_type, ActionType::UndoRequest))
                 .cloned()

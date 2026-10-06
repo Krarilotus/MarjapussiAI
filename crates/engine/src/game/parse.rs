@@ -178,7 +178,7 @@ pub fn parse_legacy_format(game_data: LegacyGameFormat) -> Result<GameFinishedIn
     let mut game_replay = Game::new(game_data.name, names, Some(cards));
 
     for _ in 0..4 {
-        game_replay.apply_action_mut(game_replay.legal_actions[0]);
+        game_replay.apply_action_mut(game_replay.legal_actions()[0]);
     }
 
     let mut pass_collect = vec![];

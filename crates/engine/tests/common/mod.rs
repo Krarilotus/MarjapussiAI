@@ -49,7 +49,7 @@ pub fn new_game(rng: &mut StdRng) -> Game {
 
 /// A random legal action; undo requests with probability 5 % when other actions exist.
 pub fn pick_action(game: &Game, rng: &mut StdRng) -> GameAction {
-    let legal = &game.legal_actions;
+    let legal = &game.legal_actions();
     let normal: Vec<&GameAction> = legal
         .iter()
         .filter(|a| !matches!(a.action_type, ActionType::UndoRequest))
@@ -93,7 +93,7 @@ pub fn state_line(game: &Game) -> String {
     write!(
         out,
         " | legal {:?} | undo {:?}",
-        game.legal_actions,
+        game.legal_actions(),
         game.last_state.as_ref().map(|l| (l.phase.clone(), l.player_at_turn))
     )
     .unwrap();
