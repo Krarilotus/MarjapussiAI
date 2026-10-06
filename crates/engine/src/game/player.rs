@@ -11,6 +11,9 @@ use crate::inline::{Filler, InlineVec};
 /// Cards dealt to each player.
 pub const HAND_SIZE: usize = 9;
 
+/// Tricks in a game: every card of a hand is played in one trick.
+pub const TRICKS: u8 = HAND_SIZE as u8;
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct PlaceAtTable(pub u8);
 

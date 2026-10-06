@@ -261,3 +261,23 @@ Speed after E5: unchanged within noise (A/B vs main: ×1.86 per action incl. the
 | solver-side move codes (`ANNOUNCE = 36`) and `Table` | `Move::code()`, `Move::from_code()`, `Move::ANNOUNCE`, `Move::CODES`; `PublicState` replaces `solver::Table` |
 
 `fast` after E6 (2 runs): 20–27 ns per move, 14–17 ns per play in a full tree walk; unchanged.
+
+## E8: one owner for the public rule transitions (fix/engine-e8)
+Pure functions at the crate root (`game/rules.rs`, `bits`, `game/bidding.rs`), used by `Game` and
+`FastState`; knowledge and the agents delete their copies against them:
+`PlayerTrumpPossibilities::{may_announce, may_ask_pair, after_question, after_no_pair}`,
+`trick_points(trick, tricks_done)`, `trump_points(suit, already_called)`,
+`winning_seat(leader, trick, trump)`, `is_bid(value, bid)`; `TRICKS` now lives next to `HAND_SIZE`.
+
+A/B against `main` 5da451f in one process (CPU ~28 % busy; 9 interleaved rounds, two runs):
+
+| Metric | main | E8 | main / E8 |
+|---|---:|---:|---:|
+| fast: ns per card, random playouts | 22.5–23.0 | 22.3–22.4 | ×1.01–1.03 |
+| fast: ns per play, 4-trick tree walk | 14.5–14.6 | 14.0–14.2 | ×1.02–1.04 |
+| Game: ns per bid legality check | 46.3–46.4 | 4.3 | ×10.7 |
+| Game: ns per action, replaying random games | 259–268 | 256–260 | ×1.00–1.05 |
+
+Log: a first `trick_points(CardSet, …)` (masked popcounts) made the tree walk 10 % slower
+(14.0 → 15.6 ns per play, two runs); taking the trick's four indices with table lookups
+removed it (kept). `is_bid` is pinned to `bid_range` by an exhaustive test (tests/rules.rs).

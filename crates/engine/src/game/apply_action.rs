@@ -13,8 +13,9 @@ use crate::game::clock::current_time_string;
 use crate::game::gameevent::{ActionType, AnswerType, GameAction, GameCallback, QuestionType};
 use crate::game::gamestate::{FinishedTrick, GamePhase, GameState};
 use crate::game::meta::GameMetaInfo;
-use crate::game::player::{PlaceAtTable, PlayerTrumpPossibilities};
-use crate::game::points::{Points, CARD_POINTS, LAST_TRICK_BONUS};
+use crate::game::player::PlaceAtTable;
+use crate::game::points::Points;
+use crate::game::rules::trick_points;
 
 /// What one action may change.
 pub(crate) struct Mutable<'a> {
@@ -152,17 +153,10 @@ fn new_trump(state: &mut GameState, suit: Suit) -> GameCallback {
 fn question(t: Mutable, player: PlaceAtTable, q: QuestionType) -> Option<GameCallback> {
     let state = t.state;
     let asker = state.player_at_place_mut(player);
+    asker.trump = asker.trump.after_question(q);
     state.phase = match q {
-        QuestionType::Yours => {
-            if asker.trump == PlayerTrumpPossibilities::Own {
-                asker.trump = PlayerTrumpPossibilities::Yours;
-            }
-            GamePhase::AnsweringPair
-        }
-        QuestionType::YourHalf(suit) => {
-            asker.trump = PlayerTrumpPossibilities::Ours;
-            GamePhase::AnsweringHalf(suit)
-        }
+        QuestionType::Yours => GamePhase::AnsweringPair,
+        QuestionType::YourHalf(suit) => GamePhase::AnsweringHalf(suit),
     };
     state.player_at_turn = state.player_at_turn.partner();
     *t.last_state = None;
@@ -174,7 +168,8 @@ fn answer(t: Mutable, a: AnswerType) -> Option<GameCallback> {
     *t.last_state = None;
     let callback = match a {
         AnswerType::NoPair => {
-            state.partner_mut().trump = PlayerTrumpPossibilities::Ours;
+            let asker = state.partner_mut();
+            asker.trump = asker.trump.after_no_pair();
             None
         }
         AnswerType::YesPair(suit) => Some(new_trump(state, suit)),
@@ -239,7 +234,7 @@ fn snapshot(last_state: &mut Option<GameState>, state: &GameState) {
 }
 
 /// Puts `card` into the current trick and, when the trick is full, scores it and gives the
-/// turn to its winner (rule owner: `bits::trick_winner`).
+/// turn to its winner (rule owners: `bits::winning_seat`, `rules::trick_points`).
 pub(crate) fn act_card(card: Card, state: &mut GameState) {
     if state.current_trick.len() >= 4 {
         state.current_trick.clear();
@@ -255,17 +250,11 @@ pub(crate) fn act_card(card: Card, state: &mut GameState) {
             state.current_trick[3],
         ];
         let idx = cards.map(|c| c.index());
-        // After four plays the turn is back at the leader; the winner sits `winner` seats on.
+        // After four plays the turn is back at the leader.
         let leader = state.player_at_turn;
-        let winner = bits::trick_winner(&idx, state.trump);
-        for _ in 0..winner {
-            state.player_at_turn = state.player_at_turn.next();
-        }
+        state.player_at_turn = PlaceAtTable(bits::winning_seat(leader.0, &idx, state.trump));
         state.phase = GamePhase::StartTrick;
-        let mut points: i32 = idx.iter().map(|&i| CARD_POINTS[i as usize] as i32).sum();
-        if state.all_tricks.len() == 8 {
-            points += LAST_TRICK_BONUS;
-        }
+        let points = trick_points(idx, state.all_tricks.len() as u8);
         state.all_tricks.push(FinishedTrick {
             cards,
             leader,

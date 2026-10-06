@@ -3,11 +3,11 @@
 //! snapshot only; the card-play rule comes from `bits::play_levels`.
 
 use crate::bits::{self, CardSet};
-use crate::game::bidding::bid_range;
+use crate::game::bidding::{bid_range, is_bid};
 use crate::game::cards::{Card, Suit, SUITS};
 use crate::game::gameevent::{ActionType, AnswerType, GameAction, QuestionType};
 use crate::game::gamestate::{GamePhase, GameState};
-use crate::game::player::{PlayerTrumpPossibilities, HAND_SIZE};
+use crate::game::player::HAND_SIZE;
 
 /// Appends the legal actions of the state's phase to `out` (without undo requests).
 /// `last` is the undo snapshot (needed while an undo is pending).
@@ -65,7 +65,7 @@ pub(crate) fn push_legal_actions(state: &GameState, last: Option<&GameState>, ou
 /// (tests/legality.rs checks the equivalence).
 pub(crate) fn is_legal_in_phase(state: &GameState, last: Option<&GameState>, action: &GameAction) -> bool {
     let at_turn = action.player == state.player_at_turn;
-    let bid_ok = |v: i32| at_turn && bid_range(state.value).any(|b| b == v);
+    let bid_ok = |v: i32| at_turn && is_bid(state.value, v);
     match (&state.phase, &action.action_type) {
         (GamePhase::Raising | GamePhase::StartTrick | GamePhase::Trick, ActionType::CardPlayed(card)) => {
             at_turn && allowed_cards(state).contains(card.index())
@@ -195,14 +195,14 @@ fn push_question(state: &GameState, actions: &mut Vec<GameAction>) {
         action_type,
         player: player.place_at_table,
     };
-    if player.trump == PlayerTrumpPossibilities::Own {
+    if player.trump.may_announce() {
         for suit in pair_suits(CardSet::from_cards(&player.cards)) {
             if !state.trump_called.contains(&suit) {
                 actions.push(action(ActionType::AnnounceTrump(suit)));
             }
         }
     }
-    if player.trump != PlayerTrumpPossibilities::Ours {
+    if player.trump.may_ask_pair() {
         actions.push(action(ActionType::Question(QuestionType::Yours)));
     }
     for suit in [Suit::Red, Suit::Bells, Suit::Acorns, Suit::Green] {
