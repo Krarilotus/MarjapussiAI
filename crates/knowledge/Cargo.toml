@@ -1,0 +1,16 @@
+[package]
+name = "marjapussi-knowledge"
+version = "0.1.0"
+description = "Sound per-seat deduction of hidden cards from a seat's observation."
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+engine = { package = "marjapussi-engine", path = "../engine" }
+observation = { package = "marjapussi-observation", path = "../observation" }
+
+[dev-dependencies]
+rand = "0.9.0"
+
+[lib]
+name = "knowledge"
