@@ -120,7 +120,7 @@ fn parse_pass(actions: Vec<String>) -> GameAction {
     cards.sort();
     cards.reverse();
     GameAction {
-        action_type: ActionType::Pass(cards),
+        action_type: ActionType::Pass(cards.try_into().expect("four passed cards")),
         player: PlaceAtTable(*player_seat),
     }
 }
@@ -178,7 +178,7 @@ pub fn parse_legacy_format(game_data: LegacyGameFormat) -> Result<GameFinishedIn
     let mut game_replay = Game::new(game_data.name, names, Some(cards));
 
     for _ in 0..4 {
-        game_replay.apply_action_mut(game_replay.legal_actions[0].clone());
+        game_replay.apply_action_mut(game_replay.legal_actions[0]);
     }
 
     let mut pass_collect = vec![];

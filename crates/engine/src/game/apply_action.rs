@@ -52,7 +52,7 @@ impl Game {
             }
             ActionType::NewBid(value) => {
                 snapshot(&mut self.last_state, state);
-                state.bidding_history.push((action.action_type.clone(), action.player));
+                state.bidding_history.push((action.action_type, action.player));
                 state.value = Points(value);
                 if state.phase == GamePhase::Raising {
                     state.phase = GamePhase::Trick;
@@ -73,7 +73,7 @@ impl Game {
             }
             ActionType::StopBidding => {
                 snapshot(&mut self.last_state, state);
-                state.bidding_history.push((action.action_type.clone(), action.player));
+                state.bidding_history.push((action.action_type, action.player));
                 state.player_at_turn_mut().bidding = false;
                 state.bidding_players -= 1;
                 let mut next_player = state.player_at_turn.next();
@@ -98,7 +98,7 @@ impl Game {
                     state.phase = GamePhase::Trick;
                 }
             }
-            ActionType::Pass(ref cards) => {
+            ActionType::Pass(cards) => {
                 state
                     .player_at_place_mut(action.player)
                     .cards
@@ -106,7 +106,7 @@ impl Game {
                 state
                     .player_at_place_mut(action.player.partner())
                     .cards
-                    .extend_from_slice(cards);
+                    .extend_from_slice(&cards);
                 if state.phase == GamePhase::PassingBack {
                     state.phase = GamePhase::Raising;
                 } else {

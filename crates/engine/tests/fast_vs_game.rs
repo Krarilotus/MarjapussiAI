@@ -28,14 +28,14 @@ fn pick(game: &Game, rng: &mut StdRng) -> GameAction {
     let of = |f: fn(&ActionType) -> bool| legal.iter().filter(|a| f(&a.action_type)).collect::<Vec<_>>();
     let announce = of(|t| matches!(t, ActionType::AnnounceTrump(_)));
     if !announce.is_empty() && rng.random_bool(0.9) {
-        return announce[rng.random_range(0..announce.len())].clone();
+        return *announce[rng.random_range(0..announce.len())];
     }
     let undo = of(|t| matches!(t, ActionType::UndoRequest));
     if !undo.is_empty() && rng.random_bool(0.04) {
-        return undo[0].clone();
+        return *undo[0];
     }
     let normal = of(|t| !matches!(t, ActionType::UndoRequest));
-    normal[rng.random_range(0..normal.len())].clone()
+    *normal[rng.random_range(0..normal.len())]
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn fast_matches_game_at_every_card_play_state() {
             }
             let action = pick(&game, &mut rng);
             let tricks_before = game.state.all_tricks.len();
-            game.apply_action_mut(action.clone());
+            game.apply_action_mut(action);
             match (fast::from_action(&action.action_type), stepped.as_mut()) {
                 (Some(m), Some(s)) => {
                     s.apply(m);

@@ -30,7 +30,7 @@ fn passed_cards_are_visible_to_giver_and_receiver_only() {
         let mut filters: Vec<SeatFilter> = (0..4).map(SeatFilter::new).collect();
         while !game.ended() {
             let legal = game.legal_actions.clone();
-            game.apply_action_mut(legal[rng.random_range(0..legal.len())].clone());
+            game.apply_action_mut(legal[rng.random_range(0..legal.len())]);
             let event = game.all_events.last().unwrap();
             for seat in 0..4u8 {
                 let seen = filters[seat as usize].filter(event);

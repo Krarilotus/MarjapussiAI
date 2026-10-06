@@ -131,7 +131,7 @@ impl Game {
             time: current_time_string(),
         });
         let mut legal = std::mem::take(&mut self.legal_actions);
-        legal_actions::recycle(&mut legal);
+        legal.clear();
         self.push_legal_actions(&mut legal);
         self.legal_actions = legal;
     }
@@ -220,13 +220,13 @@ mod tests {
         assert!(res.is_err());
         for _ in 0..4 {
             actions = game.legal_actions.clone();
-            let res = game.apply_action(actions[3].clone());
+            let res = game.apply_action(actions[3]);
             game = res.ok().unwrap();
         }
         for _ in 0..3 {
             actions = game.legal_actions.clone();
             assert_eq!(game.state.phase, GamePhase::Bidding);
-            let res = game.apply_action(actions[0].clone());
+            let res = game.apply_action(actions[0]);
             game = res.ok().unwrap();
         }
         assert_eq!(game.state.value, Points(200));
@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(game.state.player_at_turn().cards.len(), 9);
         assert_eq!(game.legal_actions.len(), 127); //nCr(9,4) + 1
         actions = game.legal_actions.clone();
-        let res = game.apply_action(actions[2].clone());
+        let res = game.apply_action(actions[2]);
         game = res.ok().unwrap();
         assert_eq!(game.state.player_at_turn().cards.len(), 13);
         assert_eq!(
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(game.state.player_at_turn().name, String::from("S1"));
         assert_eq!(game.state.phase, GamePhase::PassingBack);
         actions.clone_from(&game.legal_actions);
-        let res = game.apply_action(actions[9].clone());
+        let res = game.apply_action(actions[9]);
         game = res.ok().unwrap();
         assert_eq!(game.state.player_at_turn().cards.len(), 9);
         assert_eq!(
@@ -263,11 +263,11 @@ mod tests {
         );
         assert_eq!(game.state.phase, GamePhase::Raising);
         actions.clone_from(&game.legal_actions);
-        let res = game.apply_action(actions[2].clone());
+        let res = game.apply_action(actions[2]);
         game = res.ok().unwrap();
         assert_eq!(game.state.phase, GamePhase::Trick);
         actions.clone_from(&game.legal_actions);
-        let _res = game.apply_action(actions[0].clone());
+        let _res = game.apply_action(actions[0]);
     }
 
     #[test]
@@ -403,8 +403,8 @@ mod tests {
             if opt_select.is_none() {
                 panic!("Game: {:#?}\n Action: {:?}", game, opt_select);
             }
-            let select = opt_select.unwrap().clone();
-            let res = game.apply_action(select.clone()).ok();
+            let select = *opt_select.unwrap();
+            let res = game.apply_action(select).ok();
             if let Some(successful) = res {
                 game = successful;
             } else {

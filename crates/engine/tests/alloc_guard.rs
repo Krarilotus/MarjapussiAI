@@ -2,7 +2,7 @@
 //! by a global allocator, per thread.
 //! - `fast`: no allocation at all in card play.
 //! - `Game` card play: the undo snapshot and the legal-action list reuse their buffers.
-//! - `Game` passing: pass lists reuse their `Vec<Card>` buffers from the second game on.
+//! - `Game` passing: a pass is a `[Card; 4]`, so the 126 + 715 pass actions allocate nothing.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -64,13 +64,12 @@ fn play(seed: usize) -> ((u64, u64), (u64, u64)) {
     );
     let (mut card, mut pass) = ((0, 0), (0, 0));
     while !game.ended() {
-        let action = game
+        let action = *game
             .legal_actions
             .iter()
             .find(|a| a.action_type != ActionType::UndoRequest && a.action_type != ActionType::StopBidding)
             .or_else(|| game.legal_actions.first())
-            .unwrap()
-            .clone();
+            .unwrap();
         let card_play = matches!(action.action_type, ActionType::CardPlayed(_));
         let passing = matches!(action.action_type, ActionType::Pass(_));
         let before = allocs();
@@ -98,7 +97,7 @@ fn speed_wins_hold_in_allocations() {
     }
     assert_eq!(allocs() - before, 0, "fast card play allocated");
 
-    play(2); // warms the pass pool
+    play(2); // warms buffers that are reused across games
     let ((card_allocs, cards), (pass_allocs, passes)) = play(3);
     eprintln!("Game: {card_allocs} allocations in {cards} card plays, {pass_allocs} in {passes} passes");
     assert!(cards == 36 && passes == 2);
@@ -109,6 +108,7 @@ fn speed_wins_hold_in_allocations() {
         card_allocs <= 5 * cards,
         "card play allocates again: {card_allocs} in {cards}"
     );
-    // The 126 + 715 passes come from the pool. Measured: 5 here, 2,224 on main.
+    // Passes are `[Card; 4]` (no allocation each). Measured: 5 for both passes; 2,224 on main
+    // 68c98f0.
     assert!(pass_allocs <= 20, "pass lists allocate again: {pass_allocs}");
 }

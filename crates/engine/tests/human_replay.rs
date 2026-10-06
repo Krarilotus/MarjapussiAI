@@ -91,8 +91,8 @@ fn answer(val: &str) -> Option<ActionType> {
 fn same(a: &GameAction, b: &GameAction) -> bool {
     match (&a.action_type, &b.action_type) {
         (ActionType::Pass(x), ActionType::Pass(y)) => {
-            let mut x = x.clone();
-            let mut y = y.clone();
+            let mut x = *x;
+            let mut y = *y;
             x.sort();
             y.sort();
             x == y
@@ -136,7 +136,7 @@ fn replay(rec: &Value) -> Result<Game, String> {
         Some(hands(rec)?),
     );
     for _ in 0..4 {
-        let start = game.legal_actions[0].clone();
+        let start = game.legal_actions[0];
         game.apply_action_mut(start);
     }
     let mut pass_group: Vec<Card> = vec![];
@@ -156,7 +156,7 @@ fn replay(rec: &Value) -> Result<Game, String> {
                 let mut cards = std::mem::take(&mut pass_group);
                 cards.sort();
                 cards.reverse();
-                ActionType::Pass(cards)
+                ActionType::Pass(cards.try_into().unwrap())
             }
             "PROV" => match val.parse::<i32>().map_err(|_| "bid")? {
                 0 => ActionType::StopBidding,

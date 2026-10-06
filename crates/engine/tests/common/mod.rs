@@ -55,9 +55,9 @@ pub fn pick_action(game: &Game, rng: &mut StdRng) -> GameAction {
         .filter(|a| !matches!(a.action_type, ActionType::UndoRequest))
         .collect();
     if normal.is_empty() || (normal.len() < legal.len() && rng.random_bool(0.05)) {
-        return legal[rng.random_range(0..legal.len())].clone();
+        return legal[rng.random_range(0..legal.len())];
     }
-    normal[rng.random_range(0..normal.len())].clone()
+    *normal[rng.random_range(0..normal.len())]
 }
 
 /// Everything observable in the game state, legal actions included, without times.

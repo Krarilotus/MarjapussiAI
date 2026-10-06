@@ -27,13 +27,13 @@ fn new_game(rng: &mut StdRng) -> Game {
 
 fn pick_action(game: &Game, rng: &mut StdRng) -> GameAction {
     let legal = &game.legal_actions;
-    let (undo, normal): (Vec<_>, Vec<_>) = legal
+    let (undo, normal): (Vec<&GameAction>, Vec<&GameAction>) = legal
         .iter()
         .partition(|a| matches!(a.action_type, ActionType::UndoRequest));
     if normal.is_empty() || (!undo.is_empty() && rng.random_bool(0.05)) {
-        return legal[rng.random_range(0..legal.len())].clone();
+        return legal[rng.random_range(0..legal.len())];
     }
-    normal[rng.random_range(0..normal.len())].clone()
+    *normal[rng.random_range(0..normal.len())]
 }
 
 /// Plays one random game and calls `visit(tracker, true hands)` for every seat after every event.
