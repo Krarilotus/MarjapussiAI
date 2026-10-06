@@ -59,16 +59,16 @@ fn card_playout(mut s: FastState, rng: &mut Rng) -> u8 {
     s.tricks_done()
 }
 
-/// Leaves of the card-play tree to `depth` plies (copy-make, as a solver would).
+/// Plays (nodes) in the card-play tree to `depth` plies, copy-make as a solver would.
 fn perft(s: &FastState, depth: u32) -> u64 {
     if depth == 0 || s.is_over() {
-        return 1;
+        return 0;
     }
     let mut n = 0;
     for c in s.legal_cards().iter() {
         let mut next = *s;
         next.play(c);
-        n += perft(&next, depth - 1);
+        n += 1 + perft(&next, depth - 1);
     }
     n
 }
@@ -158,7 +158,7 @@ fn main() {
             nodes = ends.iter().map(|s| perft(s, 4 * left as u32)).sum::<u64>();
         });
         println!(
-            "| fast | perft over {left} tricks left ({} positions, {nodes} leaves): ns per leaf | {:.1} |",
+            "| fast | full tree over {left} tricks left ({} positions, {nodes} plays): ns per play | {:.1} |",
             ends.len(),
             ns / nodes as f64
         );
