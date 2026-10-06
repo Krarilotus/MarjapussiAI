@@ -126,3 +126,19 @@ pub fn finished_line(f: &GameFinishedInfo) -> String {
     }
     out
 }
+
+/// `GameFinishedInfo::scores` as reviewed on feat/heuristic-a (264fa3d), verbatim logic.
+pub fn scores_264fa3d(info: &GameFinishedInfo) -> [i32; 2] {
+    let rounded = |points: i32| (points + 2) / 5 * 5;
+    let Some(playing) = &info.playing_party else {
+        return info.team_points.map(rounded);
+    };
+    let (s, n) = (playing.0 as usize % 2, 1 - playing.0 as usize % 2);
+    let won = info.won.unwrap_or(false);
+    let value = info.game_value.0;
+    let n_tricks = info.tricks.iter().filter(|t| t.winner.0 as usize % 2 == n).count();
+    let mut scores = [0; 2];
+    scores[s] = if won { value } else { -value };
+    scores[n] = if n_tricks == 0 && won { -2 * value } else { rounded(info.team_points[n]) };
+    scores
+}
