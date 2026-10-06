@@ -64,9 +64,7 @@ pub fn points_set(set: CardSet) -> i32 {
 }
 
 pub fn points_trick(trick: Vec<Card>) -> Points {
-    trick
-        .into_iter()
-        .fold(Points(0), |acc, c| acc + points_card(c))
+    trick.into_iter().fold(Points(0), |acc, c| acc + points_card(c))
 }
 
 pub fn points_players(tricks: Vec<(Vec<Card>, PlaceAtTable)>) -> [Points; 4] {

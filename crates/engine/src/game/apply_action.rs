@@ -14,12 +14,7 @@ impl ActionType {
         self,
         action: &GameAction,
         game: &Game,
-    ) -> (
-        GameMetaInfo,
-        GameState,
-        Option<GameCallback>,
-        Option<GameState>,
-    ) {
+    ) -> (GameMetaInfo, GameState, Option<GameCallback>, Option<GameState>) {
         let action = GameAction {
             action_type: self,
             player: action.player,
@@ -57,9 +52,7 @@ impl Game {
             }
             ActionType::NewBid(value) => {
                 snapshot(&mut self.last_state, state);
-                state
-                    .bidding_history
-                    .push((action.action_type.clone(), action.player));
+                state.bidding_history.push((action.action_type.clone(), action.player));
                 state.value = Points(value);
                 if state.phase == GamePhase::Raising {
                     state.phase = GamePhase::Trick;
@@ -80,9 +73,7 @@ impl Game {
             }
             ActionType::StopBidding => {
                 snapshot(&mut self.last_state, state);
-                state
-                    .bidding_history
-                    .push((action.action_type.clone(), action.player));
+                state.bidding_history.push((action.action_type.clone(), action.player));
                 state.player_at_turn_mut().bidding = false;
                 state.bidding_players -= 1;
                 let mut next_player = state.player_at_turn.next();

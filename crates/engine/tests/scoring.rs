@@ -27,7 +27,10 @@ fn score(o: GameOutcome) -> [i32; 2] {
 
 #[test]
 fn rounding_to_five() {
-    assert_eq!([0, 2, 3, 137, 138, 140, 142, 143].map(round5), [0, 0, 5, 135, 140, 140, 140, 145]);
+    assert_eq!(
+        [0, 2, 3, 137, 138, 140, 142, 143].map(round5),
+        [0, 0, 5, 135, 140, 140, 140, 145]
+    );
 }
 
 #[test]
@@ -99,10 +102,19 @@ fn tournament_round_difference_and_bonus() {
 
 #[test]
 fn bonus_when_both_cross_in_the_same_game() {
-    assert_eq!(tally(SeriesLength::Games(2), &[[400, 450], [150, 60]]).bonus_team(), Some(0));
-    assert_eq!(tally(SeriesLength::Games(2), &[[400, 450], [140, 140]]).bonus_team(), Some(1));
+    assert_eq!(
+        tally(SeriesLength::Games(2), &[[400, 450], [150, 60]]).bonus_team(),
+        Some(0)
+    );
+    assert_eq!(
+        tally(SeriesLength::Games(2), &[[400, 450], [140, 140]]).bonus_team(),
+        Some(1)
+    );
     // Tie: the site's table gives the bonus to team 1.
-    assert_eq!(tally(SeriesLength::Games(2), &[[400, 400], [100, 100]]).bonus_team(), Some(1));
+    assert_eq!(
+        tally(SeriesLength::Games(2), &[[400, 400], [100, 100]]).bonus_team(),
+        Some(1)
+    );
 }
 
 #[test]

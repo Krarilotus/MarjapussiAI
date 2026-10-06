@@ -76,7 +76,7 @@ pub fn high_card(trick: Vec<&Card>, trump: Option<Suit>) -> Option<&Card> {
 }
 
 /// Keeps the cards of `cards` that are in `allowed`, in their original order.
-fn keep<'a>(cards: Vec<&'a Card>, allowed: CardSet) -> Vec<&'a Card> {
+fn keep(cards: Vec<&Card>, allowed: CardSet) -> Vec<&Card> {
     let mut cards = cards;
     cards.retain(|c| allowed.contains(bits::index(c)));
     cards
@@ -107,7 +107,9 @@ pub fn allowed_cards<'a>(
 /// Suits of which `cards` hold the King or the Ober.
 pub fn halves(cards: Vec<Card>) -> Vec<Suit> {
     let hand = CardSet::from_cards(&cards);
-    Suit::iter().filter(|&s| !(hand & CardSet::halves(s)).is_empty()).collect()
+    Suit::iter()
+        .filter(|&s| !(hand & CardSet::halves(s)).is_empty())
+        .collect()
 }
 
 /// Suits of which `cards` hold both the King and the Ober.
@@ -193,12 +195,10 @@ mod tests {
         };
 
         let higher: Vec<Card> = parse_cards(
-            vec![
-                "s-A", "r-6", "r-7", "r-8", "r-9", "r-U", "r-O", "r-K", "r-Z", "r-A",
-            ]
-            .into_iter()
-            .map(|c| c.to_string())
-            .collect(),
+            vec!["s-A", "r-6", "r-7", "r-8", "r-9", "r-U", "r-O", "r-K", "r-Z", "r-A"]
+                .into_iter()
+                .map(|c| c.to_string())
+                .collect(),
         );
         assert_eq!(higher_cards(&ra, None, None), vec![]);
         assert_eq!(higher_cards(&sz, None, None), vec!["s-A".parse().unwrap()]);
@@ -245,31 +245,19 @@ mod tests {
         let mut cards: Vec<&Card> = vec![];
         let trick: Vec<&Card> = vec![];
         //everything empty
-        assert_eq!(
-            allowed_cards(trick, cards.clone(), None, false),
-            vec![] as Vec<&Card>
-        );
+        assert_eq!(allowed_cards(trick, cards.clone(), None, false), vec![] as Vec<&Card>);
         //first trick, ace wasn't played
         let trick = vec![&gu];
         cards.push(&ru);
         cards.push(&g9);
         cards.push(&gz);
         cards.push(&ga);
-        assert_eq!(
-            allowed_cards(trick.clone(), cards.clone(), None, true),
-            vec![&ga]
-        );
+        assert_eq!(allowed_cards(trick.clone(), cards.clone(), None, true), vec![&ga]);
         //same color and higher
-        assert_eq!(
-            allowed_cards(trick, cards.clone(), None, false),
-            vec![&gz, &ga]
-        );
+        assert_eq!(allowed_cards(trick, cards.clone(), None, false), vec![&gz, &ga]);
         //trump
         let trick = vec![&so];
-        assert_eq!(
-            allowed_cards(trick, cards.clone(), Some(Suit::Red), false),
-            vec![&ru]
-        );
+        assert_eq!(allowed_cards(trick, cards.clone(), Some(Suit::Red), false), vec![&ru]);
         //same color but no higher if already trump
         let trick = vec![&go, &ro];
         assert_eq!(

@@ -17,12 +17,7 @@ struct Series {
 }
 
 impl Series {
-    pub fn new(
-        name: String,
-        players_names: [String; 4],
-        num_of_games: u32,
-        settings: Option<SeriesSettings>,
-    ) -> Self {
+    pub fn new(name: String, players_names: [String; 4], num_of_games: u32, settings: Option<SeriesSettings>) -> Self {
         Series {
             name: name.clone(),
             created: current_time_string(),
@@ -38,11 +33,8 @@ impl Series {
         if self.games.len() >= (self.num_of_games as usize) {
             return None;
         } else if self.games.last().unwrap().clone().ended() {
-            self.games.push(Game::new(
-                self.name.clone(),
-                self.players_names.clone(),
-                None,
-            ))
+            self.games
+                .push(Game::new(self.name.clone(), self.players_names.clone(), None))
         }
         self.games
             .last()

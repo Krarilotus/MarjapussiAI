@@ -57,7 +57,7 @@ impl Clone for Player {
             cards: self.cards.clone(),
             last_played: self.last_played,
             tricks: self.tricks.clone(),
-            trump: self.trump.clone(),
+            trump: self.trump,
             bidding: self.bidding,
         }
     }
@@ -71,7 +71,7 @@ impl Clone for Player {
         self.cards.clone_from(&source.cards);
         self.last_played = source.last_played;
         self.tricks.clone_from(&source.tricks);
-        self.trump = source.trump.clone();
+        self.trump = source.trump;
         self.bidding = source.bidding;
     }
 }
@@ -102,7 +102,7 @@ impl Player {
         self.last_played = Some(card);
     }
     pub fn undo_play_card(&mut self) {
-        if let Some(last_card) = self.last_played.clone() {
+        if let Some(last_card) = self.last_played {
             self.cards.push(last_card)
         }
     }
@@ -137,15 +137,7 @@ pub fn create_players(names: [String; 4], cards: Option<[Vec<Card>; 4]>) -> [Pla
         //random shuffled cads
         let mut deck = get_all_cards();
         deck.shuffle(&mut rng());
-        let mut cards: [Vec<Card>; 4] = [vec![], vec![], vec![], vec![]];
-        for i in 0..4 {
-            let mut one_players_cards = vec![];
-            for c in 0..HAND_SIZE {
-                one_players_cards.push(deck.get(i * HAND_SIZE + c).unwrap().clone());
-            }
-            cards[i] = one_players_cards;
-        }
-        cards
+        [0, 1, 2, 3].map(|i| deck[i * HAND_SIZE..(i + 1) * HAND_SIZE].to_vec())
     });
 
     let p0 = create_player(names[0].clone(), players_cards[0].clone(), 0);

@@ -127,7 +127,11 @@ fn replay(rec: &Value) -> Result<Game, String> {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    let mut game = Game::new("replay".into(), ["S0", "S1", "S2", "S3"].map(String::from), Some(hands(rec)?));
+    let mut game = Game::new(
+        "replay".into(),
+        ["S0", "S1", "S2", "S3"].map(String::from),
+        Some(hands(rec)?),
+    );
     for _ in 0..4 {
         let start = game.legal_actions[0].clone();
         game.apply_action_mut(start);
@@ -212,7 +216,11 @@ fn replay(rec: &Value) -> Result<Game, String> {
             if let ActionType::CardPlayed(card) = &action.action_type {
                 // E2: the position, without names, for classifying the recorded card.
                 let s = &game.state;
-                let trick = if s.current_trick.len() == 4 { &[][..] } else { &s.current_trick[..] };
+                let trick = if s.current_trick.len() == 4 {
+                    &[][..]
+                } else {
+                    &s.current_trick[..]
+                };
                 eprintln!(
                     "illegal card: game of {} trick {} seat {seat} trump {:?} called {:?} trick so far {trick:?} hand {:?} played {card} engine allows {:?}",
                     rec["created"].as_str().unwrap_or("").get(..7).unwrap_or("?"),
@@ -247,7 +255,9 @@ fn site_scores(rec: &Value) -> Option<[i32; 2]> {
     if value == 115 {
         value = 0;
     }
-    let playing = rec["playing_player"].as_str().and_then(|p| names.iter().position(|n| *n == p));
+    let playing = rec["playing_player"]
+        .as_str()
+        .and_then(|p| names.iter().position(|n| *n == p));
     let schwarz = rec["schwarz_game"].as_bool().unwrap_or(false);
     let round = |p: i32| (p + 2).div_euclid(5) * 5;
     let mut gets = points.map(round);
@@ -299,7 +309,12 @@ fn human_games_replay_like_main() {
                 if let Some(s) = outcome.playing_team {
                     s_schwarz += (outcome.team_tricks[s as usize] == 0) as u32;
                 }
-                let names: Vec<&str> = rec["players"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+                let names: Vec<&str> = rec["players"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect();
                 let recorded = [0, 1].map(|t| {
                     let p = |i: usize| rec["players_points"][names[i]].as_i64().unwrap_or(-1) as i32;
                     p(t) + p(t + 2)
@@ -313,7 +328,10 @@ fn human_games_replay_like_main() {
                         "team points differ from the record (old site version)"
                     } else if !flagged && outcome.team_tricks.contains(&0) {
                         "N schwarz, record without the schwarz flag (old site version)"
-                    } else if outcome.playing_team.is_some_and(|p| outcome.team_tricks[p as usize] == 0) {
+                    } else if outcome
+                        .playing_team
+                        .is_some_and(|p| outcome.team_tricks[p as usize] == 0)
+                    {
                         "playing party schwarz: site -2A, rules text -A"
                     } else {
                         "unexplained"
@@ -336,8 +354,15 @@ fn human_games_replay_like_main() {
          scores equal to the site's table in {site_scores_equal}/{ended}; playing party schwarz in {s_schwarz}; \
          differences by cause {differences:?}"
     );
-    assert!(!differences.contains_key("unexplained"), "a score differs from the site without a known cause");
+    assert!(
+        !differences.contains_key("unexplained"),
+        "a score differs from the site without a known cause"
+    );
     assert_eq!(records, 1_579);
-    assert_eq!(digest.0, EXPECTED, "human replay outcomes changed (digest {:#018x})", digest.0);
+    assert_eq!(
+        digest.0, EXPECTED,
+        "human replay outcomes changed (digest {:#018x})",
+        digest.0
+    );
     assert_eq!(score_totals, SCORE_TOTALS, "human replay scores changed");
 }

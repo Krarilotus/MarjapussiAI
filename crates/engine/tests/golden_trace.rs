@@ -45,6 +45,13 @@ fn random_game_traces_match_main() {
             digest.add(&finished_line(&GameFinishedInfo::from(game)));
         }
     }
-    eprintln!("{GAMES} games, {ended} ended, {steps} actions, digest {:#018x}", digest.0);
-    assert_eq!(digest.0, EXPECTED, "engine behaviour changed (digest {:#018x})", digest.0);
+    eprintln!(
+        "{GAMES} games, {ended} ended, {steps} actions, digest {:#018x}",
+        digest.0
+    );
+    assert_eq!(
+        digest.0, EXPECTED,
+        "engine behaviour changed (digest {:#018x})",
+        digest.0
+    );
 }
