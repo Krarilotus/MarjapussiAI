@@ -4,3 +4,4 @@
 pub mod bits;
 pub mod fast;
 pub mod game;
+pub mod inline;

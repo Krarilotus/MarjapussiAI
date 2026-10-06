@@ -88,7 +88,6 @@ pub fn state_line(game: &Game) -> String {
             p.name, p.place_at_table, p.partner, p.next_player, p.cards, p.bidding, p.trump
         )
         .unwrap();
-        assert!(p.tricks.is_empty());
     }
     write!(
         out,

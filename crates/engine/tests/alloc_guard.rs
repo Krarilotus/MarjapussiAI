@@ -1,7 +1,8 @@
 //! Guard for the measured speed wins (R3), without timing noise: heap allocations counted
 //! by a global allocator, per thread.
 //! - `fast`: no allocation at all in card play.
-//! - `Game` card play: the undo snapshot and the legal-action list reuse their buffers.
+//! - `Game` card play: the state is inline, so the undo snapshot is a copy; legal actions are
+//!   computed on demand.
 //! - `Game` passing: a pass is a `[Card; 4]`, so the 126 + 715 pass actions allocate nothing.
 
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -101,14 +102,10 @@ fn speed_wins_hold_in_allocations() {
     let ((card_allocs, cards), (pass_allocs, passes)) = play(3);
     eprintln!("Game: {card_allocs} allocations in {cards} card plays, {pass_allocs} in {passes} passes");
     assert!(cards == 36 && passes == 2);
-    // Per card: the event's time string and amortized list growth; after a question the undo
-    // snapshot is rebuilt (this policy asks at every trick start). Measured 2026-10-06: 148 on
-    // this branch, 2,696 on main (68c98f0).
-    assert!(
-        card_allocs <= 5 * cards,
-        "card play allocates again: {card_allocs} in {cards}"
-    );
-    // Passes are `[Card; 4]` (no allocation each). Measured: 5 for both passes; 2,224 on main
-    // 68c98f0.
-    assert!(pass_allocs <= 20, "pass lists allocate again: {pass_allocs}");
+    // Inline game state (E4.2d): a card play allocates only when the event list grows, or for
+    // a fresh undo snapshot's bidding history after a question. Measured 2026-10-06 on
+    // feat/engine-v2: 10 in 36 card plays (148 before the inline state, 2,696 on 68c98f0).
+    assert!(card_allocs <= 16, "card play allocates again: {card_allocs} in {cards}");
+    // A pass is a `[Card; 4]`; measured 0 (2,224 on 68c98f0).
+    assert!(pass_allocs <= 2, "passes allocate again: {pass_allocs}");
 }
