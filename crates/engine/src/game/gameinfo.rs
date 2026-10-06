@@ -76,7 +76,7 @@ impl GameInfoPlayer {
                     if let ActionType::Pass(_cards) = event.last_action.action_type {
                         Some(GameEventPlayer::HiddenEvent)
                     } else {
-                        Some(GameEventPlayer::PublicEvent((*event).clone()))
+                        Some(GameEventPlayer::PublicEvent(*event))
                     }
                 }
             },
