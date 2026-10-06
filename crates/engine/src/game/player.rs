@@ -1,16 +1,22 @@
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use rand::rng;
 use rand::seq::SliceRandom;
 use serde::Serialize;
 
 use crate::game::cards::{get_all_cards, Card};
+use crate::inline::{Filler, InlineVec};
 
 /// Cards dealt to each player.
 pub const HAND_SIZE: usize = 9;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct PlaceAtTable(pub u8);
+
+impl Filler for PlaceAtTable {
+    const FILL: PlaceAtTable = PlaceAtTable(0);
+}
 
 impl PlaceAtTable {
     pub fn partner(&self) -> Self {
@@ -35,45 +41,17 @@ impl Debug for PlaceAtTable {
     }
 }
 
+#[derive(Clone)]
 pub struct Player {
-    pub name: String,
+    pub name: Arc<str>,
     pub partner: PlaceAtTable,
     pub next_player: PlaceAtTable,
     pub place_at_table: PlaceAtTable,
-    pub cards: Vec<Card>,
+    /// At most 13 (while passing).
+    pub cards: InlineVec<Card, 13>,
     last_played: Option<Card>,
-    pub tricks: Vec<Vec<Card>>,
     pub trump: PlayerTrumpPossibilities,
     pub bidding: bool,
-}
-
-impl Clone for Player {
-    fn clone(&self) -> Self {
-        Player {
-            name: self.name.clone(),
-            partner: self.partner,
-            next_player: self.next_player,
-            place_at_table: self.place_at_table,
-            cards: self.cards.clone(),
-            last_played: self.last_played,
-            tricks: self.tricks.clone(),
-            trump: self.trump,
-            bidding: self.bidding,
-        }
-    }
-
-    /// Reuses the name and card buffers (see `GameState::clone_from`).
-    fn clone_from(&mut self, source: &Self) {
-        self.name.clone_from(&source.name);
-        self.partner = source.partner;
-        self.next_player = source.next_player;
-        self.place_at_table = source.place_at_table;
-        self.cards.clone_from(&source.cards);
-        self.last_played = source.last_played;
-        self.tricks.clone_from(&source.tricks);
-        self.trump = source.trump;
-        self.bidding = source.bidding;
-    }
 }
 
 impl PartialEq for Player {
@@ -120,24 +98,28 @@ Creates a Single Player without partner or next_player
  */
 fn create_player(name: String, cards: Vec<Card>, place: u8) -> Player {
     Player {
-        name,
+        name: name.into(),
         bidding: true,
         next_player: PlaceAtTable(place).partner(),
         partner: PlaceAtTable(place).partner(),
         place_at_table: PlaceAtTable(place),
-        cards,
+        cards: InlineVec::from(cards.as_slice()),
         last_played: None,
-        tricks: vec![],
         trump: PlayerTrumpPossibilities::Own,
     }
 }
 
+/// The four hands of a dealt deck (36 cards): seat `s` gets cards `9s..9s + 9`.
+pub fn hands_from_deck(deck: &[Card]) -> [Vec<Card>; 4] {
+    assert_eq!(deck.len(), 4 * HAND_SIZE, "a full deck");
+    [0, 1, 2, 3].map(|i| deck[i * HAND_SIZE..(i + 1) * HAND_SIZE].to_vec())
+}
+
 pub fn create_players(names: [String; 4], cards: Option<[Vec<Card>; 4]>) -> [Player; 4] {
     let players_cards = cards.unwrap_or_else(|| {
-        //random shuffled cads
         let mut deck = get_all_cards();
         deck.shuffle(&mut rng());
-        [0, 1, 2, 3].map(|i| deck[i * HAND_SIZE..(i + 1) * HAND_SIZE].to_vec())
+        hands_from_deck(&deck)
     });
 
     let p0 = create_player(names[0].clone(), players_cards[0].clone(), 0);

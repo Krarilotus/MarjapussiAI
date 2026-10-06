@@ -1,4 +1,9 @@
-# Engine performance (feat/engine-fast, 2026-10-06)
+# Engine performance
+
+Two branches, newest last: feat/engine-fast (2026-10-06, merged as 955d19c) and
+feat/engine-v2 (E4, 2026-10-06).
+
+# feat/engine-fast
 
 Owner: Engine Coder. API of the fast core: [fast-core.md](fast-core.md). Evidence level: **measured
 by us** on the owner's PC unless marked otherwise.
@@ -128,3 +133,131 @@ unexplained difference:
 
    Estimate: about 35 µs → about 15 µs per random game and ×3–4 for immutable `apply_action`
    [estimate from the profile above].
+
+## Decided (owner decision D2, 2026-10-06)
+The three questions above were answered:
+- marjapussi.de is the source of truth for scoring (questions 1 and 2);
+- breaking API changes are allowed for speed (question 3).
+
+They are implemented on `feat/engine-v2` (E4) below.
+
+---
+
+# feat/engine-v2 (E4)
+
+## Scoring follows the site (E4.1)
+- **Schwarz:** a party that took no trick scores −2A while the other party scored positive. N is
+  covered when S made its contract; S is covered always (new: declarers played schwarz lose −2A
+  instead of −A). Declarers who simply fail still lose −A.
+- **All-pass games:** announced pairs count in each team's `team_points` (new).
+- **Guards:**
+  - `tests/scoring.rs` checks one case per rule, and `scores()` against a line-by-line port of
+    the site's `SeriesTable.vue` on 3,000 random games;
+  - the human replay checks every one of the 1,577 replayed games against that port.
+- **Against the site's table on each record's own fields:** 1,492 of 1,577 human games agree
+  (was 1,487). The 8 flagged declarer-schwarz games and the all-pass game now agree. The 85
+  remaining differences are old records, and none is unexplained:
+  - 75: a team took no trick, but the record has no schwarz flag (2022 site versions, which
+    scored without it). This includes 4 declarer-schwarz games from 2022.
+  - 10: the record's team points differ (2022-10 site versions; pairs after a question were
+    not counted).
+- **Human replay digest:** recomputed once, `0x9a387d77f3bc8e2d` → `0xcb8cf66a3bd29d91`. Only
+  `team_points` of one all-pass game changed (+40); reverting that one line restores the old
+  digest. Score totals re-pinned: `[34,630, 28,255]`. The golden trace is unchanged: none of
+  its random all-pass games had an announcement.
+
+## Before / after: `Game` against `main` 80eaf23
+Interleaved A/B in one process (scratch harness, method as above), 200–300 random games,
+15–21 rounds, CPU at 97–100 % from other projects. The range covers the final runs of steps d
+and e.
+
+| Metric | main 80eaf23 | feat/engine-v2 | Speed-up |
+|---|---:|---:|---:|
+| ns per action, `apply_action_mut` + reading the legal list (random play) | 513–633 | 236–346 | ×1.5–2.1 |
+| ns per action, replaying known actions (`apply_action_mut` only) | 506–597 | 106–159 | ×3.4–4.8 |
+| ns per action, immutable `apply_action` | 3,257–4,906 | 497–654 | ×6.4–8.2 |
+| ns per full random game | 25,627–36,788 | 13,133–20,100 | ×1.5–2.1 |
+| ns per `legal_actions()`, all phases | 734–822 | 221–308 | ×2.7–3.7 |
+| ns per random card playout, 8 tricks left | 10,692–15,654 | 5,430–8,802 | ×1.7–2.3 |
+| Heap allocations, 36 card plays (`tests/alloc_guard.rs`) | 148 | 10 | ×15 |
+| Heap allocations, the two passes | 5 | 0 | |
+
+Against the original `main` 68c98f0 (before feat/engine-fast), per action is about
+7.2 µs → 0.24–0.35 µs, ×20–30.
+
+`fast` is unchanged by E4 (see the `fast` table above).
+
+## Optimisation log (E4)
+Ratios are A/B against `main` 80eaf23 after each step, interleaved.
+
+| # | Change (breaking unless noted) | Result | Status |
+|---|---|---|---|
+| a | `ActionType::Pass([Card; 4])`; `ActionType` and `GameAction` are `Copy`; pass pool removed | per action ×1.30, `legal_actions()` all phases ×2.38 | kept |
+| b | `GameEvent.time: u64` ms (`game::now_millis`, `game::format_time`); `GameEvent` is `Copy` | immutable `apply_action` ×1.27 → ×2.11 | kept |
+| c | Legal actions on demand (`legal_actions()`, `legal_actions_into`, `is_legal`); the field is gone | per action incl. list ×1.39; replaying known actions ×2.2–2.5 | kept |
+| d | Inline state (`engine::inline::InlineVec`); `Player.name: Arc<str>`; `Game.info: Arc<GameMetaInfo>`; `Player.tricks` removed | immutable ×6.4–7.7; replay ×3.9–4.8; per action ×1.5–1.75; card-play allocations 148 → 10 | kept |
+| e | `Game.clock` / `Clock::Off` (additive; default unchanged) | the wall clock costs 33 ns per event (measured); new engine 236 → 226 ns per action, 121 → 106 ns replaying, 6.7 → 5.4 µs per playout | kept |
+| f | mimalloc as global allocator (simulation binaries only; MIT) | new engine: per action 0–16 %, immutable ~25 %, card playout 15–30 %, replay ~20 % faster (2 runs each); `main` gains more (it allocates more) | recommended for arena/eval binaries; not added on `main` (no simulation binary there) |
+| g | Make `GameState` fully `Copy` (bidding history inline too) | at most ~70 bids inline would add ~800 bytes to every snapshot copy; the `Vec` costs one allocation per fresh snapshot only | not done |
+
+## Guards (all green on feat/engine-v2)
+| Guard | Result |
+|---|---|
+| Golden trace (2,000 random games, both apply paths) | digest `0x3544cf5afa288fc8`, unchanged since 68c98f0 |
+| Human replay | 1,577 of 1,579 to the end, 2 illegal cards (E2); digest recomputed once for E4.1 (see above) |
+| Lockstep diff against `main` 80eaf23 (scratch harness) | 10,000 games, 601,132 actions identical; scores and all-pass `team_points` excluded (E4.1) |
+| `tests/legality.rs` (new) | `is_legal == legal_actions().contains` at every state. 500 games in the suite; one release run of 1,500 games checked 98.4 M candidate actions over 118,395 states, 0 differences |
+| `tests/fast_vs_game.rs` | unchanged, green |
+| `tests/alloc_guard.rs` | tightened: ≤ 16 allocations per 36 card plays (measured 10), ≤ 2 for the passes (measured 0); `fast` 0 |
+| `tests/scoring.rs` | rule cases for D2; `scores()` equals the site port on 3,000 random games |
+| knowledge, observation | all green (tests updated for the API) |
+
+## API changes in feat/engine-v2 (for the heuristic and devtool branches)
+| Before | After | How to adapt |
+|---|---|---|
+| `game.legal_actions` (field) | `game.legal_actions()` → `Vec`; `game.legal_actions_into(&mut buf)`; `game.is_legal(&a)` | call the method; in hot loops, reuse a buffer |
+| `ActionType::Pass(Vec<Card>)` | `ActionType::Pass([Card; 4])` (high to low) | `cards.try_into().unwrap()` after sorting; reading as a slice works as before |
+| `ActionType`, `GameAction`, `GameEvent` `Clone` | now `Copy` | drop `.clone()` (clippy `clone_on_copy`) |
+| `GameEvent.time: String` | `u64` ms since the Unix epoch | `game::format_time(t)` for text |
+| `Game.info: GameMetaInfo` | `Arc<GameMetaInfo>` | reads unchanged; `(*game.info).clone()` for an owned copy |
+| `Player.name: String` | `Arc<str>` | `&*p.name` or `p.name.to_string()` |
+| `Player.cards`, `GameState.current_trick`, `all_tricks`, `trump_called`, `players_started`, `players_accept_undo`: `Vec` | `InlineVec<_, N>` (derefs to a slice) | slice methods work; `.to_vec()` for an owned `Vec`; `CardSet::from_cards(&p.cards)` works |
+| `Player.tricks` | removed (it was always empty) | — |
+| `ActionType::apply_action` (deprecated) | removed | `Game::apply_action(_mut)` |
+| — | `Game.clock`, `Game::with_clock(Clock::Off)` | optional, for simulations |
+| scoring | declarers played schwarz lose −2A; pairs count in all-pass `team_points` | — |
+| `GameInfoPlayer`, `GameFinishedInfo` | unchanged types (`Vec` fields) | — |
+
+## E5: ownership and abstraction debt (same branch)
+| Debt | Change | Evidence |
+|---|---|---|
+| D4 privacy | First redacted (E5.1: no start hands, only the seat's own legal actions, with a hand-swap test that failed on the leak), then **deleted** with `series.rs` in E6 (J18/J19): the engine offers no per-seat view | the type no longer exists |
+| D10, D9 | `cards` is the leaf that owns the card codes (`Suit::code/from_code`, `Value::code/from_code`, `FromStr`), `CARDS`, `SUITS`, `VALUES`, `Card::index/from_index`; the `Vec` rule wrappers and the `Vec` oracle test are removed; knowledge uses `CARDS` instead of a bare 36; `itertools`, `strum`, `strum_macros` removed | digests unchanged |
+| D2 | `apply_action.rs`: one function per action kind over `{state, undo snapshot, meta info}`; legal actions work on the state and snapshot; answers follow from the phase instead of an event-log scan | `kg caps`: no engine function over the cap (was 182 lines); legality guard green |
+| D1 | `game.rs` only declares modules; `Game` in `game/table.rs`, time in `game/clock.rs`, `GameMetaInfo` in `game/meta.rs`; `inline.rs` is a leaf | `kg cycles`: the 12-file engine cycle is gone (one remains inside knowledge, not engine code) |
+| D3 | Façade: `lib.rs` re-exports the public API; `bits`, `fast`, `game`, `inline` are private; consumers import `engine::X` | `kg facade`: 0 deep-import targets (was 8 on main, 24 measured on the heuristic branch) |
+| Derived facts | `GameState::declarer()`, `playing_team()`, `trick_leader()`; `FinishedTrick.leader`, `seat_of_card(i)`, `seats()`; `GameFinishedInfo.declarer`; card codes from `cards` | digests unchanged (declarer from the bidding history equals the old event scan on all guard games); `fast_vs_game` checks leaders and seats at every card-play state |
+
+Speed after E5: unchanged within noise (A/B vs main: ×1.86 per action incl. the legal list, ×5.9 immutable, ×3.4 replay).
+
+### More API changes for the heuristic and devtool branches (E5)
+| Before | After |
+|---|---|
+| `engine::game::…::X`, `engine::bits::X`, `engine::fast::X` | `engine::X` (all public names at the root) |
+| `bits::index(&c)`, `bits::card(i)` | `c.index()`, `Card::from_index(i)` |
+| `fast::to_action(m, seat)`, `fast::from_action(&a)` | `m.to_action(seat)`, `Move::from_action(&a)` |
+| `cards::allowed_cards`, `allowed_first`, `high_card`, `is_higher_card`, `higher_cards`, `halves`, `pairs`, `print_cards`; `parse::parse_card(s)` | `play_levels(..).allowed(hand)`, `trick_winner`, `takes`, `CardSet::halves`; `s.parse::<Card>()` (strict `r-A` format) |
+| `GamePhase::legal_actions`, `legal_actions::{legal_bidding, legal_passing, legal_cards, legal_question, legal_answer}` | `Game::legal_actions()` / `legal_actions_into` / `is_legal` |
+| declarer derived from the event log | `game.state.declarer()`, `GameFinishedInfo.declarer` |
+| seats per trick rebuilt from the action log | `FinishedTrick.leader`, `seat_of_card(i)`, `seats()` |
+| `points_players` | removed (unused) |
+
+### E6 (Judge J18/J19, same branch)
+| Before | After |
+|---|---|
+| `GameInfoPlayer`, `PublicInfo`, `GameEventPlayer`, `game/series.rs` (`Series`) | deleted (series scoring is `SeriesTally`; a per-seat view belongs to the server/observation layer) |
+| `c / 9`, `c % 9`, `deck[27..36]`, bare `36` in consumers | `suit_of(i)`, `value_of(i)`, `Card::index/from_index`, `CARDS`, `hands_from_deck(&deck)` |
+| `FastParts { hands, trick, …, pair_points }` | `FastParts { hands, public: PublicState }`; `FastState::public()`, `FastState::from_public(public, hands)`, `PublicState::to_move()` |
+| solver-side move codes (`ANNOUNCE = 36`) and `Table` | `Move::code()`, `Move::from_code()`, `Move::ANNOUNCE`, `Move::CODES`; `PublicState` replaces `solver::Table` |
+
+`fast` after E6 (2 runs): 20–27 ns per move, 14–17 ns per play in a full tree walk; unchanged.

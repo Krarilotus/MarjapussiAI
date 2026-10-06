@@ -3,10 +3,11 @@
 
 use std::time::Instant;
 
-use engine::bits::CardSet;
-use engine::game::cards::get_all_cards;
-use engine::game::gameevent::ActionType;
-use engine::game::Game;
+use engine::get_all_cards;
+use engine::hands_from_deck;
+use engine::ActionType;
+use engine::CardSet;
+use engine::Game;
 use knowledge::Tracker;
 use observation::{seat_events, start_hand, SeatEvent};
 use rand::rngs::StdRng;
@@ -19,21 +20,16 @@ fn recorded_streams(games: u64) -> Vec<(u8, CardSet, Vec<SeatEvent>)> {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut deck = get_all_cards();
         deck.shuffle(&mut rng);
-        let hands = [
-            deck[0..9].to_vec(),
-            deck[9..18].to_vec(),
-            deck[18..27].to_vec(),
-            deck[27..36].to_vec(),
-        ];
+        let hands = hands_from_deck(&deck);
         let mut game = Game::new("speed".into(), ["S0", "S1", "S2", "S3"].map(String::from), Some(hands));
         while !game.ended() {
             let legal: Vec<_> = game
-                .legal_actions
+                .legal_actions()
                 .iter()
                 .filter(|a| !matches!(a.action_type, ActionType::UndoRequest))
                 .cloned()
                 .collect();
-            game.apply_action_mut(legal[rng.random_range(0..legal.len())].clone());
+            game.apply_action_mut(legal[rng.random_range(0..legal.len())]);
         }
         for seat in 0..4 {
             streams.push((seat, start_hand(&game, seat), seat_events(&game, seat)));

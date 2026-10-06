@@ -1,89 +1,13 @@
 use serde::Serialize;
 
 use crate::game::cards::Card;
-use crate::game::gameevent::{ActionType, GameAction, GameEvent, GameEventPlayer};
+use crate::game::gameevent::{ActionType, GameEvent};
 use crate::game::gamestate::{FinishedTrick, GamePhase};
-use crate::game::player::{PlaceAtTable, Player};
+use crate::game::meta::GameMetaInfo;
+use crate::game::player::PlaceAtTable;
 use crate::game::points::Points;
 use crate::game::scoring::{game_scores, team_points, GameOutcome, SCHWARZ_FACTOR_FIFTHS};
-use crate::game::{current_time_string, Game};
-
-#[derive(Debug, Clone, Serialize)]
-pub struct GameMetaInfo {
-    pub name: String,
-    pub create_time: String,
-    pub start_time: Option<String>,
-    pub end_time: Option<String>,
-    pub player_names: [String; 4],
-    pub player_start_cards: [Vec<Card>; 4],
-}
-
-impl GameMetaInfo {
-    pub fn create(name: String, player_names: [String; 4], players: [Player; 4]) -> Self {
-        GameMetaInfo {
-            name,
-            create_time: current_time_string(),
-            start_time: None,
-            end_time: None,
-            player_names,
-            player_start_cards: [
-                players[0].cards.clone(),
-                players[1].cards.clone(),
-                players[2].cards.clone(),
-                players[3].cards.clone(),
-            ],
-        }
-    }
-}
-
-/// Everything one player in the frontend wants to know
-#[derive(Debug, Clone)]
-pub struct GameInfoPlayer {
-    pub meta_info: GameMetaInfo,
-    pub players_pressed_start: Vec<String>,
-    pub players_from_perspective: [String; 4],
-    pub player_at_turn: String,
-    pub own_cards: Option<Vec<Card>>,
-    pub players_cards_number_perspective: [u8; 4],
-    pub game_phase: GamePhase,
-    pub bidding_history: Vec<(ActionType, PlaceAtTable)>,
-    pub current_trick: Vec<Card>,
-    pub last_trick: Option<FinishedTrick>,
-    pub last_event: Option<GameEventPlayer>,
-    pub legal_actions: Vec<GameAction>,
-}
-
-impl GameInfoPlayer {
-    pub fn from_game(game: Game, place: PlaceAtTable) -> Self {
-        GameInfoPlayer {
-            meta_info: game.info.clone(),
-            players_pressed_start: game.state.players_started(),
-            players_from_perspective: game.state.players_perspective(place),
-            player_at_turn: game.state.player_at_place(game.state.player_at_turn).name.clone(),
-            own_cards: match game.state.started {
-                true => Some(game.state.player_at_place(place).cards.clone()),
-                false => None,
-            },
-            players_cards_number_perspective: game.state.players_perspective_cards(place),
-            game_phase: game.state.phase,
-            bidding_history: game.state.bidding_history,
-            current_trick: game.state.current_trick,
-            last_trick: game.state.all_tricks.clone().last().cloned(),
-            last_event: match game.all_events.last() {
-                None => None,
-                Some(event) => {
-                    //hide last event if cards were passed
-                    if let ActionType::Pass(_cards) = event.last_action.action_type.clone() {
-                        Some(GameEventPlayer::HiddenEvent)
-                    } else {
-                        Some(GameEventPlayer::PublicEvent((*event).clone()))
-                    }
-                }
-            },
-            legal_actions: game.legal_actions.clone(),
-        }
-    }
-}
+use crate::game::table::Game;
 
 /// Everything the database needs to know
 #[derive(Debug, Clone, Serialize)]
@@ -94,7 +18,10 @@ pub struct GameFinishedInfo {
     pub won: Option<bool>,
     pub no_one_played: bool,
     pub schwarz_game: bool,
+    /// The declarer's party as seat 0 or 1 (team).
     pub playing_party: Option<PlaceAtTable>,
+    /// The declarer (`GameState::declarer`).
+    pub declarer: Option<PlaceAtTable>,
     pub after_passing: Option<[Vec<Card>; 4]>,
     pub passed_cards: Option<(Vec<Card>, Vec<Card>)>,
     pub bidding_history: Vec<(ActionType, PlaceAtTable)>,
@@ -119,19 +46,16 @@ impl From<Game> for GameFinishedInfo {
         let mut passed_cards: Option<(Vec<Card>, Vec<Card>)> = None;
         let mut after_passing: Option<[Vec<Card>; 4]> = None;
         if !no_one_played {
-            let mut playing_player = PlaceAtTable(0);
+            let playing_player = game.state.declarer().expect("a bid was made");
+            playing_party = Some(playing_player.party());
             let mut passed_forth: Option<Vec<Card>> = None;
             let mut passed_back: Option<Vec<Card>> = None;
             for event in &game.all_events {
-                if ActionType::NewBid(game.state.value.0) == event.last_action.action_type {
-                    playing_player = event.last_action.player;
-                    playing_party = Some(event.last_action.player.party());
-                }
-                if let ActionType::Pass(cards) = event.last_action.action_type.clone() {
+                if let ActionType::Pass(cards) = event.last_action.action_type {
                     if passed_forth.is_none() {
-                        passed_forth = Some(cards);
+                        passed_forth = Some(cards.to_vec());
                     } else {
-                        passed_back = Some(cards);
+                        passed_back = Some(cards.to_vec());
                     }
                 }
             }
@@ -159,20 +83,21 @@ impl From<Game> for GameFinishedInfo {
             won = Some(points.total()[playing_party.unwrap().0 as usize] >= game.state.value.0);
         }
 
-        // Announced pairs count only when a contract was played (open owner question).
-        let team_points = if no_one_played { points.cards } else { points.total() };
+        // Announced pairs count in every game, all-pass games included (as on the site).
+        let team_points = points.total();
 
         GameFinishedInfo {
-            info: game.info.clone(),
+            info: (*game.info).clone(),
             game_value: game.state.value,
             won,
             no_one_played,
             schwarz_game,
             playing_party,
+            declarer: game.state.declarer(),
             after_passing,
             passed_cards,
             bidding_history: game.state.bidding_history,
-            tricks: game.state.all_tricks,
+            tricks: game.state.all_tricks.to_vec(),
             all_events: game.all_events,
             team_points,
         }

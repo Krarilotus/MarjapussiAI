@@ -1,17 +1,18 @@
 //! Guard for the measured speed wins (R3), without timing noise: heap allocations counted
 //! by a global allocator, per thread.
 //! - `fast`: no allocation at all in card play.
-//! - `Game` card play: the undo snapshot and the legal-action list reuse their buffers.
-//! - `Game` passing: pass lists reuse their `Vec<Card>` buffers from the second game on.
+//! - `Game` card play: the state is inline, so the undo snapshot is a copy; legal actions are
+//!   computed on demand.
+//! - `Game` passing: a pass is a `[Card; 4]`, so the 126 + 715 pass actions allocate nothing.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use marjapussi_engine::bits::CardSet;
-use marjapussi_engine::fast::FastState;
-use marjapussi_engine::game::cards::{get_all_cards, Card};
-use marjapussi_engine::game::gameevent::ActionType;
-use marjapussi_engine::game::Game;
+use marjapussi_engine::ActionType;
+use marjapussi_engine::CardSet;
+use marjapussi_engine::FastState;
+use marjapussi_engine::Game;
+use marjapussi_engine::{get_all_cards, Card};
 
 struct Counting;
 
@@ -64,13 +65,12 @@ fn play(seed: usize) -> ((u64, u64), (u64, u64)) {
     );
     let (mut card, mut pass) = ((0, 0), (0, 0));
     while !game.ended() {
-        let action = game
-            .legal_actions
+        // The legal list is built outside the measured window (it is computed on demand).
+        let legal = game.legal_actions();
+        let action = *legal
             .iter()
             .find(|a| a.action_type != ActionType::UndoRequest && a.action_type != ActionType::StopBidding)
-            .or_else(|| game.legal_actions.first())
-            .unwrap()
-            .clone();
+            .unwrap_or(&legal[0]);
         let card_play = matches!(action.action_type, ActionType::CardPlayed(_));
         let passing = matches!(action.action_type, ActionType::Pass(_));
         let before = allocs();
@@ -98,17 +98,14 @@ fn speed_wins_hold_in_allocations() {
     }
     assert_eq!(allocs() - before, 0, "fast card play allocated");
 
-    play(2); // warms the pass pool
+    play(2); // warms buffers that are reused across games
     let ((card_allocs, cards), (pass_allocs, passes)) = play(3);
     eprintln!("Game: {card_allocs} allocations in {cards} card plays, {pass_allocs} in {passes} passes");
     assert!(cards == 36 && passes == 2);
-    // Per card: the event's time string and amortized list growth; after a question the undo
-    // snapshot is rebuilt (this policy asks at every trick start). Measured 2026-10-06: 148 on
-    // this branch, 2,696 on main (68c98f0).
-    assert!(
-        card_allocs <= 5 * cards,
-        "card play allocates again: {card_allocs} in {cards}"
-    );
-    // The 126 + 715 passes come from the pool. Measured: 5 here, 2,224 on main.
-    assert!(pass_allocs <= 20, "pass lists allocate again: {pass_allocs}");
+    // Inline game state (E4.2d): a card play allocates only when the event list grows, or for
+    // a fresh undo snapshot's bidding history after a question. Measured 2026-10-06 on
+    // feat/engine-v2: 10 in 36 card plays (148 before the inline state, 2,696 on 68c98f0).
+    assert!(card_allocs <= 16, "card play allocates again: {card_allocs} in {cards}");
+    // A pass is a `[Card; 4]`; measured 0 (2,224 on 68c98f0).
+    assert!(pass_allocs <= 2, "passes allocate again: {pass_allocs}");
 }

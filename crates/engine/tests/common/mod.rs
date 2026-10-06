@@ -4,10 +4,11 @@
 
 use std::fmt::Write;
 
-use marjapussi_engine::game::cards::{get_all_cards, Card};
-use marjapussi_engine::game::gameevent::{ActionType, GameAction, GameEvent};
-use marjapussi_engine::game::gameinfo::GameFinishedInfo;
-use marjapussi_engine::game::Game;
+use marjapussi_engine::FinishedTrick;
+use marjapussi_engine::Game;
+use marjapussi_engine::GameFinishedInfo;
+use marjapussi_engine::{get_all_cards, hands_from_deck, Card};
+use marjapussi_engine::{ActionType, GameAction, GameEvent};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -31,12 +32,7 @@ impl Digest {
 pub fn deal(rng: &mut StdRng) -> [Vec<Card>; 4] {
     let mut deck = get_all_cards();
     deck.shuffle(rng);
-    [
-        deck[0..9].to_vec(),
-        deck[9..18].to_vec(),
-        deck[18..27].to_vec(),
-        deck[27..36].to_vec(),
-    ]
+    hands_from_deck(&deck)
 }
 
 pub fn new_game(rng: &mut StdRng) -> Game {
@@ -49,15 +45,15 @@ pub fn new_game(rng: &mut StdRng) -> Game {
 
 /// A random legal action; undo requests with probability 5 % when other actions exist.
 pub fn pick_action(game: &Game, rng: &mut StdRng) -> GameAction {
-    let legal = &game.legal_actions;
+    let legal = &game.legal_actions();
     let normal: Vec<&GameAction> = legal
         .iter()
         .filter(|a| !matches!(a.action_type, ActionType::UndoRequest))
         .collect();
     if normal.is_empty() || (normal.len() < legal.len() && rng.random_bool(0.05)) {
-        return legal[rng.random_range(0..legal.len())].clone();
+        return legal[rng.random_range(0..legal.len())];
     }
-    normal[rng.random_range(0..normal.len())].clone()
+    *normal[rng.random_range(0..normal.len())]
 }
 
 /// Everything observable in the game state, legal actions included, without times.
@@ -77,7 +73,7 @@ pub fn state_line(game: &Game) -> String {
         s.trump_called,
         s.player_at_turn,
         s.value,
-        s.all_tricks,
+        Tricks(&s.all_tricks),
         s.current_trick,
     )
     .unwrap();
@@ -88,16 +84,35 @@ pub fn state_line(game: &Game) -> String {
             p.name, p.place_at_table, p.partner, p.next_player, p.cards, p.bidding, p.trump
         )
         .unwrap();
-        assert!(p.tricks.is_empty());
     }
     write!(
         out,
         " | legal {:?} | undo {:?}",
-        game.legal_actions,
+        game.legal_actions(),
         game.last_state.as_ref().map(|l| (l.phase.clone(), l.player_at_turn))
     )
     .unwrap();
     out
+}
+
+/// Tricks in the Debug format of main 68c98f0 (without the `leader` field added in E5), so the
+/// pinned digests compare the same facts.
+pub struct Tricks<'a>(pub &'a [FinishedTrick]);
+
+impl std::fmt::Debug for Tricks<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let items: Vec<String> = self
+            .0
+            .iter()
+            .map(|t| {
+                format!(
+                    "FinishedTrick {{ cards: {:?}, winner: {:?}, points: {:?} }}",
+                    t.cards, t.winner, t.points
+                )
+            })
+            .collect();
+        write!(f, "[{}]", items.join(", "))
+    }
 }
 
 pub fn event_line(e: &GameEvent) -> String {
@@ -118,7 +133,7 @@ pub fn finished_line(f: &GameFinishedInfo) -> String {
         f.after_passing,
         f.passed_cards,
         f.bidding_history,
-        f.tricks,
+        Tricks(&f.tricks),
         f.team_points,
     );
     for e in &f.all_events {
@@ -127,22 +142,27 @@ pub fn finished_line(f: &GameFinishedInfo) -> String {
     out
 }
 
-/// `GameFinishedInfo::scores` as reviewed on feat/heuristic-a (264fa3d), verbatim logic.
-pub fn scores_264fa3d(info: &GameFinishedInfo) -> [i32; 2] {
-    let rounded = |points: i32| (points + 2) / 5 * 5;
-    let Some(playing) = &info.playing_party else {
-        return info.team_points.map(rounded);
-    };
-    let (s, n) = (playing.0 as usize % 2, 1 - playing.0 as usize % 2);
-    let won = info.won.unwrap_or(false);
-    let value = info.game_value.0;
-    let n_tricks = info.tricks.iter().filter(|t| t.winner.0 as usize % 2 == n).count();
-    let mut scores = [0; 2];
-    scores[s] = if won { value } else { -value };
-    scores[n] = if n_tricks == 0 && won {
-        -2 * value
-    } else {
-        rounded(info.team_points[n])
-    };
-    scores
+/// The site's per-game scoring (`marjapussi-online` `SeriesTable.vue`), ported line by line,
+/// on a `GameFinishedInfo`. The source of truth for scoring (owner decision D2).
+pub fn site_scores(info: &GameFinishedInfo) -> [i32; 2] {
+    let mut value = info.game_value.0;
+    if value == 115 {
+        value = 0;
+    }
+    let playing = info.playing_party.map(|p| (p.0 % 2) as usize);
+    let points = info.team_points;
+    let round = |p: i32| (p + 2).div_euclid(5) * 5;
+    let mut gets = [round(points[0]), round(points[1])];
+    for t in 0..2 {
+        if playing == Some(t) {
+            gets[t] = if points[t] >= value { value } else { -value };
+        }
+    }
+    if points[0] == 0 && info.schwarz_game && value >= 120 && gets[1] > 0 {
+        gets[0] = -10 * value / 5;
+    }
+    if points[1] == 0 && info.schwarz_game && value >= 120 && gets[0] > 0 {
+        gets[1] = -10 * value / 5;
+    }
+    gets
 }

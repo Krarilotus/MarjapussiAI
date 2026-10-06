@@ -1,128 +1,137 @@
-use std::cell::RefCell;
+//! Legal actions of a state, as a list (`push_legal_actions`) or for one action
+//! (`is_legal_in_phase`). Undo requests are added by `Game`. Works on the state and the undo
+//! snapshot only; the card-play rule comes from `bits::play_levels`.
 
 use crate::bits::{self, CardSet};
-use crate::game::cards::{Card, Suit};
+use crate::game::cards::{Card, Suit, SUITS};
 use crate::game::gameevent::{ActionType, AnswerType, GameAction, QuestionType};
-use crate::game::gamestate::GamePhase;
+use crate::game::gamestate::{GamePhase, GameState};
 use crate::game::player::{PlayerTrumpPossibilities, HAND_SIZE};
-use crate::game::points::Points;
-use crate::game::Game;
 
-impl GamePhase {
-    pub fn legal_actions(&self, game: &Game) -> Vec<GameAction> {
-        let mut out = vec![];
-        self.push_legal_actions(game, &mut out);
-        out
-    }
-
-    /// Appends the legal actions of this phase to `out` (without undo requests).
-    pub(crate) fn push_legal_actions(&self, game: &Game, out: &mut Vec<GameAction>) {
-        match self {
-            GamePhase::WaitingForStart => out.extend(
-                game.state
-                    .players
-                    .iter()
-                    .filter(|p| !game.state.players_started.contains(&p.place_at_table))
-                    .map(|p| GameAction {
-                        action_type: ActionType::Start,
-                        player: p.place_at_table,
-                    }),
-            ),
-            GamePhase::Bidding => push_bidding(game, out),
-            GamePhase::PassingForth | GamePhase::PassingBack => push_passing(game, out),
-            GamePhase::Raising => {
-                // The bids from the highest down, without stopping (`legal_bidding` reversed,
-                // its StopBidding removed).
-                let start = out.len();
-                push_bidding(game, out);
-                out[start..].reverse();
-                out.pop();
-                push_cards(game, out);
-            }
-            GamePhase::StartTrick => {
-                push_question(game, out);
-                push_cards(game, out);
-            }
-            GamePhase::Trick => push_cards(game, out),
-            GamePhase::AnsweringPair | GamePhase::AnsweringHalf(_) => push_answer(game, out),
-            GamePhase::Ended => {}
-            GamePhase::PendingUndo(_previous_phase) => {
-                let next_player = game.last_state.as_ref().unwrap().player_at_turn.next();
-                for player in [next_player, next_player.partner()] {
-                    if !game.state.players_accept_undo.contains(&player) {
-                        out.push(GameAction {
-                            action_type: ActionType::UndoAccept,
-                            player,
-                        });
-                        out.push(GameAction {
-                            action_type: ActionType::UndoDecline,
-                            player,
-                        });
-                    }
+/// Appends the legal actions of the state's phase to `out` (without undo requests).
+/// `last` is the undo snapshot (needed while an undo is pending).
+pub(crate) fn push_legal_actions(state: &GameState, last: Option<&GameState>, out: &mut Vec<GameAction>) {
+    match &state.phase {
+        GamePhase::WaitingForStart => out.extend(
+            state
+                .players
+                .iter()
+                .filter(|p| !state.players_started.contains(&p.place_at_table))
+                .map(|p| GameAction {
+                    action_type: ActionType::Start,
+                    player: p.place_at_table,
+                }),
+        ),
+        GamePhase::Bidding => push_bidding(state, out),
+        GamePhase::PassingForth | GamePhase::PassingBack => push_passing(state, out),
+        GamePhase::Raising => {
+            // The bids from the highest down, without stopping (the bidding list reversed,
+            // its StopBidding removed).
+            let start = out.len();
+            push_bidding(state, out);
+            out[start..].reverse();
+            out.pop();
+            push_cards(state, out);
+        }
+        GamePhase::StartTrick => {
+            push_question(state, out);
+            push_cards(state, out);
+        }
+        GamePhase::Trick => push_cards(state, out),
+        GamePhase::AnsweringPair => push_answer(state, QuestionType::Yours, out),
+        GamePhase::AnsweringHalf(suit) => push_answer(state, QuestionType::YourHalf(*suit), out),
+        GamePhase::Ended => {}
+        GamePhase::PendingUndo(_previous_phase) => {
+            let next_player = last.expect("an undo is pending").player_at_turn.next();
+            for player in [next_player, next_player.partner()] {
+                if !state.players_accept_undo.contains(&player) {
+                    out.push(GameAction {
+                        action_type: ActionType::UndoAccept,
+                        player,
+                    });
+                    out.push(GameAction {
+                        action_type: ActionType::UndoDecline,
+                        player,
+                    });
                 }
             }
         }
     }
 }
 
-pub fn legal_bidding(game: &Game) -> Vec<GameAction> {
-    let mut out = Vec::with_capacity(62);
-    push_bidding(game, &mut out);
-    out
+/// Whether `action` (not an undo request) is in the phase's legal actions. Cards, passes, bids
+/// and starts are checked directly; the rest against the phase's short list
+/// (tests/legality.rs checks the equivalence).
+pub(crate) fn is_legal_in_phase(state: &GameState, last: Option<&GameState>, action: &GameAction) -> bool {
+    let at_turn = action.player == state.player_at_turn;
+    let bid_ok = |v: i32| {
+        let lowest = state.value.0 + 5;
+        at_turn && v >= lowest && v <= 420 && (v - lowest) % 5 == 0
+    };
+    match (&state.phase, &action.action_type) {
+        (GamePhase::Raising | GamePhase::StartTrick | GamePhase::Trick, ActionType::CardPlayed(card)) => {
+            at_turn && allowed_cards(state).contains(card.index())
+        }
+        (_, ActionType::CardPlayed(_)) => false,
+        (GamePhase::PassingForth | GamePhase::PassingBack, ActionType::Pass(cards)) => {
+            at_turn && is_legal_pass(state, cards)
+        }
+        (_, ActionType::Pass(_)) => false,
+        (GamePhase::Bidding | GamePhase::Raising, ActionType::NewBid(v)) => bid_ok(*v),
+        (_, ActionType::NewBid(_)) => false,
+        (GamePhase::Bidding, ActionType::StopBidding) => at_turn,
+        (_, ActionType::StopBidding) => false,
+        (GamePhase::WaitingForStart, ActionType::Start) => {
+            action.player.0 < 4 && !state.players_started.contains(&action.player)
+        }
+        (_, ActionType::Start) => false,
+        _ => {
+            let mut list = Vec::with_capacity(16);
+            push_legal_actions(state, last, &mut list);
+            list.contains(action)
+        }
+    }
 }
 
-fn push_bidding(game: &Game, out: &mut Vec<GameAction>) {
-    let start_value = game.state.value + Points(5);
-    let player = game.state.player_at_turn;
+fn push_bidding(state: &GameState, out: &mut Vec<GameAction>) {
+    let player = state.player_at_turn;
     out.push(GameAction {
         action_type: ActionType::StopBidding,
         player,
     });
-    for allowed_value in (start_value.0..=420).step_by(5) {
+    for value in (state.value.0 + 5..=420).step_by(5) {
         out.push(GameAction {
-            action_type: ActionType::NewBid(allowed_value),
+            action_type: ActionType::NewBid(value),
             player,
         })
     }
 }
 
-/// Every 4-card subset of the hand, in the order of `itertools::combinations` over the hand,
-/// each sorted from high to low.
-pub fn legal_passing(game: &Game) -> Vec<GameAction> {
-    let mut out = vec![];
-    push_passing(game, &mut out);
-    out
-}
-
-fn push_passing(game: &Game, out: &mut Vec<GameAction>) {
-    let cards = &game.state.player_at_turn().cards;
-    let player = game.state.player_at_turn;
+/// Every 4-card subset of the hand, in lexicographic order of hand positions, each sorted from
+/// high to low.
+fn push_passing(state: &GameState, out: &mut Vec<GameAction>) {
+    let cards = &state.player_at_turn().cards;
+    let player = state.player_at_turn;
     let n = cards.len();
     if n < 4 {
         return;
     }
     out.reserve(n * (n - 1) * (n - 2) * (n - 3) / 24);
-    // `bits::index` orders cards like `Card`'s `Ord` (suit, then value).
-    let idx: Vec<u8> = cards.iter().map(bits::index).collect();
-    PASS_POOL.with(|pool| {
-        let mut pool = pool.borrow_mut();
-        for a in 0..n {
-            for b in a + 1..n {
-                for c in b + 1..n {
-                    for d in c + 1..n {
-                        let [w, x, y, z] = sorted_desc([idx[a], idx[b], idx[c], idx[d]]);
-                        let mut pass = pool.pop().unwrap_or_else(|| Vec::with_capacity(4));
-                        pass.clear();
-                        pass.extend_from_slice(&[bits::card(w), bits::card(x), bits::card(y), bits::card(z)]);
-                        out.push(GameAction {
-                            action_type: ActionType::Pass(pass),
-                            player,
-                        })
-                    }
+    // `Card::index` orders cards like `Card`'s `Ord` (suit, then value).
+    let idx: Vec<u8> = cards.iter().map(|c| c.index()).collect();
+    for a in 0..n {
+        for b in a + 1..n {
+            for c in b + 1..n {
+                for d in c + 1..n {
+                    let pass = sorted_desc([idx[a], idx[b], idx[c], idx[d]]).map(Card::from_index);
+                    out.push(GameAction {
+                        action_type: ActionType::Pass(pass),
+                        player,
+                    })
                 }
             }
         }
-    });
+    }
 }
 
 /// Four card indices from high to low (a sorting network).
@@ -135,37 +144,10 @@ fn sorted_desc(mut x: [u8; 4]) -> [u8; 4] {
     x
 }
 
-// A game generates 126 + 715 four-card passes, each a `Vec<Card>` by the public type. Their
-// buffers are recycled per thread (at most `PASS_POOL_MAX`), so a simulation loop does not
-// allocate them again; measured in docs/design/performance.md.
-const PASS_POOL_MAX: usize = 1024;
-
-thread_local! {
-    static PASS_POOL: RefCell<Vec<Vec<Card>>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Empties `actions`, keeping the buffers of passes for the next passing list.
-pub(crate) fn recycle(actions: &mut Vec<GameAction>) {
-    if !matches!(actions.first().map(|a| &a.action_type), Some(ActionType::Pass(_))) {
-        actions.clear();
-        return;
-    }
-    PASS_POOL.with(|pool| {
-        let mut pool = pool.borrow_mut();
-        for action in actions.drain(..) {
-            if let ActionType::Pass(v) = action.action_type {
-                if pool.len() < PASS_POOL_MAX {
-                    pool.push(v);
-                }
-            }
-        }
-    });
-}
-
 /// Whether `cards` is a pass the player at turn may make: four cards of their hand from high
-/// to low, i.e. exactly the members of `legal_passing`.
-pub(crate) fn is_legal_pass(game: &Game, cards: &[Card]) -> bool {
-    let hand = &game.state.player_at_turn().cards;
+/// to low, i.e. exactly the members of the passing list.
+fn is_legal_pass(state: &GameState, cards: &[Card]) -> bool {
+    let hand = &state.player_at_turn().cards;
     cards.len() == 4 && cards.windows(2).all(|w| w[0] > w[1]) && cards.iter().all(|c| hand.contains(c))
 }
 
@@ -174,16 +156,8 @@ pub fn is_first_trick(hand_len: usize) -> bool {
     hand_len == HAND_SIZE
 }
 
-/// The cards the player at turn may play (rule owner: `bits::play_levels`), in hand order.
-pub fn legal_cards(game: &Game) -> Vec<GameAction> {
-    let mut out = Vec::with_capacity(9);
-    push_cards(game, &mut out);
-    out
-}
-
-fn push_cards(game: &Game, out: &mut Vec<GameAction>) {
-    let state = &game.state;
-    let player = state.player_at_turn;
+/// The cards the player at turn may play, as a set (rule owner: `bits::play_levels`).
+fn allowed_cards(state: &GameState) -> CardSet {
     let cards = &state.player_at_turn().cards;
     let trick = if state.current_trick.len() == 4 {
         &[][..]
@@ -192,13 +166,18 @@ fn push_cards(game: &Game, out: &mut Vec<GameAction>) {
     };
     let mut idx = [0u8; 4];
     for (slot, c) in idx.iter_mut().zip(trick) {
-        *slot = bits::index(c);
+        *slot = c.index();
     }
     let hand = CardSet::from_cards(cards);
-    let first_trick = is_first_trick(cards.len());
-    let allowed = bits::play_levels(&idx[..trick.len()], state.trump, first_trick).allowed(hand);
-    for &card in cards {
-        if allowed.contains(bits::index(&card)) {
+    bits::play_levels(&idx[..trick.len()], state.trump, is_first_trick(cards.len())).allowed(hand)
+}
+
+/// The cards the player at turn may play, in hand order.
+fn push_cards(state: &GameState, out: &mut Vec<GameAction>) {
+    let player = state.player_at_turn;
+    let allowed = allowed_cards(state);
+    for &card in &state.player_at_turn().cards {
+        if allowed.contains(card.index()) {
             out.push(GameAction {
                 action_type: ActionType::CardPlayed(card),
                 player,
@@ -209,27 +188,18 @@ fn push_cards(game: &Game, out: &mut Vec<GameAction>) {
 
 /// Suits of which `hand` holds both King and Ober, in enum order.
 fn pair_suits(hand: CardSet) -> impl Iterator<Item = Suit> {
-    bits::SUITS
-        .into_iter()
-        .filter(move |&s| CardSet::halves(s).is_subset(hand))
+    SUITS.into_iter().filter(move |&s| CardSet::halves(s).is_subset(hand))
 }
 
-pub fn legal_question(game: &Game) -> Vec<GameAction> {
-    let mut out = Vec::with_capacity(10);
-    push_question(game, &mut out);
-    out
-}
-
-fn push_question(game: &Game, actions: &mut Vec<GameAction>) {
-    let player = game.state.player_at_turn();
-    let place = player.place_at_table;
+fn push_question(state: &GameState, actions: &mut Vec<GameAction>) {
+    let player = state.player_at_turn();
     let action = |action_type| GameAction {
         action_type,
-        player: place,
+        player: player.place_at_table,
     };
     if player.trump == PlayerTrumpPossibilities::Own {
         for suit in pair_suits(CardSet::from_cards(&player.cards)) {
-            if !game.state.trump_called.contains(&suit) {
+            if !state.trump_called.contains(&suit) {
                 actions.push(action(ActionType::AnnounceTrump(suit)));
             }
         }
@@ -242,54 +212,32 @@ fn push_question(game: &Game, actions: &mut Vec<GameAction>) {
     }
 }
 
-pub fn legal_answer(game: &Game) -> Vec<GameAction> {
-    let mut out = Vec::with_capacity(4);
-    push_answer(game, &mut out);
-    out
-}
-
-fn push_answer(game: &Game, actions: &mut Vec<GameAction>) {
-    let question_event = game
-        .all_events
-        .iter()
-        .rev()
-        .find(|e| matches!(e.last_action.action_type, ActionType::Question(..)))
-        .expect("Trying to find answers without question asked!");
-    let hand = CardSet::from_cards(&game.state.player_at_turn().cards);
-    let player = game.state.player_at_turn;
-    let start = actions.len();
-    match question_event.last_action.action_type {
-        ActionType::Question(QuestionType::Yours) => {
+/// The answers to `question`, which the phase records: `AnsweringPair` follows "yours?",
+/// `AnsweringHalf(suit)` follows "your half of `suit`?".
+fn push_answer(state: &GameState, question: QuestionType, actions: &mut Vec<GameAction>) {
+    let hand = CardSet::from_cards(&state.player_at_turn().cards);
+    let player = state.player_at_turn;
+    let answer = |a| GameAction {
+        action_type: ActionType::Answer(a),
+        player,
+    };
+    match question {
+        QuestionType::Yours => {
+            let start = actions.len();
             for suit in pair_suits(hand) {
                 //don't allow double calling
-                if !game.state.trump_called.contains(&suit) {
-                    actions.push(GameAction {
-                        action_type: ActionType::Answer(AnswerType::YesPair(suit)),
-                        player,
-                    });
+                if !state.trump_called.contains(&suit) {
+                    actions.push(answer(AnswerType::YesPair(suit)));
                 }
             }
             if actions.len() == start {
-                actions.push(GameAction {
-                    action_type: ActionType::Answer(AnswerType::NoPair),
-                    player,
-                })
+                actions.push(answer(AnswerType::NoPair));
             }
         }
-        ActionType::Question(QuestionType::YourHalf(suit)) => {
-            let answer = if (hand & CardSet::halves(suit)).is_empty() {
-                AnswerType::NoHalf(suit)
-            } else {
-                AnswerType::YesHalf(suit)
-            };
-            actions.push(GameAction {
-                action_type: ActionType::Answer(answer),
-                player,
-            });
-        }
-        _ => {
-            println!("{:?}", game);
-            panic!("Trying to find answers without question asked!")
-        }
+        QuestionType::YourHalf(suit) => actions.push(answer(if (hand & CardSet::halves(suit)).is_empty() {
+            AnswerType::NoHalf(suit)
+        } else {
+            AnswerType::YesHalf(suit)
+        })),
     }
 }
