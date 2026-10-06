@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::offset::Local;
@@ -29,7 +30,8 @@ pub mod series;
 /// (`legal_actions`, `legal_actions_into`, `is_legal`).
 #[derive(Debug, Clone)]
 pub struct Game {
-    pub info: GameMetaInfo,
+    /// Shared between copies of a game; changes only when the game starts and ends.
+    pub info: Arc<GameMetaInfo>,
     pub state: GameState,
     pub last_state: Option<GameState>,
     pub all_events: Vec<GameEvent>,
@@ -39,7 +41,7 @@ impl Game {
     pub fn new(name: String, player_names: [String; 4], cards: Option<[Vec<Card>; 4]>) -> Self {
         let players = create_players(player_names.clone(), cards);
         Game {
-            info: GameMetaInfo::create(name, player_names, players.clone()),
+            info: Arc::new(GameMetaInfo::create(name, player_names, players.clone())),
             state: GameState::create(players),
             last_state: None,
             all_events: vec![],
@@ -192,7 +194,7 @@ mod tests {
     fn test_creating() {
         let names = ["S1".to_string(), "S2".to_string(), "S3".to_string(), "S4".to_string()];
         let game = Game::new(String::from("Game Name"), names, None);
-        assert_eq!(game.info.name, String::from("Game Name"));
+        assert_eq!(game.info.name, "Game Name");
     }
 
     #[test]
@@ -243,7 +245,7 @@ mod tests {
         assert_eq!(game.state.value, Points(200));
 
         //passing forth
-        assert_eq!(game.state.player_at_turn().name, String::from("S3"));
+        assert_eq!(&*game.state.player_at_turn().name, "S3");
         assert_eq!(game.state.phase, GamePhase::PassingForth);
         assert_eq!(game.state.player_at_turn().cards.len(), 9);
         assert_eq!(game.legal_actions().len(), 127); //nCr(9,4) + 1
@@ -259,7 +261,7 @@ mod tests {
             5
         );
         //passing back
-        assert_eq!(game.state.player_at_turn().name, String::from("S1"));
+        assert_eq!(&*game.state.player_at_turn().name, "S1");
         assert_eq!(game.state.phase, GamePhase::PassingBack);
         actions = game.legal_actions();
         let res = game.apply_action(actions[9]);

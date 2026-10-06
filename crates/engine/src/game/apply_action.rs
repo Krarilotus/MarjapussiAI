@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::bits::{self, CardSet};
 use crate::game::cards::Card;
 use crate::game::gameevent::{ActionType, AnswerType, GameAction, GameCallback, QuestionType};
@@ -20,7 +22,7 @@ impl Game {
                 }
                 if state.players_started.len() == 4 {
                     state.started = true;
-                    self.info.start_time = Some(current_time_string());
+                    Arc::make_mut(&mut self.info).start_time = Some(current_time_string());
                     state.phase = GamePhase::Bidding;
                 }
                 self.last_state = None;
@@ -96,7 +98,7 @@ impl Game {
                 state.player_at_place_mut(action.player).play_card(card);
                 if state.player_at_turn().cards.is_empty() {
                     state.phase = GamePhase::Ended;
-                    self.info.end_time = Some(current_time_string());
+                    Arc::make_mut(&mut self.info).end_time = Some(current_time_string());
                 }
             }
             ActionType::AnnounceTrump(suit) => {
@@ -169,7 +171,7 @@ impl Game {
                 }
                 if state.players_accept_undo.len() == 2 {
                     if let Some(mut previous) = self.last_state.take() {
-                        previous.players_accept_undo = vec![];
+                        previous.players_accept_undo.clear();
                         *state = previous;
                     }
                 }
@@ -178,7 +180,7 @@ impl Game {
                 if let GamePhase::PendingUndo(previous_phase) = &mut state.phase {
                     let previous = std::mem::replace(&mut **previous_phase, GamePhase::Ended);
                     state.phase = previous;
-                    state.players_accept_undo = vec![];
+                    state.players_accept_undo.clear();
                 }
                 self.last_state = None;
             }

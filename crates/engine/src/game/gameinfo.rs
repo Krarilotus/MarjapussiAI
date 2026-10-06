@@ -27,10 +27,10 @@ impl GameMetaInfo {
             end_time: None,
             player_names,
             player_start_cards: [
-                players[0].cards.clone(),
-                players[1].cards.clone(),
-                players[2].cards.clone(),
-                players[3].cards.clone(),
+                players[0].cards.to_vec(),
+                players[1].cards.to_vec(),
+                players[2].cards.to_vec(),
+                players[3].cards.to_vec(),
             ],
         }
     }
@@ -57,18 +57,18 @@ impl GameInfoPlayer {
     pub fn from_game(game: Game, place: PlaceAtTable) -> Self {
         let legal_actions = game.legal_actions();
         GameInfoPlayer {
-            meta_info: game.info.clone(),
+            meta_info: (*game.info).clone(),
             players_pressed_start: game.state.players_started(),
             players_from_perspective: game.state.players_perspective(place),
-            player_at_turn: game.state.player_at_place(game.state.player_at_turn).name.clone(),
+            player_at_turn: game.state.player_at_place(game.state.player_at_turn).name.to_string(),
             own_cards: match game.state.started {
-                true => Some(game.state.player_at_place(place).cards.clone()),
+                true => Some(game.state.player_at_place(place).cards.to_vec()),
                 false => None,
             },
             players_cards_number_perspective: game.state.players_perspective_cards(place),
             game_phase: game.state.phase,
             bidding_history: game.state.bidding_history,
-            current_trick: game.state.current_trick,
+            current_trick: game.state.current_trick.to_vec(),
             last_trick: game.state.all_tricks.clone().last().cloned(),
             last_event: match game.all_events.last() {
                 None => None,
@@ -164,7 +164,7 @@ impl From<Game> for GameFinishedInfo {
         let team_points = points.total();
 
         GameFinishedInfo {
-            info: game.info.clone(),
+            info: (*game.info).clone(),
             game_value: game.state.value,
             won,
             no_one_played,
@@ -173,7 +173,7 @@ impl From<Game> for GameFinishedInfo {
             after_passing,
             passed_cards,
             bidding_history: game.state.bidding_history,
-            tricks: game.state.all_tricks,
+            tricks: game.state.all_tricks.to_vec(),
             all_events: game.all_events,
             team_points,
         }

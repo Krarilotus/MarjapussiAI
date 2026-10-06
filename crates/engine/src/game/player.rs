@@ -1,10 +1,12 @@
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use rand::rng;
 use rand::seq::SliceRandom;
 use serde::Serialize;
 
 use crate::game::cards::{get_all_cards, Card};
+use crate::inline::InlineVec;
 
 /// Cards dealt to each player.
 pub const HAND_SIZE: usize = 9;
@@ -35,45 +37,17 @@ impl Debug for PlaceAtTable {
     }
 }
 
+#[derive(Clone)]
 pub struct Player {
-    pub name: String,
+    pub name: Arc<str>,
     pub partner: PlaceAtTable,
     pub next_player: PlaceAtTable,
     pub place_at_table: PlaceAtTable,
-    pub cards: Vec<Card>,
+    /// At most 13 (while passing).
+    pub cards: InlineVec<Card, 13>,
     last_played: Option<Card>,
-    pub tricks: Vec<Vec<Card>>,
     pub trump: PlayerTrumpPossibilities,
     pub bidding: bool,
-}
-
-impl Clone for Player {
-    fn clone(&self) -> Self {
-        Player {
-            name: self.name.clone(),
-            partner: self.partner,
-            next_player: self.next_player,
-            place_at_table: self.place_at_table,
-            cards: self.cards.clone(),
-            last_played: self.last_played,
-            tricks: self.tricks.clone(),
-            trump: self.trump,
-            bidding: self.bidding,
-        }
-    }
-
-    /// Reuses the name and card buffers (see `GameState::clone_from`).
-    fn clone_from(&mut self, source: &Self) {
-        self.name.clone_from(&source.name);
-        self.partner = source.partner;
-        self.next_player = source.next_player;
-        self.place_at_table = source.place_at_table;
-        self.cards.clone_from(&source.cards);
-        self.last_played = source.last_played;
-        self.tricks.clone_from(&source.tricks);
-        self.trump = source.trump;
-        self.bidding = source.bidding;
-    }
 }
 
 impl PartialEq for Player {
@@ -120,14 +94,13 @@ Creates a Single Player without partner or next_player
  */
 fn create_player(name: String, cards: Vec<Card>, place: u8) -> Player {
     Player {
-        name,
+        name: name.into(),
         bidding: true,
         next_player: PlaceAtTable(place).partner(),
         partner: PlaceAtTable(place).partner(),
         place_at_table: PlaceAtTable(place),
-        cards,
+        cards: InlineVec::from(cards.as_slice()),
         last_played: None,
-        tricks: vec![],
         trump: PlayerTrumpPossibilities::Own,
     }
 }
