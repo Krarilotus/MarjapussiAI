@@ -76,10 +76,41 @@ Further rules:
 
 Measured v0 baseline (tier 0 only, release build, PC under load from other projects): **51 ns per event, 2.8 µs per seat per game** (`tests/speed.rs`). Before tier 0 used bit operations for the play rule, it was 1,632 ns.
 
+## Deal sampler (tier 1, `sample.rs`)
+`DealSpace::new(&knowledge)` (or `knowledge.deals()`) covers the deals consistent with a seat's knowledge: certain ⊆ hand ⊆ may_hold, hand sizes, every live constraint. It gives:
+- `count()`: the exact number of such deals;
+- `holder_counts()` / `marginals()`: the exact number (probability) of deals in which seat y holds card c; a zero count means the card is impossible there, so this also gives the exact possible sets;
+- `sample(rng)`: one deal, exactly uniform, without rejection;
+- `sample_worlds(rng, n, belief)`: uniform samples weighted by a `Belief` (a likelihood hook for the soft layer; the weights are importance weights).
+
+Method (Investigator A §6.4–6.5):
+- Unknown cards are grouped by signature: the hidden seats that may hold them, at most 7 classes. Cards inside a class are exchangeable, so a DP over the hidden seats' remaining capacities counts the deals class by class (`ways`, at most 14 × 14 states per class).
+- Cards in a live constraint are grouped more finely (same signature, same constraints; usually the K and O of one suit). An outer enumeration splits each such group over the seats and checks the constraints. The DP then counts the rest of each split.
+- Sampling draws a split, then a split per class in proportion to `C(n, split) · ways(rest)`, then which cards go where, uniformly. Marginals: forward counts × `ways`, shared equally inside a class.
+- The class with the most splits goes last; its split is forced, which keeps sampling cheap.
+- Counts are `u64`: three hidden seats and at most 36 cards give at most 3³⁶ < 2⁵⁸ deals. Random draws use an exactly uniform integer method (Lemire).
+
+Guards (`tests/sample.rs`):
+- every sample satisfies all facts (300 random games, every seat after every event; 72,224 states, 4,276 of them with constrained cards);
+- counts and holder counts equal brute-force enumeration exactly on all states with ≤ 12 unknown cards (20,703 states, 1,140 constrained, 32.4 M deals);
+- sample frequencies are uniform by chi-square (50 states, 25 constrained, 200 draws per deal);
+- the belief weights reproduce an exactly enumerated weighted marginal.
+
+Speed (`tests/sample_speed.rs`, release, 500 random games, PC shared with other projects), in µs:
+
+| unknown cards | states | constrained | median deals | build | sample | marginals | worst build |
+|---|---|---|---|---|---|---|---|
+| 0 | 9,061 | 0 | 1 | 0.28 | 0.01 | 0.29 | 0.7 |
+| 1–6 | 19,121 | 480 | 6 | 0.57 | 0.06 | 0.78 | 2.1 |
+| 7–12 | 21,129 | 2,126 | 700 | 0.82 | 0.11 | 1.12 | 3.3 |
+| 13–18 | 19,804 | 2,814 | 342,342 | 0.97 | 0.13 | 1.30 | 8.2 |
+| 19–24 | 19,205 | 1,464 | 2.7·10⁸ | 0.89 | 0.11 | 1.09 | 24.3 |
+| 25–27 | 20,160 | 0 | 2.3·10¹¹ | 0.59 | 0.10 | 0.87 | 2.3 |
+
+The worst case is a NoPair over four suits: 8 tied cards. Splitting each suit's pair as one group cut it from 182 µs (cards placed one by one) to 26 µs. Tier-0 speed is unchanged (A/B against `main`, interleaved: 35–44 ns per event on both).
+
 ## Not in v0 (next)
-- Soft layer (convention likelihoods from the 1,579 games).
-- Exact enumeration when ≤ 12 cards are unknown.
-- Signature-class DP marginals and world sampling.
+- Soft layer (convention likelihoods from the 1,579 games); it plugs into `Belief`.
 - Sure winners (S22).
 - "Can still meld" (S21).
 - A benchmark.

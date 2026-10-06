@@ -13,6 +13,10 @@ use engine::game::legal_actions::is_first_trick;
 use engine::game::player::HAND_SIZE;
 use observation::{Seat, SeatEvent};
 
+mod sample;
+
+pub use sample::{Belief, DealSpace, Hands, Uniform, World};
+
 const MAX_CONSTRAINTS: usize = 16;
 
 /// `lo <= |hand(seat) ∩ mask| <= hi`.
@@ -122,6 +126,11 @@ impl Knowledge {
     /// Bit indices of the cards in the current trick, in play order.
     pub fn trick(&self) -> &[u8] {
         &self.trick[..self.trick_len as usize]
+    }
+
+    /// The deals consistent with this knowledge, for counting, marginals and sampling.
+    pub fn deals(&self) -> DealSpace {
+        DealSpace::new(self)
     }
 
     pub fn apply(&mut self, event: &SeatEvent) -> Result<(), Contradiction> {
