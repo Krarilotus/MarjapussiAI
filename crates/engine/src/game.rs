@@ -30,6 +30,8 @@ pub mod series;
 /// (`legal_actions`, `legal_actions_into`, `is_legal`).
 #[derive(Debug, Clone)]
 pub struct Game {
+    /// Whether events get wall-clock times (`Clock::Off` for simulations: time 0).
+    pub clock: Clock,
     /// Shared between copies of a game; changes only when the game starts and ends.
     pub info: Arc<GameMetaInfo>,
     pub state: GameState,
@@ -41,6 +43,7 @@ impl Game {
     pub fn new(name: String, player_names: [String; 4], cards: Option<[Vec<Card>; 4]>) -> Self {
         let players = create_players(player_names.clone(), cards);
         Game {
+            clock: Clock::Wall,
             info: Arc::new(GameMetaInfo::create(name, player_names, players.clone())),
             state: GameState::create(players),
             last_state: None,
@@ -100,6 +103,7 @@ impl Game {
         let mut all_events = Vec::with_capacity(self.all_events.len() + 1);
         all_events.extend_from_slice(&self.all_events);
         let mut next_game = Game {
+            clock: self.clock,
             info: self.info.clone(),
             state: self.state.clone(),
             last_state: if keeps_snapshot { self.last_state.clone() } else { None },
@@ -107,6 +111,12 @@ impl Game {
         };
         next_game.apply_legal(action);
         Ok(next_game)
+    }
+
+    /// Builder form of setting `clock`.
+    pub fn with_clock(mut self, clock: Clock) -> Game {
+        self.clock = clock;
+        self
     }
 
     pub fn ended(&self) -> bool {
@@ -129,13 +139,25 @@ impl Game {
             last_action: action,
             callback,
             player_at_turn: self.state.player_at_turn,
-            time: now_millis(),
+            time: match self.clock {
+                Clock::Wall => now_millis(),
+                Clock::Off => 0,
+            },
         });
     }
 }
 
 /// Local wall-clock time as `YYYY-MM-DD HH:MM:SS`. The text is formatted once per second and
 /// per thread and then reused: formatting local time costs more than a whole card play.
+/// Source of `GameEvent::time`. Reading the wall clock costs about 30 ns per action
+/// (docs/design/performance.md); simulations switch it off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Clock {
+    #[default]
+    Wall,
+    Off,
+}
+
 /// Milliseconds since the Unix epoch (0 if the clock is before it).
 pub fn now_millis() -> u64 {
     SystemTime::now()
@@ -176,6 +198,18 @@ mod tests {
     use crate::game::gameevent::QuestionType;
     use crate::game::player::{PlaceAtTable, PlayerTrumpPossibilities};
     use rand::prelude::IndexedMutRandom;
+
+    #[test]
+    fn clock_off_records_zero() {
+        let mut game = helper_create_game().with_clock(Clock::Off);
+        let start = game.legal_actions()[0];
+        game.apply_action_mut(start);
+        assert_eq!(game.all_events[0].time, 0);
+        let mut game = helper_create_game();
+        let start = game.legal_actions()[0];
+        game.apply_action_mut(start);
+        assert!(game.all_events[0].time > 0);
+    }
 
     #[test]
     fn test_time_creation() {
