@@ -5,6 +5,7 @@ use crate::game::gameevent::{ActionType, GameAction, GameCallback, GameEvent, Ga
 use crate::game::gamestate::{FinishedTrick, GamePhase};
 use crate::game::player::{PlaceAtTable, Player};
 use crate::game::points::{points_pair, Points};
+use crate::game::scoring::{game_scores, GameOutcome, SCHWARZ_FACTOR_FIFTHS};
 use crate::game::{current_time_string, Game};
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,14 +58,10 @@ impl GameInfoPlayer {
         GameInfoPlayer {
             meta_info: game.info.clone(),
             players_pressed_start: game.state.players_started(),
-            players_from_perspective: game.state.players_perspective(place.clone()),
-            player_at_turn: game
-                .state
-                .player_at_place(game.state.player_at_turn.clone())
-                .name
-                .clone(),
+            players_from_perspective: game.state.players_perspective(place),
+            player_at_turn: game.state.player_at_place(game.state.player_at_turn).name.clone(),
             own_cards: match game.state.started {
-                true => Some(game.state.player_at_place(place.clone()).cards.clone()),
+                true => Some(game.state.player_at_place(place).cards.clone()),
                 false => None,
             },
             players_cards_number_perspective: game.state.players_perspective_cards(place),
@@ -117,7 +114,7 @@ impl From<Game> for GameFinishedInfo {
         let mut players_points = [Points(0); 4];
         let mut players_tricks: [Vec<FinishedTrick>; 4] = [vec![], vec![], vec![], vec![]];
         for trick in &game.state.all_tricks {
-            players_tricks[trick.winner.0 as usize].push(trick.clone());
+            players_tricks[trick.winner.0 as usize].push(*trick);
             players_points[trick.winner.0 as usize] += trick.points;
         }
         let tricks_party_zero = players_tricks[0].len() + players_tricks[2].len();
@@ -133,12 +130,11 @@ impl From<Game> for GameFinishedInfo {
             let mut passed_back: Option<Vec<Card>> = None;
             for event in &game.all_events {
                 if ActionType::NewBid(game.state.value.0) == event.last_action.action_type {
-                    playing_player = event.last_action.player.clone();
+                    playing_player = event.last_action.player;
                     playing_party = Some(event.last_action.player.party());
                 }
                 if let Some(GameCallback::NewTrump(suit)) = event.callback {
-                    players_points[event.last_action.player.clone().0 as usize] +=
-                        points_pair(suit);
+                    players_points[event.last_action.player.0 as usize] += points_pair(suit);
                 }
                 if let ActionType::Pass(cards) = event.last_action.action_type.clone() {
                     if passed_forth.is_none() {
@@ -158,12 +154,10 @@ impl From<Game> for GameFinishedInfo {
                 .into_iter()
                 .filter(|c| !passed_forth.clone().unwrap().contains(c))
                 .collect();
-            cards_after_passing[playing_player.partner().0 as usize]
-                .append(&mut passed_back.clone().unwrap());
+            cards_after_passing[playing_player.partner().0 as usize].append(&mut passed_back.clone().unwrap());
             // cards of playing player
             cards_after_passing[playing_player.0 as usize].append(&mut passed_forth.unwrap());
-            cards_after_passing[playing_player.0 as usize] = cards_after_passing
-                [playing_player.0 as usize]
+            cards_after_passing[playing_player.0 as usize] = cards_after_passing[playing_player.0 as usize]
                 .clone()
                 .into_iter()
                 .filter(|c| !passed_back.clone().unwrap().contains(c))
@@ -171,8 +165,8 @@ impl From<Game> for GameFinishedInfo {
 
             after_passing = Some(cards_after_passing);
 
-            let points_party = players_points[playing_party.clone().unwrap().0 as usize]
-                + players_points[playing_party.clone().unwrap().partner().0 as usize];
+            let points_party = players_points[playing_party.unwrap().0 as usize]
+                + players_points[playing_party.unwrap().partner().0 as usize];
             won = Some(points_party >= game.state.value);
         }
 
@@ -203,5 +197,30 @@ impl GameFinishedInfo {
         self.info.create_time = created;
         self.info.start_time = Some(started);
         self.info.end_time = Some(ended);
+    }
+
+    /// What scoring needs: the playing team, the game value, points and tricks per team.
+    pub fn outcome(&self) -> GameOutcome {
+        let mut team_tricks = [0u8; 2];
+        for t in &self.tricks {
+            team_tricks[(t.winner.0 % 2) as usize] += 1;
+        }
+        GameOutcome {
+            playing_team: self.playing_party.map(|p| p.0 % 2),
+            game_value: self.game_value.0,
+            team_points: self.team_points,
+            team_tricks,
+        }
+    }
+
+    /// Score of the game for each team (team 0 = seats 0 and 2), by the rules page; see
+    /// `game::scoring`.
+    pub fn scores(&self) -> [i32; 2] {
+        self.scores_with(SCHWARZ_FACTOR_FIFTHS)
+    }
+
+    /// `scores` with a series' schwarz factor (in fifths of the game value).
+    pub fn scores_with(&self, schwarz_factor_fifths: i32) -> [i32; 2] {
+        game_scores(&self.outcome(), schwarz_factor_fifths)
     }
 }

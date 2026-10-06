@@ -1,8 +1,9 @@
-//! Bitset view of cards and of the play rule, for deduction and search.
+//! Bitset view of cards and the owner of the card-play rule.
 //!
-//! `play_levels` restates `cards::allowed_cards` as an ordered list of card sets. The
-//! engine function stays the owner of the rule: the test `play_levels_mirror_allowed_cards`
-//! checks this mirror against it on random tricks and hands.
+//! `play_levels` (which cards may be played) and `takes` / `trick_winner` (who wins a trick)
+//! are the single implementation of these rules: `cards::allowed_cards`, `Game` and
+//! `engine::fast` all call them. The test `play_levels_mirror_allowed_cards` keeps the former
+//! `Vec`-based implementation as a reference oracle on random tricks and hands.
 
 use std::fmt;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not, Sub, SubAssign};
@@ -166,28 +167,31 @@ impl fmt::Debug for CardSet {
 }
 
 /// The play rule for one decision: a hand may play `hand ∩ levels[k]` for the first
-/// level `k` that meets the hand.
+/// level `k` that meets the hand. Unused levels are `ALL` (a fixed length keeps `allowed`
+/// a short unrolled loop).
 #[derive(Clone, Copy, Debug)]
 pub struct PlayLevels {
     levels: [CardSet; 6],
-    len: usize,
 }
 
 impl PlayLevels {
-    /// The cards `hand` may play (the engine's `allowed_cards`).
+    /// The cards `hand` may play.
+    #[inline]
     pub fn allowed(&self, hand: CardSet) -> CardSet {
-        self.levels[..self.len]
-            .iter()
-            .map(|&level| level & hand)
-            .find(|allowed| !allowed.is_empty())
-            .unwrap_or(hand)
+        for level in self.levels {
+            let allowed = level & hand;
+            if !allowed.is_empty() {
+                return allowed;
+            }
+        }
+        hand
     }
 
     /// Cards the player cannot hold, given that they legally played `played`: every
     /// level before the first one that contains it was empty in their hand.
     pub fn excluded_by(&self, played: u8) -> CardSet {
         let mut excluded = CardSet::EMPTY;
-        for &level in &self.levels[..self.len] {
+        for level in self.levels {
             if level.contains(played) {
                 return excluded;
             }
@@ -197,8 +201,9 @@ impl PlayLevels {
     }
 }
 
-/// Whether `challenger` takes the trick from the current `winner` (engine `high_card`).
-fn takes(challenger: u8, winner: u8, trump: Option<Suit>) -> bool {
+/// Whether `challenger` takes the trick from the current `winner`.
+#[inline]
+pub fn takes(challenger: u8, winner: u8, trump: Option<Suit>) -> bool {
     let (cs, ws) = (challenger / 9, winner / 9);
     if cs == ws {
         return challenger > winner;
@@ -206,28 +211,33 @@ fn takes(challenger: u8, winner: u8, trump: Option<Suit>) -> bool {
     trump.is_some_and(|t| t as u8 == cs)
 }
 
-/// Mirrors `cards::allowed_cards(trick, _, trump, first_trick)` with bit operations.
-/// `trick` holds the bit indices of the cards already in the current trick (0–3).
+/// Position (0–3) of the card that currently wins `trick` (bit indices in play order).
+/// The first card leads; panics on an empty trick.
+#[inline]
+pub fn trick_winner(trick: &[u8], trump: Option<Suit>) -> usize {
+    let mut best = 0;
+    for (i, &c) in trick.iter().enumerate().skip(1) {
+        if takes(c, trick[best], trump) {
+            best = i;
+        }
+    }
+    best
+}
+
+/// The play rule: which cards may be played into `trick` (bit indices of the cards already
+/// in the current trick, 0–3), given the trump and whether this is the game's first trick.
+#[inline]
 pub fn play_levels(trick: &[u8], trump: Option<Suit>, first_trick: bool) -> PlayLevels {
     let aces = CardSet::value(Value::Ace);
     let green = CardSet::suit(Suit::Green);
     let Some((&first, rest)) = trick.split_first() else {
         return if first_trick {
             PlayLevels {
-                levels: [
-                    aces,
-                    green,
-                    CardSet::ALL,
-                    CardSet::EMPTY,
-                    CardSet::EMPTY,
-                    CardSet::EMPTY,
-                ],
-                len: 3,
+                levels: [aces, green, CardSet::ALL, CardSet::ALL, CardSet::ALL, CardSet::ALL],
             }
         } else {
             PlayLevels {
                 levels: [CardSet::ALL; 6],
-                len: 1,
             }
         };
     };
@@ -237,9 +247,9 @@ pub fn play_levels(trick: &[u8], trump: Option<Suit>, first_trick: bool) -> Play
     let winner_suit = winner / 9;
 
     // Cards that take the trick: higher cards of the winner's suit, and every trump if the
-    // winner is not a trump. (`allowed_cards` compares the new high card with the old one by
-    // `Card`'s derived order; for trumps over a non-trump that can exclude them here, but the
-    // trump level below then admits the same cards, so the allowed set is identical.)
+    // winner is not a trump. (The former `Vec` rule compared the new high card with the old one
+    // by `Card`'s derived order; for trumps over a non-trump that could exclude them there, but
+    // the trump level below admits the same cards, so the allowed set is identical.)
     let above_winner = CardSet(CardSet::suit(SUITS[winner_suit as usize]).0 & !((2u64 << winner) - 1));
     let trumps_over = match trump {
         Some(t) if t as u8 != winner_suit => CardSet::suit(t),
@@ -254,17 +264,95 @@ pub fn play_levels(trick: &[u8], trump: Option<Suit>, first_trick: bool) -> Play
     let trump_suit = trump.map(CardSet::suit).unwrap_or(CardSet::EMPTY);
     PlayLevels {
         levels: [led_ace, higher & led_suit, led_suit, higher, trump_suit, CardSet::ALL],
-        len: 6,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::cards::{allowed_cards, get_all_cards};
+    use crate::game::cards::{allowed_cards, get_all_cards, high_card};
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::{Rng, SeedableRng};
+
+    /// The former `Vec`-based rule (main at 68c98f0), kept as the reference oracle.
+    mod reference {
+        use crate::game::cards::{Card, Suit, Value};
+        use std::cmp::max;
+
+        pub fn high_card(trick: Vec<&Card>, trump: Option<Suit>) -> Option<&Card> {
+            if trick.is_empty() {
+                return None;
+            }
+            let trick_suit = trick[0].suit;
+            let suit = match trump {
+                Some(t) if trick.iter().any(|c| c.suit == t) => t,
+                _ => trick_suit,
+            };
+            trick.into_iter().filter(|x| x.suit == suit).reduce(max)
+        }
+
+        fn allowed_first(cards: Vec<&Card>) -> Vec<&Card> {
+            let mut allowed: Vec<&Card> = cards.iter().copied().filter(|c| c.value == Value::Ace).collect();
+            if allowed.is_empty() {
+                allowed = cards.iter().copied().filter(|c| c.suit == Suit::Green).collect();
+            }
+            if allowed.is_empty() {
+                cards
+            } else {
+                allowed
+            }
+        }
+
+        pub fn allowed_cards<'a>(
+            trick: Vec<&'a Card>,
+            cards: Vec<&'a Card>,
+            trump: Option<Suit>,
+            first_trick: bool,
+        ) -> Vec<&'a Card> {
+            let Some(current_high_card) = high_card(trick.clone(), trump) else {
+                return if first_trick { allowed_first(cards) } else { cards };
+            };
+            let trick_suit = trick[0].suit;
+            if first_trick {
+                let ace: Vec<&Card> = cards
+                    .iter()
+                    .copied()
+                    .filter(|c| c.suit == trick_suit && c.value == Value::Ace)
+                    .collect();
+                if ace.len() == 1 {
+                    return ace;
+                }
+            }
+            let same_color: Vec<&Card> = cards.iter().copied().filter(|c| c.suit == trick_suit).collect();
+            let higher: Vec<&Card> = cards
+                .iter()
+                .copied()
+                .filter(|c| {
+                    let mut t = trick.clone();
+                    t.push(c);
+                    high_card(t, trump) > Some(current_high_card)
+                })
+                .collect();
+            let higher_same_color: Vec<&Card> = higher.iter().copied().filter(|c| c.suit == trick_suit).collect();
+            if !higher_same_color.is_empty() {
+                return higher_same_color;
+            }
+            if !same_color.is_empty() {
+                return same_color;
+            }
+            if !higher.is_empty() {
+                return higher;
+            }
+            if let Some(t) = trump {
+                let trumps: Vec<&Card> = cards.iter().copied().filter(|c| c.suit == t).collect();
+                if !trumps.is_empty() {
+                    return trumps;
+                }
+            }
+            cards
+        }
+    }
 
     #[test]
     fn index_round_trips() {
@@ -294,25 +382,30 @@ mod tests {
             let trump = trumps[rng.random_range(0..5)];
             let first_trick = rng.random_bool(0.3);
 
-            let expected = CardSet::from_cards(allowed_cards(
-                trick.iter().collect(),
-                hand.iter().collect(),
-                trump,
-                first_trick,
-            ));
-            let trick_idx: Vec<u8> = trick.iter().map(index).collect();
-            let levels = play_levels(&trick_idx, trump, first_trick);
+            let expected = reference::allowed_cards(trick.iter().collect(), hand.iter().collect(), trump, first_trick);
+            // The engine function: same cards, in hand order.
             assert_eq!(
-                levels.allowed(CardSet::from_cards(hand)),
+                allowed_cards(trick.iter().collect(), hand.iter().collect(), trump, first_trick),
                 expected,
                 "trick {trick:?} hand {hand:?} trump {trump:?} first {first_trick}"
             );
+            let expected = CardSet::from_cards(expected);
+            let trick_idx: Vec<u8> = trick.iter().map(index).collect();
+            let levels = play_levels(&trick_idx, trump, first_trick);
+            assert_eq!(levels.allowed(CardSet::from_cards(hand)), expected);
             for c in expected.iter() {
                 assert!(
                     levels.excluded_by(c).is_subset(!CardSet::from_cards(hand)),
                     "a legal play must not exclude a held card"
                 );
             }
+            // Trick order: the bitset winner equals the reference high card.
+            let mut full = trick.to_vec();
+            full.extend(hand.iter().take(4 - trick_len).cloned());
+            let full_idx: Vec<u8> = full.iter().map(index).collect();
+            let want = reference::high_card(full.iter().collect(), trump);
+            assert_eq!(Some(&full[trick_winner(&full_idx, trump)]), want);
+            assert_eq!(high_card(full.iter().collect(), trump), want);
         }
     }
 }
