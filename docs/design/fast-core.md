@@ -13,6 +13,7 @@ information and are handled at the belief level.
 | Legal cards | `bits::play_levels(trick, trump, first_trick).allowed(hand)` | `fast`, `Game` (`legal_cards`), `cards::allowed_cards`, knowledge (`excluded_by`) |
 | Trick winner | `bits::trick_winner(trick, trump)`, `bits::takes` | `fast`, `Game` (`act_card`), `cards::high_card` |
 | Card, pair and last-trick points | `game::points` (`VALUE_POINTS`, `CARD_POINTS`, `PAIR_POINTS`, `LAST_TRICK_BONUS`, `points_set`) | `fast`, `Game` |
+| Running team points (cards, pairs, tricks) | `game::scoring::team_points` | `fast::from_game`, `GameFinishedInfo`, devtool |
 | Game and series scores | `game::scoring` (`game_scores`, `SeriesTally`) | `GameFinishedInfo::scores` |
 
 ## State
@@ -64,7 +65,7 @@ about 17 ns per play.
 - `FastState::new(hands, leader)`: the start of card play (first trick, no trump, all seats
   `Own`).
 - `FastState::from_game(&Game) -> Option<FastState>`: phases `Raising`, `Trick`, `StartTrick`
-  and `Ended`. Pair points come from the `NewTrump` callbacks, as in `GameFinishedInfo`.
+  and `Ended`. Points and tricks per team come from `scoring::team_points`.
 - `FastState::from_parts(FastParts) -> Result<FastState, GameError::InvalidState>`, and
   `parts()`: all fields as a plain struct, for sampled worlds (knowledge → sampler → `FastParts`).
   This checks disjoint cards, hand sizes against `tricks_done` and the trick, and that the tricks

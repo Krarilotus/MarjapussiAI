@@ -14,10 +14,11 @@
 use crate::bits::{self, CardSet, SUITS};
 use crate::game::cards::Suit;
 use crate::game::errors::GameError;
-use crate::game::gameevent::{ActionType, GameCallback};
+use crate::game::gameevent::ActionType;
 use crate::game::gamestate::GamePhase;
 use crate::game::player::PlayerTrumpPossibilities;
 use crate::game::points::{CARD_POINTS, LAST_TRICK_BONUS, PAIR_POINTS};
+use crate::game::scoring;
 use crate::game::Game;
 
 /// Tricks in a game.
@@ -159,8 +160,7 @@ impl FastState {
     }
 
     /// The card-play state of a `Game` (phases `Raising`, `Trick`, `StartTrick`, `Ended`);
-    /// `None` in other phases. Pair points are the `NewTrump` callbacks of the events, credited
-    /// to the team of the player who caused them (as in `GameFinishedInfo`).
+    /// `None` in other phases. Points and tricks per team come from `scoring::team_points`.
     pub fn from_game(game: &Game) -> Option<FastState> {
         let s = &game.state;
         let announce_open = match s.phase {
@@ -188,16 +188,10 @@ impl FastState {
             .fold(0, |b, i| b | 1 << i);
         fast.announce_open = announce_open;
         fast.tricks_done = s.all_tricks.len() as u8;
-        for t in &s.all_tricks {
-            let team = (t.winner.0 % 2) as usize;
-            fast.tricks[team] += 1;
-            fast.card_points[team] += t.points.0 as i16;
-        }
-        for e in &game.all_events {
-            if let Some(GameCallback::NewTrump(suit)) = e.callback {
-                fast.pair_points[(e.last_action.player.0 % 2) as usize] += PAIR_POINTS[suit as usize] as i16;
-            }
-        }
+        let points = scoring::team_points(&s.all_tricks, &game.all_events);
+        fast.tricks = points.tricks;
+        fast.card_points = points.cards.map(|p| p as i16);
+        fast.pair_points = points.pairs.map(|p| p as i16);
         Some(fast)
     }
 
