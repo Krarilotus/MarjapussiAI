@@ -12,6 +12,45 @@
 //!   After a tournament round: ±1/5 of the point difference to the other team, and +300
 //!   (other team −300) for the team that first reached 500 (`SeriesSettings`).
 
+use crate::game::gameevent::{GameCallback, GameEvent};
+use crate::game::gamestate::FinishedTrick;
+use crate::game::points::PAIR_POINTS;
+
+/// Running points per team (team 0 = seats 0 and 2) at any state of a game.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TeamPoints {
+    /// Card points of the tricks won, including the last-trick bonus.
+    pub cards: [i32; 2],
+    /// Announced pairs: every `NewTrump` callback, credited to the team of the player whose
+    /// action caused it (announcement or answer).
+    pub pairs: [i32; 2],
+    pub tricks: [u8; 2],
+}
+
+impl TeamPoints {
+    /// Card points plus pair points.
+    pub fn total(&self) -> [i32; 2] {
+        [self.cards[0] + self.pairs[0], self.cards[1] + self.pairs[1]]
+    }
+}
+
+/// Running team points from a game's finished tricks and its events (`game.state.all_tricks`,
+/// `game.all_events`); the one place that adds them up.
+pub fn team_points(tricks: &[FinishedTrick], events: &[GameEvent]) -> TeamPoints {
+    let mut p = TeamPoints::default();
+    for t in tricks {
+        let team = (t.winner.0 % 2) as usize;
+        p.cards[team] += t.points.0;
+        p.tricks[team] += 1;
+    }
+    for e in events {
+        if let Some(GameCallback::NewTrump(suit)) = e.callback {
+            p.pairs[(e.last_action.player.0 % 2) as usize] += PAIR_POINTS[suit as usize];
+        }
+    }
+    p
+}
+
 /// Schwarz penalty in fifths of the game value (10/5 = 2×); the one owner of this factor.
 pub const SCHWARZ_FACTOR_FIFTHS: i32 = 10;
 

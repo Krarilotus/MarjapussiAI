@@ -6,8 +6,10 @@ mod common;
 
 use common::{new_game, pick_action, scores_264fa3d};
 use marjapussi_engine::game::gameinfo::GameFinishedInfo;
+use marjapussi_engine::game::points::{points_card, LAST_TRICK_BONUS, PAIR_POINTS};
 use marjapussi_engine::game::scoring::{
-    game_scores, round5, GameOutcome, SeriesLength, SeriesSettings, SeriesTally, SCHWARZ_FACTOR_FIFTHS,
+    game_scores, round5, team_points, GameOutcome, SeriesLength, SeriesSettings, SeriesTally, TeamPoints,
+    SCHWARZ_FACTOR_FIFTHS,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -147,4 +149,42 @@ fn random_games_score_like_264fa3d() {
     eprintln!("3,000 random games, {schwarz} schwarz");
     assert!(schwarz >= 30, "schwarz games covered: {schwarz}");
     assert_eq!(series.games_played(), 3_000);
+}
+
+#[test]
+fn running_team_points_at_every_state() {
+    let mut pairs_seen = 0;
+    for seed in 0..1_000 {
+        let mut rng = StdRng::seed_from_u64(9_000_000 + seed);
+        let mut game = new_game(&mut rng);
+        let mut last = TeamPoints::default();
+        while !game.ended() {
+            let a = pick_action(&game, &mut rng);
+            game.apply_action_mut(a);
+            let p = team_points(&game.state.all_tricks, &game.all_events);
+            let mut cards = [0; 2];
+            for (i, t) in game.state.all_tricks.iter().enumerate() {
+                let bonus = if i == 8 { LAST_TRICK_BONUS } else { 0 };
+                cards[(t.winner.0 % 2) as usize] += t.cards.iter().map(|c| points_card(*c).0).sum::<i32>() + bonus;
+            }
+            assert_eq!(p.cards, cards, "seed {seed}");
+            assert_eq!(
+                p.tricks.iter().map(|&t| t as usize).sum::<usize>(),
+                game.state.all_tricks.len()
+            );
+            for team in 0..2 {
+                let added = p.pairs[team] - last.pairs[team];
+                assert!(
+                    added == 0 || PAIR_POINTS.contains(&added),
+                    "seed {seed}: pair step {added}"
+                );
+                pairs_seen += (added > 0) as u32;
+            }
+            last = p;
+        }
+        let info = GameFinishedInfo::from(game);
+        let expected = if info.no_one_played { last.cards } else { last.total() };
+        assert_eq!(expected, info.team_points, "seed {seed}");
+    }
+    assert!(pairs_seen >= 50, "pairs covered: {pairs_seen}");
 }
