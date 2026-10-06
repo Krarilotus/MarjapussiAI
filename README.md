@@ -9,7 +9,7 @@ This work stands on the shoulders of the Marjapussi community's code:
 
 | What | Who | Where |
 |---|---|---|
-| The game site marjapussi.de, the rules engine in Rust and the Python package that powers the site | Samuel Leßmann ([SamuelLess](https://github.com/SamuelLess)) | [marjapussi-rs](https://github.com/SamuelLess/marjapussi-rs) (Rust), [marjapussi](https://github.com/SamuelLess/marjapussi) (Python, incl. agents with belief tracking); the site code `marjapussi-online` is private |
+| The game site marjapussi.de, the rules engine in Rust and the Python package that powers the site | Samuel Leßmann ([SamuelLess](https://github.com/SamuelLess)) | [marjapussi-rs](https://github.com/SamuelLess/marjapussi-rs) (Rust), [marjapussi](https://github.com/SamuelLess/marjapussi) (Python, incl. agents with belief tracking) |
 | Rule corrections to the Rust engine, the players' conventions this AI follows, and this project | [Krarilotus](https://github.com/Krarilotus) | [marjapussi](https://github.com/Krarilotus/marjapussi) (Python AI experiments), this repository |
 | Earlier AI work: perfect-information search and bidding heuristics | [schmiddihhh](https://github.com/schmiddihhh) | [marjapussi-ki](https://github.com/schmiddihhh/marjapussi-ki), [marjapussi-ki-py](https://github.com/schmiddihhh/marjapussi-ki-py), [marjapussi](https://github.com/schmiddihhh/marjapussi) |
 | Earlier AI work | [HerrMotz](https://github.com/HerrMotz) | [marjapussi-ki](https://github.com/HerrMotz/marjapussi-ki), [marjapussi](https://github.com/HerrMotz/marjapussi) |
@@ -69,7 +69,7 @@ Evaluation is always measured:
 - recorded human games as a check.
 
 ## How to contribute
-- **Ask first.** Open an issue or contact [Krarilotus](https://github.com/Krarilotus) before larger changes; the repository is private for now.
+- **Ask first.** Open an issue or contact [Krarilotus](https://github.com/Krarilotus) before larger changes.
 - **Fairness is non-negotiable.** An agent may only use its own seat's view. New knowledge or belief code needs the soundness and privacy tests to stay green.
 - **Facts vs beliefs.** Certain deductions belong in `knowledge` and must be sound. Probabilities belong in `beliefs` and must agree with the facts.
 - **One owner per concept.** No duplicated rules, no unexplained numeric literals; reuse the engine's functions.
