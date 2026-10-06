@@ -79,6 +79,8 @@ fn fast_matches_game_at_every_card_play_state() {
                 assert_eq!(moves.len(), fresh.moves().len());
                 assert_eq!(moves.len() as u32, game_cards.len() + game_announce.count_ones());
                 for m in moves {
+                    assert_eq!(Move::from_code(m.code()), m);
+                    assert!((m.code() as usize) < Move::CODES);
                     assert!(
                         game.legal_actions().contains(&m.to_action(seat)),
                         "seed {seed}: {m:?} not legal in Game"
@@ -159,10 +161,10 @@ fn from_parts_rejects_impossible_states() {
     p.hands[1] = p.hands[0];
     assert!(FastState::from_parts(p).is_err(), "shared cards");
     let mut p = good.parts();
-    p.tricks_done = 1;
+    p.public.tricks_done = 1;
     assert!(FastState::from_parts(p).is_err(), "hand sizes vs tricks done");
     let mut p = good.parts();
-    p.trick_len = 1;
-    p.trick[0] = p.hands[0].iter().next().unwrap();
+    p.public.trick_len = 1;
+    p.public.trick[0] = p.hands[0].iter().next().unwrap();
     assert!(FastState::from_parts(p).is_err(), "card both in trick and hand");
 }

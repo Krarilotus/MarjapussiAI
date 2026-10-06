@@ -59,17 +59,23 @@ for c in s.legal_cards().iter() {
 ```
 Copy-make measured equal to a make/unmake variant within noise (perft, 3–4 tricks left), so
 copy was kept and the unmake was removed (performance.md, log entry 10). A full tree walk costs
-about 17 ns per play.
+about 14–17 ns per play.
 
 ## Building states
 - `FastState::new(hands, leader)`: the start of card play (first trick, no trump, all seats
   `Own`).
 - `FastState::from_game(&Game) -> Option<FastState>`: phases `Raising`, `Trick`, `StartTrick`
   and `Ended`. Points and tricks per team come from `scoring::team_points`.
-- `FastState::from_parts(FastParts) -> Result<FastState, GameError::InvalidState>`, and
-  `parts()`: all fields as a plain struct, for sampled worlds (knowledge → sampler → `FastParts`).
-  This checks disjoint cards, hand sizes against `tricks_done` and the trick, and that the tricks
-  add up.
+- `PublicState`: the public part (everything except the hands: trick, leader, trump, called
+  suits, announce rights, tricks and points per team), with `to_move()` computed by the same
+  formula as `FastState::to_move()`. `FastState::public()` reads it.
+- `FastState::from_public(PublicState, hands) -> Result<FastState, GameError::InvalidState>`:
+  a sampled world (knowledge → sampler → hands). `FastParts { hands, public }`, `parts()` and
+  `from_parts` are the same as one struct. The check covers disjoint cards, hand sizes
+  against `tricks_done` and the trick, and that the tricks add up.
+- Move codes: `Move::code()` / `Move::from_code(u8)`. Cards are `0..36` (bit index), an
+  announcement is `Move::ANNOUNCE + suit` (36–39); `Move::CODES = 40`. Use these for
+  transposition tables and move lists; no second encoding.
 - `Move::to_action(seat)` and `Move::from_action(&ActionType)` convert to and from `Game`
   actions.
 

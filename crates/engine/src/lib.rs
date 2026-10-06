@@ -13,7 +13,7 @@ mod game;
 mod inline;
 
 pub use bits::{next_seat, partner, play_levels, takes, trick_winner, CardSet, PlayLevels};
-pub use fast::{FastParts, FastState, Move, Moves, TRICKS};
+pub use fast::{FastParts, FastState, Move, Moves, PublicState, TRICKS};
 pub use game::cards::{get_all_cards, suit_of, value_of, Card, Suit, Value, CARDS, SUITS, VALUES};
 pub use game::clock::{current_time_string, format_time, now_millis, Clock};
 pub use game::errors::GameError;
