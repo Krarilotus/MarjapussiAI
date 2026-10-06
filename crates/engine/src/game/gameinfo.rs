@@ -1,11 +1,11 @@
 use serde::Serialize;
 
 use crate::game::cards::Card;
-use crate::game::gameevent::{ActionType, GameAction, GameCallback, GameEvent, GameEventPlayer};
+use crate::game::gameevent::{ActionType, GameAction, GameEvent, GameEventPlayer};
 use crate::game::gamestate::{FinishedTrick, GamePhase};
 use crate::game::player::{PlaceAtTable, Player};
-use crate::game::points::{points_pair, Points};
-use crate::game::scoring::{game_scores, GameOutcome, SCHWARZ_FACTOR_FIFTHS};
+use crate::game::points::Points;
+use crate::game::scoring::{game_scores, team_points, GameOutcome, SCHWARZ_FACTOR_FIFTHS};
 use crate::game::{current_time_string, Game};
 
 #[derive(Debug, Clone, Serialize)]
@@ -111,14 +111,8 @@ impl From<Game> for GameFinishedInfo {
         }
         let no_one_played = game.state.value.0 == 115;
 
-        let mut players_points = [Points(0); 4];
-        let mut players_tricks: [Vec<FinishedTrick>; 4] = [vec![], vec![], vec![], vec![]];
-        for trick in &game.state.all_tricks {
-            players_tricks[trick.winner.0 as usize].push(*trick);
-            players_points[trick.winner.0 as usize] += trick.points;
-        }
-        let tricks_party_zero = players_tricks[0].len() + players_tricks[2].len();
-        let schwarz_game = tricks_party_zero == 0 || tricks_party_zero == 9;
+        let points = team_points(&game.state.all_tricks, &game.all_events);
+        let schwarz_game = points.tricks.contains(&0);
 
         let mut playing_party: Option<PlaceAtTable> = None;
         let mut won: Option<bool> = None;
@@ -132,9 +126,6 @@ impl From<Game> for GameFinishedInfo {
                 if ActionType::NewBid(game.state.value.0) == event.last_action.action_type {
                     playing_player = event.last_action.player;
                     playing_party = Some(event.last_action.player.party());
-                }
-                if let Some(GameCallback::NewTrump(suit)) = event.callback {
-                    players_points[event.last_action.player.0 as usize] += points_pair(suit);
                 }
                 if let ActionType::Pass(cards) = event.last_action.action_type.clone() {
                     if passed_forth.is_none() {
@@ -165,15 +156,11 @@ impl From<Game> for GameFinishedInfo {
 
             after_passing = Some(cards_after_passing);
 
-            let points_party = players_points[playing_party.unwrap().0 as usize]
-                + players_points[playing_party.unwrap().partner().0 as usize];
-            won = Some(points_party >= game.state.value);
+            won = Some(points.total()[playing_party.unwrap().0 as usize] >= game.state.value.0);
         }
 
-        let team_points = [
-            (players_points[0] + players_points[2]).0,
-            (players_points[1] + players_points[3]).0,
-        ];
+        // Announced pairs count only when a contract was played (open owner question).
+        let team_points = if no_one_played { points.cards } else { points.total() };
 
         GameFinishedInfo {
             info: game.info.clone(),
