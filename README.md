@@ -31,18 +31,13 @@ The AI is built in layers, each with one job:
 - **The players:**
   - **`heuristic`** (agent A): a strategy built from general ideas (what a card is worth to keep or to give, how likely our pair can be announced, what the contract still needs), not a pile of case rules;
   - **`solver`**: an exact endgame search over the deals the player can believe in.
-- **Tools and the dev UI (`tools`, `server`, `web`):**
+- **Tools (`tools`):**
   - an arena with duplicate deals for fair comparisons;
-  - evaluation against recorded human games;
-  - a local table that reuses the marjapussi.de interface, with a Debug mode that shows each seat's knowledge and beliefs.
+  - evaluation against recorded human games.
 
 More: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/design/`](docs/design/).
 
 ## How to run it
-
-### Play against the AI (v1)
-<!-- Filled in by the U9 work: prerequisites, clone, card art (MARJA_ASSETS), the one command, the URL, the agent version. -->
-Instructions follow with v1.
 
 ### Build and test
 ```sh
