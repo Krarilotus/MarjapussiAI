@@ -142,27 +142,40 @@ pub fn finished_line(f: &GameFinishedInfo) -> String {
     out
 }
 
-/// The site's per-game scoring (`marjapussi-online` `SeriesTable.vue`), ported line by line,
-/// on a `GameFinishedInfo`. The source of truth for scoring (owner decision D2).
-pub fn site_scores(info: &GameFinishedInfo) -> [i32; 2] {
-    let mut value = info.game_value.0;
-    if value == 115 {
-        value = 0;
-    }
-    let playing = info.playing_party.map(|p| (p.0 % 2) as usize);
-    let points = info.team_points;
-    let round = |p: i32| (p + 2).div_euclid(5) * 5;
+// Literals of the site's `SeriesTable.vue`, named once.
+const SITE_NO_BID: i32 = 115;
+const SITE_MIN_BID: i32 = 120;
+const SITE_SCHWARZ_FIFTHS: i32 = 10;
+const SITE_ROUND: i32 = 5;
+
+/// The site's per-game scoring (`marjapussi-online` `SeriesTable.vue`), ported line by line:
+/// the one test oracle for scoring (owner decision D2). `value` as recorded (115 = all
+/// passed), the playing team, both teams' points and the game's schwarz flag.
+pub fn site_game_scores(value: i32, playing: Option<usize>, points: [i32; 2], schwarz: bool) -> [i32; 2] {
+    let value = if value == SITE_NO_BID { 0 } else { value };
+    let round = |p: i32| (p + SITE_ROUND / 2).div_euclid(SITE_ROUND) * SITE_ROUND;
     let mut gets = [round(points[0]), round(points[1])];
     for t in 0..2 {
         if playing == Some(t) {
             gets[t] = if points[t] >= value { value } else { -value };
         }
     }
-    if points[0] == 0 && info.schwarz_game && value >= 120 && gets[1] > 0 {
-        gets[0] = -10 * value / 5;
+    // In the site's order: team 0 first, then team 1 against the updated value.
+    if points[0] == 0 && schwarz && value >= SITE_MIN_BID && gets[1] > 0 {
+        gets[0] = -SITE_SCHWARZ_FIFTHS * value / 5;
     }
-    if points[1] == 0 && info.schwarz_game && value >= 120 && gets[0] > 0 {
-        gets[1] = -10 * value / 5;
+    if points[1] == 0 && schwarz && value >= SITE_MIN_BID && gets[0] > 0 {
+        gets[1] = -SITE_SCHWARZ_FIFTHS * value / 5;
     }
     gets
+}
+
+/// The oracle on a finished game of our engine.
+pub fn site_scores(info: &GameFinishedInfo) -> [i32; 2] {
+    site_game_scores(
+        info.game_value.0,
+        info.playing_party.map(|p| (p.0 % 2) as usize),
+        info.team_points,
+        info.schwarz_game,
+    )
 }

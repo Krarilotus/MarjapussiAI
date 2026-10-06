@@ -2,6 +2,7 @@
 //! re-exports the public API.
 
 mod apply_action;
+pub(crate) mod bidding;
 pub(crate) mod cards;
 pub(crate) mod clock;
 pub(crate) mod errors;

@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use crate::bits::{self, CardSet};
+use crate::game::bidding::NO_BID;
 use crate::game::cards::{Card, Suit};
 use crate::game::clock::current_time_string;
 use crate::game::gameevent::{ActionType, AnswerType, GameAction, GameCallback, QuestionType};
@@ -96,7 +97,7 @@ fn stop_bidding(t: Mutable, action: &GameAction) -> Option<GameCallback> {
         state.player_at_turn.next()
     };
     //bidding ends
-    if state.bidding_players == 1 && state.value > Points(115) {
+    if state.bidding_players == 1 && state.value != NO_BID {
         state.phase = GamePhase::PassingForth;
         for player in &state.players {
             if player.bidding {
