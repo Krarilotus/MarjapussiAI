@@ -16,15 +16,21 @@ const GAMES: u64 = 3_000;
 fn new_game(rng: &mut StdRng) -> Game {
     let mut deck = get_all_cards();
     deck.shuffle(rng);
-    let hands = [deck[0..9].to_vec(), deck[9..18].to_vec(), deck[18..27].to_vec(), deck[27..36].to_vec()];
+    let hands = [
+        deck[0..9].to_vec(),
+        deck[9..18].to_vec(),
+        deck[18..27].to_vec(),
+        deck[27..36].to_vec(),
+    ];
     let names = ["S0", "S1", "S2", "S3"].map(String::from);
     Game::new("soundness".into(), names, Some(hands))
 }
 
 fn pick_action(game: &Game, rng: &mut StdRng) -> engine::game::gameevent::GameAction {
     let legal = &game.legal_actions;
-    let (undo, normal): (Vec<_>, Vec<_>) =
-        legal.iter().partition(|a| matches!(a.action_type, ActionType::UndoRequest));
+    let (undo, normal): (Vec<_>, Vec<_>) = legal
+        .iter()
+        .partition(|a| matches!(a.action_type, ActionType::UndoRequest));
     if normal.is_empty() || (!undo.is_empty() && rng.random_bool(0.05)) {
         return legal[rng.random_range(0..legal.len())].clone();
     }
@@ -59,15 +65,23 @@ fn play_and_check(seed: u64, cov: &mut Coverage) -> (u32, u32) {
         game.apply_action_mut(action);
         let event = game.all_events.last().unwrap();
         for seat in 0..4u8 {
-            let Some(seat_event) = filters[seat as usize].filter(event) else { continue };
+            let Some(seat_event) = filters[seat as usize].filter(event) else {
+                continue;
+            };
             if seat == 0 {
                 match seat_event {
                     observation::SeatEvent::Undone => cov.undone += 1,
-                    observation::SeatEvent::YesHalf { asker_has_half: true, .. } => cov.yes_half_joint += 1,
-                    observation::SeatEvent::YesHalf { asker_has_half: false, .. } => cov.yes_half_only += 1,
+                    observation::SeatEvent::YesHalf {
+                        asker_has_half: true, ..
+                    } => cov.yes_half_joint += 1,
+                    observation::SeatEvent::YesHalf {
+                        asker_has_half: false, ..
+                    } => cov.yes_half_only += 1,
                     observation::SeatEvent::NoHalf { .. } => cov.no_half += 1,
                     observation::SeatEvent::NoPair { .. } => cov.no_pair += 1,
-                    observation::SeatEvent::YesPair { .. } | observation::SeatEvent::AnnounceTrump { .. } => cov.yes_pair_or_announce += 1,
+                    observation::SeatEvent::YesPair { .. } | observation::SeatEvent::AnnounceTrump { .. } => {
+                        cov.yes_pair_or_announce += 1
+                    }
                     observation::SeatEvent::Pass { cards: None, .. } => cov.hidden_pass += 1,
                     _ => {}
                 }
@@ -112,15 +126,28 @@ fn knowledge_is_sound_in_random_games() {
         certain_at_last_trick += c;
         events += e;
     }
+    let known_at_last_trick = certain_at_last_trick as f64 / (GAMES as f64 * 4.0);
     eprintln!(
-        "{GAMES} games, {events} events checked x 4 seats; at the last trick a seat knows the owner of {:.2} of the 3 hidden cards on average",
-        certain_at_last_trick as f64 / (GAMES as f64 * 4.0)
+        "{GAMES} games, {events} events checked x 4 seats; at the last trick a seat knows the owner of {known_at_last_trick:.2} of the 3 hidden cards on average"
+    );
+    // Information floor (guards S18/S19 against silent weakening; v0 measures 1.29).
+    assert!(
+        known_at_last_trick >= 1.2,
+        "knowledge got weaker: {known_at_last_trick:.2}"
     );
     eprintln!(
         "coverage (seat 0 view): undone {}, joint YesHalf {}, YesHalf+OnlyHalf {}, NoHalf {}, NoPair {}, YesPair/Announce {}, hidden passes {}",
         cov.undone, cov.yes_half_joint, cov.yes_half_only, cov.no_half, cov.no_pair, cov.yes_pair_or_announce, cov.hidden_pass
     );
-    for (name, n) in [("undo", cov.undone), ("joint half", cov.yes_half_joint), ("only half", cov.yes_half_only), ("no half", cov.no_half), ("no pair", cov.no_pair), ("pair", cov.yes_pair_or_announce), ("hidden pass", cov.hidden_pass)] {
+    for (name, n) in [
+        ("undo", cov.undone),
+        ("joint half", cov.yes_half_joint),
+        ("only half", cov.yes_half_only),
+        ("no half", cov.no_half),
+        ("no pair", cov.no_pair),
+        ("pair", cov.yes_pair_or_announce),
+        ("hidden pass", cov.hidden_pass),
+    ] {
         assert!(n >= 50, "too little coverage of {name}: {n}");
     }
 }

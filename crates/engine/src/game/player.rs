@@ -6,6 +6,9 @@ use serde::Serialize;
 
 use crate::game::cards::{get_all_cards, Card};
 
+/// Cards dealt to each player.
+pub const HAND_SIZE: usize = 9;
+
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PlaceAtTable(pub u8);
 
@@ -109,8 +112,8 @@ pub fn create_players(names: [String; 4], cards: Option<[Vec<Card>; 4]>) -> [Pla
         let mut cards: [Vec<Card>; 4] = [vec![], vec![], vec![], vec![]];
         for i in 0..4 {
             let mut one_players_cards = vec![];
-            for c in 0..9 {
-                one_players_cards.push(deck.get(i * 9 + c).unwrap().clone());
+            for c in 0..HAND_SIZE {
+                one_players_cards.push(deck.get(i * HAND_SIZE + c).unwrap().clone());
             }
             cards[i] = one_players_cards;
         }

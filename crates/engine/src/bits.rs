@@ -34,6 +34,15 @@ pub fn card(index: u8) -> Card {
     }
 }
 
+/// Seat helpers (seats are 0–3 clockwise; partners sit opposite).
+pub const fn partner(seat: u8) -> u8 {
+    (seat + 2) % 4
+}
+
+pub const fn next_seat(seat: u8) -> u8 {
+    (seat + 1) % 4
+}
+
 /// A set of cards as 36 bits.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct CardSet(pub u64);
@@ -204,9 +213,22 @@ pub fn play_levels(trick: &[u8], trump: Option<Suit>, first_trick: bool) -> Play
     let green = CardSet::suit(Suit::Green);
     let Some((&first, rest)) = trick.split_first() else {
         return if first_trick {
-            PlayLevels { levels: [aces, green, CardSet::ALL, CardSet::EMPTY, CardSet::EMPTY, CardSet::EMPTY], len: 3 }
+            PlayLevels {
+                levels: [
+                    aces,
+                    green,
+                    CardSet::ALL,
+                    CardSet::EMPTY,
+                    CardSet::EMPTY,
+                    CardSet::EMPTY,
+                ],
+                len: 3,
+            }
         } else {
-            PlayLevels { levels: [CardSet::ALL; 6], len: 1 }
+            PlayLevels {
+                levels: [CardSet::ALL; 6],
+                len: 1,
+            }
         };
     };
     let winner = rest.iter().fold(first, |w, &c| if takes(c, w, trump) { c } else { w });
@@ -214,18 +236,21 @@ pub fn play_levels(trick: &[u8], trump: Option<Suit>, first_trick: bool) -> Play
     let led_suit = CardSet::suit(SUITS[led as usize]);
     let winner_suit = winner / 9;
 
-    // `allowed_cards` keeps a card when the trick's new high card compares greater than the
-    // old one under `Card`'s derived order (suit first, then value). Within the winner's suit
-    // that means a higher value; a trump over a non-trump winner counts only if the trump
-    // suit sorts after the winner's suit. In that case the trump level below admits the
-    // same cards, so the allowed set is unchanged.
+    // Cards that take the trick: higher cards of the winner's suit, and every trump if the
+    // winner is not a trump. (`allowed_cards` compares the new high card with the old one by
+    // `Card`'s derived order; for trumps over a non-trump that can exclude them here, but the
+    // trump level below then admits the same cards, so the allowed set is identical.)
     let above_winner = CardSet(CardSet::suit(SUITS[winner_suit as usize]).0 & !((2u64 << winner) - 1));
     let trumps_over = match trump {
-        Some(t) if t as u8 != winner_suit && t as u8 > winner_suit => CardSet::suit(t),
+        Some(t) if t as u8 != winner_suit => CardSet::suit(t),
         _ => CardSet::EMPTY,
     };
     let higher = above_winner | trumps_over;
-    let led_ace = if first_trick { CardSet::single(led * 9 + Value::Ace as u8) } else { CardSet::EMPTY };
+    let led_ace = if first_trick {
+        CardSet::single(led * 9 + Value::Ace as u8)
+    } else {
+        CardSet::EMPTY
+    };
     let trump_suit = trump.map(CardSet::suit).unwrap_or(CardSet::EMPTY);
     PlayLevels {
         levels: [led_ace, higher & led_suit, led_suit, higher, trump_suit, CardSet::ALL],
@@ -252,7 +277,13 @@ mod tests {
     #[test]
     fn play_levels_mirror_allowed_cards() {
         let mut rng = StdRng::seed_from_u64(7);
-        let trumps = [None, Some(Suit::Green), Some(Suit::Acorns), Some(Suit::Bells), Some(Suit::Red)];
+        let trumps = [
+            None,
+            Some(Suit::Green),
+            Some(Suit::Acorns),
+            Some(Suit::Bells),
+            Some(Suit::Red),
+        ];
         for _ in 0..200_000 {
             let mut deck = get_all_cards();
             deck.shuffle(&mut rng);
@@ -271,9 +302,16 @@ mod tests {
             ));
             let trick_idx: Vec<u8> = trick.iter().map(index).collect();
             let levels = play_levels(&trick_idx, trump, first_trick);
-            assert_eq!(levels.allowed(CardSet::from_cards(hand)), expected, "trick {trick:?} hand {hand:?} trump {trump:?} first {first_trick}");
+            assert_eq!(
+                levels.allowed(CardSet::from_cards(hand)),
+                expected,
+                "trick {trick:?} hand {hand:?} trump {trump:?} first {first_trick}"
+            );
             for c in expected.iter() {
-                assert!(levels.excluded_by(c).is_subset(!CardSet::from_cards(hand)), "a legal play must not exclude a held card");
+                assert!(
+                    levels.excluded_by(c).is_subset(!CardSet::from_cards(hand)),
+                    "a legal play must not exclude a held card"
+                );
             }
         }
     }
