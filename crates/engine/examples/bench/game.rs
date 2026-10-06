@@ -68,10 +68,10 @@ macro_rules! game_bench {
                 .collect()
         }
 
-        /// (ns per action with `apply_action_mut`, ns per action with `apply_action`,
-        ///  ns per full game with `apply_action_mut`, ns per `legal_actions()` call,
-        ///  ns per `legal_actions()` in card play, actions)
-        pub fn run(scripts: &[Script], reps: usize) -> [f64; 5] {
+        /// ns per action with `apply_action_mut`, ns per action with `apply_action`, ns per full
+        /// game with `apply_action_mut`, ns per `legal_actions()` call (all phases, card play),
+        /// ns per random card playout from the second trick (clone included).
+        pub fn run(scripts: &[Script], reps: usize) -> [f64; 6] {
             let actions: u64 = scripts.iter().map(|s| s.picks.len() as u64).sum();
             let games = scripts.len() as u64;
             let mut total_mut = 0.0;
@@ -123,7 +123,44 @@ macro_rules! game_bench {
                     black_box(g.legal_actions());
                 }
             });
-            [per_action_mut, per_action_imm, total_mut, legal_all, legal_cards]
+            let positions = playout_positions(scripts);
+            let playout = best_ns(reps, positions.len() as u64, || {
+                let mut rng = Rng(99);
+                for g in &positions {
+                    black_box(card_playout(g.clone(), &mut rng));
+                }
+            });
+            [per_action_mut, per_action_imm, total_mut, legal_all, legal_cards, playout]
+        }
+
+        /// The state after the first trick (8 tricks left) of each script.
+        pub fn playout_positions(scripts: &[Script]) -> Vec<Game> {
+            scripts
+                .iter()
+                .filter_map(|s| {
+                    let mut game = new_game(&s.hands);
+                    for &p in &s.picks {
+                        if game.state.all_tricks.len() == 1 {
+                            return Some(game);
+                        }
+                        let a = game.legal_actions[p].clone();
+                        game.apply_action_mut(a);
+                    }
+                    None
+                })
+                .collect()
+        }
+
+        /// Plays random legal cards (no questions) to the end; returns the tricks played.
+        pub fn card_playout(mut game: Game, rng: &mut Rng) -> usize {
+            while !game.ended() {
+                let cards: Vec<usize> = (0..game.legal_actions.len())
+                    .filter(|&i| matches!(game.legal_actions[i].action_type, ActionType::CardPlayed(_)))
+                    .collect();
+                let a = game.legal_actions[cards[rng.below(cards.len())]].clone();
+                game.apply_action_mut(a);
+            }
+            game.state.all_tricks.len()
         }
     };
 }

@@ -167,28 +167,31 @@ impl fmt::Debug for CardSet {
 }
 
 /// The play rule for one decision: a hand may play `hand ∩ levels[k]` for the first
-/// level `k` that meets the hand.
+/// level `k` that meets the hand. Unused levels are `ALL` (a fixed length keeps `allowed`
+/// a short unrolled loop).
 #[derive(Clone, Copy, Debug)]
 pub struct PlayLevels {
     levels: [CardSet; 6],
-    len: usize,
 }
 
 impl PlayLevels {
-    /// The cards `hand` may play (the engine's `allowed_cards`).
+    /// The cards `hand` may play.
+    #[inline]
     pub fn allowed(&self, hand: CardSet) -> CardSet {
-        self.levels[..self.len]
-            .iter()
-            .map(|&level| level & hand)
-            .find(|allowed| !allowed.is_empty())
-            .unwrap_or(hand)
+        for level in self.levels {
+            let allowed = level & hand;
+            if !allowed.is_empty() {
+                return allowed;
+            }
+        }
+        hand
     }
 
     /// Cards the player cannot hold, given that they legally played `played`: every
     /// level before the first one that contains it was empty in their hand.
     pub fn excluded_by(&self, played: u8) -> CardSet {
         let mut excluded = CardSet::EMPTY;
-        for &level in &self.levels[..self.len] {
+        for level in self.levels {
             if level.contains(played) {
                 return excluded;
             }
@@ -230,20 +233,11 @@ pub fn play_levels(trick: &[u8], trump: Option<Suit>, first_trick: bool) -> Play
     let Some((&first, rest)) = trick.split_first() else {
         return if first_trick {
             PlayLevels {
-                levels: [
-                    aces,
-                    green,
-                    CardSet::ALL,
-                    CardSet::EMPTY,
-                    CardSet::EMPTY,
-                    CardSet::EMPTY,
-                ],
-                len: 3,
+                levels: [aces, green, CardSet::ALL, CardSet::ALL, CardSet::ALL, CardSet::ALL],
             }
         } else {
             PlayLevels {
                 levels: [CardSet::ALL; 6],
-                len: 1,
             }
         };
     };
@@ -270,7 +264,6 @@ pub fn play_levels(trick: &[u8], trump: Option<Suit>, first_trick: bool) -> Play
     let trump_suit = trump.map(CardSet::suit).unwrap_or(CardSet::EMPTY);
     PlayLevels {
         levels: [led_ace, higher & led_suit, led_suit, higher, trump_suit, CardSet::ALL],
-        len: 6,
     }
 }
 
