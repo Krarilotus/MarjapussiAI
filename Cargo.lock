@@ -275,6 +275,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "marjapussi-knowledge"
+version = "0.1.0"
+dependencies = [
+ "marjapussi-engine",
+ "marjapussi-observation",
+ "rand",
+]
+
+[[package]]
+name = "marjapussi-observation"
+version = "0.1.0"
+dependencies = [
+ "marjapussi-engine",
+]
+
+[[package]]
 name = "num-conv"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
