@@ -85,7 +85,7 @@ impl<T: Filler, const N: usize> Deref for InlineVec<T, N> {
     type Target = [T];
     #[inline]
     fn deref(&self) -> &[T] {
-        &self.items[..self.len as usize]
+        self.as_slice()
     }
 }
 

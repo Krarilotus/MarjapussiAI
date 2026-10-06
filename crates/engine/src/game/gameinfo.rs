@@ -36,7 +36,7 @@ impl From<Game> for GameFinishedInfo {
         if game.state.phase != GamePhase::Ended {
             panic!("Cannot convert unfinished game!");
         }
-        let no_one_played = game.state.value.0 == 115;
+        let no_one_played = game.state.declarer().is_none();
 
         let points = team_points(&game.state.all_tricks, &game.all_events);
         let schwarz_game = points.tricks.contains(&0);
