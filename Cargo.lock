@@ -288,6 +288,7 @@ name = "marjapussi-observation"
 version = "0.1.0"
 dependencies = [
  "marjapussi-engine",
+ "rand",
 ]
 
 [[package]]

@@ -7,12 +7,13 @@
 //! set-logic counting); see `docs/design/knowledge.md`. Only `SeatEvent`s go in, so this
 //! crate cannot see hidden cards.
 
-use engine::bits::{card, play_levels, CardSet, SUITS};
-use engine::game::cards::{Card, Suit};
+use engine::bits::{next_seat, partner, play_levels, CardSet, SUITS};
+use engine::game::cards::Suit;
+use engine::game::legal_actions::is_first_trick;
+use engine::game::player::HAND_SIZE;
 use observation::{Seat, SeatEvent};
 
 const MAX_CONSTRAINTS: usize = 16;
-const HAND_SIZE: u8 = 9;
 
 /// `lo <= |hand(seat) ∩ mask| <= hi`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -39,7 +40,7 @@ fn suit_bit(suit: Suit) -> u8 {
     1 << suit as u8
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Knowledge {
     me: Seat,
     possible: [CardSet; 4],
@@ -65,7 +66,7 @@ impl Knowledge {
             possible,
             certain,
             played: CardSet::EMPTY,
-            hand_len: [HAND_SIZE; 4],
+            hand_len: [HAND_SIZE as u8; 4],
             constraints: [Constraint::default(); MAX_CONSTRAINTS],
             n_constraints: 0,
             trump: None,
@@ -118,9 +119,9 @@ impl Knowledge {
         &self.constraints[..self.n_constraints as usize]
     }
 
-    /// Cards in the current trick, in play order.
-    pub fn trick(&self) -> Vec<Card> {
-        self.trick[..self.trick_len as usize].iter().map(|&i| card(i)).collect()
+    /// Bit indices of the cards in the current trick, in play order.
+    pub fn trick(&self) -> &[u8] {
+        &self.trick[..self.trick_len as usize]
     }
 
     pub fn apply(&mut self, event: &SeatEvent) -> Result<(), Contradiction> {
@@ -140,22 +141,46 @@ impl Knowledge {
                 for suit in SUITS {
                     let live = CardSet::halves(suit) - self.played;
                     if !self.is_called(suit) && live.len() == 2 {
-                        self.add_constraint(Constraint { seat, mask: live, lo: 0, hi: 1 });
+                        self.add_constraint(Constraint {
+                            seat,
+                            mask: live,
+                            lo: 0,
+                            hi: 1,
+                        });
                     }
                 }
             }
             SeatEvent::NoHalf { seat, suit } => self.exclude(seat, CardSet::halves(suit))?,
-            SeatEvent::YesHalf { seat, suit, asker_has_half } => {
-                let asker = (seat + 2) % 4;
+            SeatEvent::YesHalf {
+                seat,
+                suit,
+                asker_has_half,
+            } => {
+                let asker = partner(seat);
                 let live = CardSet::halves(suit) - self.played;
                 if asker_has_half {
-                    self.add_constraint(Constraint { seat, mask: live, lo: 1, hi: 1 });
-                    self.add_constraint(Constraint { seat: asker, mask: live, lo: 1, hi: 1 });
-                    self.exclude((seat + 1) % 4, live)?;
-                    self.exclude((seat + 3) % 4, live)?;
+                    self.add_constraint(Constraint {
+                        seat,
+                        mask: live,
+                        lo: 1,
+                        hi: 1,
+                    });
+                    self.add_constraint(Constraint {
+                        seat: asker,
+                        mask: live,
+                        lo: 1,
+                        hi: 1,
+                    });
+                    self.exclude(next_seat(seat), live)?;
+                    self.exclude(partner(next_seat(seat)), live)?;
                     self.set_trump(suit);
                 } else {
-                    self.add_constraint(Constraint { seat, mask: live, lo: 1, hi: 2 });
+                    self.add_constraint(Constraint {
+                        seat,
+                        mask: live,
+                        lo: 1,
+                        hi: 2,
+                    });
                     self.exclude(asker, live)?;
                 }
             }
@@ -224,8 +249,8 @@ impl Knowledge {
                 for x in 0..4 {
                     if x != t {
                         self.certain[x] -= cards;
-                        self.possible[x] -= cards;
                     }
+                    self.possible[x] -= cards;
                 }
                 self.certain[t] |= cards;
             }
@@ -251,7 +276,7 @@ impl Knowledge {
         if !c.is_subset(self.may_hold(seat)) {
             return Err(contradiction(seat, "played a card it cannot hold"));
         }
-        let levels = play_levels(&self.trick[..self.trick_len as usize], self.trump, self.hand_len[s] == HAND_SIZE);
+        let levels = play_levels(self.trick(), self.trump, is_first_trick(self.hand_len[s] as usize));
         self.exclude(seat, levels.excluded_by(played))?;
 
         for i in 0..self.n_constraints as usize {
@@ -361,7 +386,10 @@ pub struct Tracker {
 
 impl Tracker {
     pub fn new(me: Seat, hand: CardSet) -> Self {
-        Tracker { now: Knowledge::new(me, hand), before_last_undoable: None }
+        Tracker {
+            now: Knowledge::new(me, hand),
+            before_last_undoable: None,
+        }
     }
 
     pub fn knowledge(&self) -> &Knowledge {

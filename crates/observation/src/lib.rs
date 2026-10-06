@@ -4,7 +4,7 @@
 //! starting hand. Hidden passes carry no cards. Never use `GameInfoPlayer.meta_info`: it
 //! holds all four starting hands.
 
-use engine::bits::{index, CardSet};
+use engine::bits::{index, partner, CardSet};
 use engine::game::cards::Suit;
 use engine::game::gameevent::{ActionType, AnswerType, GameCallback, GameEvent, QuestionType};
 use engine::game::Game;
@@ -13,20 +13,52 @@ pub type Seat = u8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SeatEvent {
-    Bid { seat: Seat, value: i32 },
-    StopBidding { seat: Seat },
+    Bid {
+        seat: Seat,
+        value: i32,
+    },
+    StopBidding {
+        seat: Seat,
+    },
     /// Cards passed to the partner; `None` for the two seats that do not see them.
-    Pass { from: Seat, to: Seat, cards: Option<CardSet> },
-    CardPlayed { seat: Seat, card: u8 },
-    AnnounceTrump { seat: Seat, suit: Suit },
-    AskPair { seat: Seat },
-    AskHalf { seat: Seat, suit: Suit },
-    YesPair { seat: Seat, suit: Suit },
+    Pass {
+        from: Seat,
+        to: Seat,
+        cards: Option<CardSet>,
+    },
+    CardPlayed {
+        seat: Seat,
+        card: u8,
+    },
+    AnnounceTrump {
+        seat: Seat,
+        suit: Suit,
+    },
+    AskPair {
+        seat: Seat,
+    },
+    AskHalf {
+        seat: Seat,
+        suit: Suit,
+    },
+    YesPair {
+        seat: Seat,
+        suit: Suit,
+    },
     /// No pair in any suit not called yet.
-    NoPair { seat: Seat },
+    NoPair {
+        seat: Seat,
+    },
     /// The answerer holds a half; `asker_has_half` is the public callback about the asker.
-    YesHalf { seat: Seat, suit: Suit, asker_has_half: bool },
-    NoHalf { seat: Seat, suit: Suit },
+    YesHalf {
+        seat: Seat,
+        suit: Suit,
+        asker_has_half: bool,
+    },
+    NoHalf {
+        seat: Seat,
+        suit: Suit,
+    },
     /// The last bid, stop or card was taken back.
     Undone,
 }
@@ -46,7 +78,10 @@ pub struct SeatFilter {
 
 impl SeatFilter {
     pub fn new(seat: Seat) -> Self {
-        SeatFilter { seat, undo_accepts: vec![] }
+        SeatFilter {
+            seat,
+            undo_accepts: vec![],
+        }
     }
 
     pub fn seat(&self) -> Seat {
@@ -75,11 +110,18 @@ impl SeatFilter {
             ActionType::NewBid(value) => SeatEvent::Bid { seat, value: *value },
             ActionType::StopBidding => SeatEvent::StopBidding { seat },
             ActionType::Pass(cards) => {
-                let to = (seat + 2) % 4;
+                let to = partner(seat);
                 let visible = self.seat == seat || self.seat == to;
-                SeatEvent::Pass { from: seat, to, cards: visible.then(|| CardSet::from_cards(cards)) }
+                SeatEvent::Pass {
+                    from: seat,
+                    to,
+                    cards: visible.then(|| CardSet::from_cards(cards)),
+                }
             }
-            ActionType::CardPlayed(card) => SeatEvent::CardPlayed { seat, card: index(card) },
+            ActionType::CardPlayed(card) => SeatEvent::CardPlayed {
+                seat,
+                card: index(card),
+            },
             ActionType::AnnounceTrump(suit) => SeatEvent::AnnounceTrump { seat, suit: *suit },
             ActionType::Question(QuestionType::Yours) => SeatEvent::AskPair { seat },
             ActionType::Question(QuestionType::YourHalf(suit)) => SeatEvent::AskHalf { seat, suit: *suit },

@@ -7,3 +7,9 @@ license.workspace = true
 
 [dependencies]
 engine = { package = "marjapussi-engine", path = "../engine" }
+
+[dev-dependencies]
+rand = "0.9.0"
+
+[lib]
+name = "observation"

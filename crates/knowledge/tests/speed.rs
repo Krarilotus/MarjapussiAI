@@ -19,7 +19,12 @@ fn recorded_streams(games: u64) -> Vec<(u8, CardSet, Vec<SeatEvent>)> {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut deck = get_all_cards();
         deck.shuffle(&mut rng);
-        let hands = [deck[0..9].to_vec(), deck[9..18].to_vec(), deck[18..27].to_vec(), deck[27..36].to_vec()];
+        let hands = [
+            deck[0..9].to_vec(),
+            deck[9..18].to_vec(),
+            deck[18..27].to_vec(),
+            deck[27..36].to_vec(),
+        ];
         let mut game = Game::new("speed".into(), ["S0", "S1", "S2", "S3"].map(String::from), Some(hands));
         while !game.ended() {
             let legal: Vec<_> = game
@@ -57,5 +62,8 @@ fn knowledge_events_per_second() {
         best = best.min(ns);
         std::hint::black_box(checksum);
     }
-    eprintln!("{events} seat-events; best of 5: {best:.0} ns per event, {:.1} µs per seat per game", best * events as f64 / streams.len() as f64 / 1000.0);
+    eprintln!(
+        "{events} seat-events; best of 5: {best:.0} ns per event, {:.1} µs per seat per game",
+        best * events as f64 / streams.len() as f64 / 1000.0
+    );
 }
