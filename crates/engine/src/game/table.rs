@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use crate::game::apply_action::{self, Mutable};
+use crate::game::bidding::NO_BID;
 use crate::game::cards::Card;
 use crate::game::clock::{now_millis, Clock};
 use crate::game::errors::GameError;
@@ -12,7 +13,6 @@ use crate::game::gamestate::{GamePhase, GameState};
 use crate::game::legal_actions;
 use crate::game::meta::GameMetaInfo;
 use crate::game::player::{create_players, PlaceAtTable};
-use crate::game::points::Points;
 
 /// Wrapper for Game and all of its details. Legal actions are computed on demand
 /// (`legal_actions`, `legal_actions_into`, `is_legal`).
@@ -66,7 +66,7 @@ impl Game {
             | GamePhase::PassingBack
             | GamePhase::Raising
             | GamePhase::PendingUndo(_) => None,
-            GamePhase::Bidding if self.state.value == Points(115) => None,
+            GamePhase::Bidding if self.state.value == NO_BID => None,
             _ => self.last_state.as_ref().map(|last| last.player_at_turn),
         }
     }
@@ -147,6 +147,7 @@ mod tests {
     use crate::game::clock::{current_time_string, format_time};
     use crate::game::gameevent::QuestionType;
     use crate::game::player::{PlaceAtTable, PlayerTrumpPossibilities};
+    use crate::game::points::Points;
     use rand::prelude::IndexedMutRandom;
 
     #[test]
