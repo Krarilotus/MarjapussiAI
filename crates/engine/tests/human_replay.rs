@@ -18,7 +18,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use common::{finished_line, site_scores, Digest};
+use common::{finished_line, site_game_scores, site_scores, Digest};
 use marjapussi_engine::Game;
 use marjapussi_engine::GameFinishedInfo;
 use marjapussi_engine::PlaceAtTable;
@@ -243,34 +243,23 @@ fn replay(rec: &Value) -> Result<Game, String> {
     }
 }
 
-/// The site's per-game scoring (`SeriesTable.vue`), on the record's own fields (the record's
-/// points and schwarz flag, which old site versions got wrong), by team.
+/// The scoring oracle on the record's own fields (its points and schwarz flag, which old site
+/// versions got wrong).
 fn record_site_scores(rec: &Value) -> Option<[i32; 2]> {
     let names: Vec<&str> = rec["players"].as_array()?.iter().filter_map(|v| v.as_str()).collect();
     let pts = |i: usize| rec["players_points"][names[i]].as_i64().map(|p| p as i32);
     let points = [pts(0)? + pts(2)?, pts(1)? + pts(3)?];
-    let mut value = rec["game_value"].as_i64()? as i32;
-    if value == 115 {
-        value = 0;
-    }
     let playing = rec["playing_player"]
         .as_str()
-        .and_then(|p| names.iter().position(|n| *n == p));
+        .and_then(|p| names.iter().position(|n| *n == p))
+        .map(|seat| seat % 2);
     let schwarz = rec["schwarz_game"].as_bool().unwrap_or(false);
-    let round = |p: i32| (p + 2).div_euclid(5) * 5;
-    let mut gets = points.map(round);
-    for t in 0..2 {
-        if playing.map(|p| p % 2) == Some(t) {
-            gets[t] = if points[t] >= value { value } else { -value };
-        }
-    }
-    let before = gets;
-    for t in 0..2 {
-        if points[t] == 0 && schwarz && value >= 120 && before[1 - t] > 0 {
-            gets[t] = -10 * value / 5;
-        }
-    }
-    Some(gets)
+    Some(site_game_scores(
+        rec["game_value"].as_i64()? as i32,
+        playing,
+        points,
+        schwarz,
+    ))
 }
 
 #[test]

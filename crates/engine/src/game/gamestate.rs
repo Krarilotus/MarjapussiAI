@@ -1,5 +1,6 @@
 use serde::Serialize;
 
+use crate::game::bidding::NO_BID;
 use crate::game::cards::{Card, Suit};
 use crate::game::gameevent::ActionType;
 use crate::game::player::{PlaceAtTable, Player};
@@ -98,7 +99,7 @@ impl Clone for GameState {
 impl GameState {
     /// The declarer: the player whose bid set the game value; `None` if all passed.
     pub fn declarer(&self) -> Option<PlaceAtTable> {
-        if self.value == Points(115) {
+        if self.value == NO_BID {
             return None;
         }
         self.bidding_history
@@ -130,7 +131,7 @@ impl GameState {
             trump: None,
             trump_called: InlineVec::new(),
             player_at_turn: PlaceAtTable(0),
-            value: Points(115),
+            value: NO_BID,
             bidding_players: 4,
             bidding_history: vec![],
             players,
