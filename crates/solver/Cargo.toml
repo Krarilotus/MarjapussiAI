@@ -1,0 +1,18 @@
+[package]
+name = "marjapussi-solver"
+version = "0.1.0"
+description = "Exact card-play solver on engine::fast, and move evaluation over sampled worlds (layer 4)."
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+engine = { package = "marjapussi-engine", path = "../engine" }
+knowledge = { package = "marjapussi-knowledge", path = "../knowledge" }
+rand = { version = "0.9.0", default-features = false }
+
+[dev-dependencies]
+observation = { package = "marjapussi-observation", path = "../observation" }
+rand = "0.9.0"
+
+[lib]
+name = "solver"

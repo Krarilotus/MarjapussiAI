@@ -12,7 +12,7 @@ mod fast;
 mod game;
 mod inline;
 
-pub use bits::{next_seat, partner, play_levels, takes, trick_winner, winning_seat, CardSet, PlayLevels};
+pub use bits::{next_seat, opponents, partner, play_levels, takes, trick_winner, winning_seat, CardSet, PlayLevels};
 pub use fast::{FastParts, FastState, Move, Moves, PublicState};
 pub use game::bidding::{bid_range, is_bid, BID_STEP, MAX_BID, NO_BID};
 pub use game::cards::{get_all_cards, suit_of, value_of, Card, Suit, Value, CARDS, SUITS, VALUES};
@@ -23,7 +23,7 @@ pub use game::gameinfo::GameFinishedInfo;
 pub use game::gamestate::{FinishedTrick, GamePhase, GameState};
 pub use game::legal_actions::is_first_trick;
 pub use game::meta::GameMetaInfo;
-pub use game::parse::{parse_legacy_format, LegacyGameFormat};
+pub use game::parse::{parse_action, parse_legacy_format, parse_pass, LegacyGameFormat};
 pub use game::player::{hands_from_deck, PlaceAtTable, Player, PlayerTrumpPossibilities, HAND_SIZE, TRICKS};
 pub use game::points::{
     points_card, points_pair, points_set, points_trick, Points, CARD_POINTS, LAST_TRICK_BONUS, PAIR_POINTS,

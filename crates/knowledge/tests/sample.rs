@@ -185,7 +185,7 @@ fn sampler_is_sound_in_random_games() {
 #[test]
 fn counts_and_marginals_match_enumeration() {
     let mut rng = StdRng::seed_from_u64(11);
-    let (mut states, mut tied, mut deals) = (0u64, 0u64, 0u64);
+    let (mut states, mut tied, mut deals, mut listed_states) = (0u64, 0u64, 0u64, 0u64);
     for seed in 0..200 {
         for_each_state(seed, |t, _| {
             let k = t.knowledge();
@@ -204,6 +204,16 @@ fn counts_and_marginals_match_enumeration() {
                 }
             }
             assert_eq!(space.holder_counts(), counts, "seed {seed}: holder counts");
+            check_feature_leaves(k, &all, &counts, seed);
+            if all.len() <= 1_000 {
+                let mut listed = vec![];
+                space.for_each_deal(|h| listed.push(*h));
+                let mut expected = all.clone();
+                listed.sort_by_key(|h| h.map(|c| c.0));
+                expected.sort_by_key(|h| h.map(|c| c.0));
+                assert_eq!(listed, expected, "seed {seed}: for_each_deal");
+                listed_states += 1;
+            }
             let n = all.len() as u64;
             let held = |x: usize, keep: &dyn Fn(u64) -> bool| {
                 (0..36u8)
@@ -232,7 +242,57 @@ fn counts_and_marginals_match_enumeration() {
         });
     }
     eprintln!("{states} states with <= 12 unknown cards, {tied} with constrained cards, {deals} deals enumerated");
+    eprintln!("for_each_deal equals the enumeration on {listed_states} states with <= 1,000 deals");
     assert!(tied >= 200, "too little constraint coverage: {tied}");
+}
+
+/// `DealSpace::with_features`: the same deals, and its leaves give the exact joint
+/// distribution of the unknown aces and halves (per suit) over the hidden seats.
+fn check_feature_leaves(k: &Knowledge, all: &[Hands], counts: &[[u64; CARDS]; 4], seed: u64) {
+    let space = DealSpace::with_features(k);
+    assert_eq!(space.count(), all.len() as u64, "seed {seed}: feature count");
+    assert_eq!(&space.holder_counts(), counts, "seed {seed}: feature holder counts");
+    let feature_cards = (CardSet::ACES | CardSet::HALVES) & unknown(k);
+    let key = |held: [CardSet; 3]| -> Vec<u8> {
+        held.iter()
+            .flat_map(|&h| {
+                let h = h & feature_cards;
+                std::iter::once((h & CardSet::ACES).len() as u8)
+                    .chain(engine::SUITS.map(|s| (h & CardSet::halves(s)).len() as u8))
+            })
+            .collect()
+    };
+    let hidden = space.hidden();
+    let mut want: HashMap<Vec<u8>, u64> = HashMap::new();
+    for hands in all {
+        *want.entry(key(hidden.map(|y| hands[y as usize]))).or_default() += 1;
+    }
+    let groups = space.group_cards();
+    assert!(
+        feature_cards.is_subset(groups.iter().fold(CardSet::EMPTY, |a, &g| a | g)),
+        "seed {seed}: untied feature cards"
+    );
+    let mut got: HashMap<Vec<u8>, u64> = HashMap::new();
+    for (w, splits) in space.leaves() {
+        // Each group's cards are exchangeable: a split names its counts only.
+        let mut k3 = vec![0u8; 15];
+        for (g, sp) in groups.iter().zip(splits) {
+            let c = g.iter().next().unwrap();
+            let slot = if CardSet::ACES.contains(c) {
+                0
+            } else if CardSet::HALVES.contains(c) {
+                1 + engine::suit_of(c) as usize
+            } else {
+                continue;
+            };
+            for j in 0..3 {
+                k3[j * 5 + slot] += sp[j];
+            }
+        }
+        *got.entry(k3).or_default() += w;
+    }
+    got.retain(|_, w| *w > 0);
+    assert_eq!(got, want, "seed {seed}: feature leaves");
 }
 
 /// Chi-square of sample frequencies against the uniform distribution over the enumeration.

@@ -38,7 +38,9 @@ pub struct LegacyGameFormat {
     schwarz_game: bool,
 }
 
-fn parse_action(action: String) -> Result<GameAction, Error> {
+/// One action of the legacy (marjapussi.de) log, e.g. `"1,PROV,125"`; passes are grouped
+/// by `parse_pass`. `PROV,0` is a pass, `PRMO,0` (no raise) comes back as `NewBid(0)`.
+pub fn parse_action(action: String) -> Result<GameAction, Error> {
     let err = Err(Error::other(format!("The action {} could not be parsed.", action)));
 
     let parts: Vec<&str> = action.split(',').collect();
@@ -74,7 +76,8 @@ fn parse_action(action: String) -> Result<GameAction, Error> {
     })
 }
 
-fn parse_pass(actions: Vec<String>) -> GameAction {
+/// The four `PASS`/`PBCK` lines of one pass as one action.
+pub fn parse_pass(actions: Vec<String>) -> GameAction {
     let player_seat = &actions[0][0..1].parse::<u8>().unwrap();
     let mut cards = vec![];
     for action in actions {

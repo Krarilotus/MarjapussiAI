@@ -6,7 +6,7 @@ Layers, dependencies pointing down. Each crate has one façade (`lib.rs`) and ow
 |---|---|---|---|
 | 6 serve | `server` | thin edge: game server / UI bridge, difficulty profiles | later |
 | 5 policy | `policy` | learned decisions (bid, pass, question/trump, play); trained with PPO-family / GRPO on top of layer 3 features | after research round |
-| 4 search | `search`, `solver` | belief-sampled determinized search; exact endgame solver (last ~4 cards per player) | next |
+| 4 search | `search`, `solver` | belief-sampled determinized search; exact endgame solver (last ~4 cards per player) | `solver` v0 (exact solver, world-sampled move values) — `docs/design/solver.md` |
 | 3 knowledge | `knowledge` | **what a seat can know**: set-theoretic deduction from its own observation (possible / certain cards per player, voids, pairs and halves, standing cards, bidding conventions) | v0 (hard rules) — `docs/design/knowledge.md` |
 | 2 observation | `observation` | the seat's view: own hand + public events. The **only** input to layers 3–6 | v0 |
 | 1 rules | `engine` | game rules, legal actions, scoring (marjapussi.de as source of truth); the `FastState` card-play core for search; a façade in `lib.rs` (inner modules private) (`docs/design/fast-core.md`, `performance.md`) | **done** |

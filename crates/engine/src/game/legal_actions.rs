@@ -4,7 +4,7 @@
 
 use crate::bits::{self, CardSet};
 use crate::game::bidding::{bid_range, is_bid};
-use crate::game::cards::{Card, Suit, SUITS};
+use crate::game::cards::{Card, Suit};
 use crate::game::gameevent::{ActionType, AnswerType, GameAction, QuestionType};
 use crate::game::gamestate::{GamePhase, GameState};
 use crate::game::player::HAND_SIZE;
@@ -184,11 +184,6 @@ fn push_cards(state: &GameState, out: &mut Vec<GameAction>) {
     }
 }
 
-/// Suits of which `hand` holds both King and Ober, in enum order.
-fn pair_suits(hand: CardSet) -> impl Iterator<Item = Suit> {
-    SUITS.into_iter().filter(move |&s| CardSet::halves(s).is_subset(hand))
-}
-
 fn push_question(state: &GameState, actions: &mut Vec<GameAction>) {
     let player = state.player_at_turn();
     let action = |action_type| GameAction {
@@ -196,7 +191,7 @@ fn push_question(state: &GameState, actions: &mut Vec<GameAction>) {
         player: player.place_at_table,
     };
     if player.trump.may_announce() {
-        for suit in pair_suits(CardSet::from_cards(&player.cards)) {
+        for suit in CardSet::from_cards(&player.cards).pair_suits() {
             if !state.trump_called.contains(&suit) {
                 actions.push(action(ActionType::AnnounceTrump(suit)));
             }
@@ -222,7 +217,7 @@ fn push_answer(state: &GameState, question: QuestionType, actions: &mut Vec<Game
     match question {
         QuestionType::Yours => {
             let start = actions.len();
-            for suit in pair_suits(hand) {
+            for suit in hand.pair_suits() {
                 //don't allow double calling
                 if !state.trump_called.contains(&suit) {
                     actions.push(answer(AnswerType::YesPair(suit)));

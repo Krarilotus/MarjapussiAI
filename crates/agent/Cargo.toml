@@ -1,0 +1,14 @@
+[package]
+name = "marjapussi-agent"
+version = "0.1.0"
+description = "The interface of every AI player: one seat's view in, one legal action and its explanation out."
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+engine = { package = "marjapussi-engine", path = "../engine" }
+observation = { package = "marjapussi-observation", path = "../observation" }
+knowledge = { package = "marjapussi-knowledge", path = "../knowledge" }
+
+[lib]
+name = "agent"

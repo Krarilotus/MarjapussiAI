@@ -1,0 +1,160 @@
+//! Every weight of the convention models in one place: the encoders (what a seat sends with a
+//! bid or a pass) and their readings. Defaults are HP1's "normal" profile (moved from
+//! `heuristic::Params`, D-d). A flat TOML file (`key = value` lines) overrides single keys.
+
+macro_rules! params {
+    ($($(#[doc = $doc:literal])* $name:ident: $ty:ty = $default:expr,)*) => {
+        #[derive(Clone, Debug, PartialEq)]
+        pub struct Params {
+            $($(#[doc = $doc])* pub $name: $ty,)*
+        }
+
+        impl Default for Params {
+            fn default() -> Self {
+                Params { $($name: $default,)* }
+            }
+        }
+
+        impl Params {
+            /// The trust θ in a seat of this kind (D-f: one fitted value per kind; a human seat
+            /// keeps its relation's field, both at the human value).
+            pub fn trust(&self, kind: agent::SeatKind, partner: bool) -> f32 {
+                match kind {
+                    agent::SeatKind::Heuristic => self.trust_agent,
+                    _ if partner => self.trust_partner,
+                    _ => self.trust_opponent,
+                }
+            }
+
+            /// Sets one key; `Ok(false)` if the key is not a convention parameter.
+            pub fn set(&mut self, key: &str, value: &str) -> Result<bool, String> {
+                match key {
+                    $(stringify!($name) => {
+                        self.$name = value.parse().map_err(|_| format!("bad value for {key}: {value}"))?
+                    })*
+                    _ => return Ok(false),
+                }
+                Ok(true)
+            }
+
+            /// All parameters as flat TOML lines.
+            pub fn to_toml(&self) -> String {
+                let mut out = String::new();
+                $(out.push_str(&format!("{} = {}\n", stringify!($name), self.$name));)*
+                out
+            }
+        }
+    };
+}
+
+params! {
+    // The bid encoder (HB-0 … HB-5, HB-140a)
+    /// HB-5 variant: `TwoHalves` only if the pair values of the two halves' suits add up to ≥ 140.
+    /// KB batch 1b: on ([O] 2026-10-07: "Strict 140+ variant is better"); the encoder and the
+    /// reading use it alike (`Message::holds`).
+    strict_two_halves: bool = true,
+    /// HB-140a variant: shift +5 whenever a step crosses 140 (default: only when one lands on it).
+    skip_on_any_cross: bool = false,
+    /// HB-0: the ace and the halves are told only in the first this-many bidding actions (0 = always).
+    tell_window: u32 = 4,
+    /// HB-0: an ace alone is not told at 140 or more unless the team showed a pair.
+    ace_at_140_needs_pair: bool = true,
+    /// HB-7: never bid above EGP + this (HP1's gate; read for HP1 seats). C32: the design's
+    /// hand-set 0 (§3.1 HB-7, M1), not the −20 chosen by duplicate strength (J17).
+    bid_overreach: f32 = 0.0,
+    /// HB-8: take the game by +5 when EGP ≥ next bid + this, with nothing left to tell. C32:
+    /// the hand-set 10 of M1, not the 30 set with the human EGP fit.
+    take_margin: f32 = 10.0,
+    /// HB-9, read for HP1 seats: HP1 still sends a message up to 140 that HB-7 would stop
+    /// while winning the game by accident stays unlikely, i.e. while its EGP is within this many
+    /// points of the target (its risk test needs the seat's own beliefs, so the margin is
+    /// fitted on independent self-play: `beliefs_study`, suite `seed4101`).
+    hp1_info_margin: f32 = 0.0,
+
+    // The bid reading (HR-2 … HR-7)
+    conf_general: f32 = 0.8,
+    /// P12: "second +5 = two halves" is trusted like the other messages.
+    conf_two_halves: f32 = 0.8,
+    conf_team_first: f32 = 0.6,
+    conf_partner_passed: f32 = 0.4,
+    /// P3, human reading: share of Red-pair holders whose pair message is +15 instead of +20.
+    /// C32: 0, humans read by the owner's convention like HP1 seats; the 0.73 measured on the
+    /// human games is a human-game adjustment the owner does not want (2026-10-06).
+    human_red_as_big: f32 = 0.0,
+    /// P3, D-f: read seats that play HP1 with HP1's own bid policy (false: the human model).
+    /// KB batch 1: false. Every seat is read with our convention ([O] Q1b), which HP1 now
+    /// bids by itself (B-tell, B-block, B-quiet); `hp1::bid_prob` models the removed EGP gates.
+    read_hp1_as_hp1: bool = false,
+    /// Share of the non-conforming mass that still reads the step literally (no 140 shift).
+    literal_share: f32 = 0.5,
+    /// Likelihood floor ε of every convention reading (bids and passes): a belief never
+    /// becomes a fact.
+    convention_floor: f32 = 0.02,
+    /// §3.4 trust θ per seat kind (D-f): human seats by relation and HP1 seats. C32: all at the
+    /// design's stated start value 0.9 (§3.4, after the owner's "there could be bluffs, but its
+    /// also sometimes unlikely"), none fitted.
+    trust_partner: f32 = 0.9,
+    trust_opponent: f32 = 0.9,
+    trust_agent: f32 = 0.9,
+    /// Mass of the generic step distribution on jumps other than +5 … +20.
+    generic_eps: f32 = 0.1,
+    /// HB-140b from the speaker's side: P(cross 140 | message, no pair of its own).
+    cross_without_own_pair: f32 = 0.5,
+    /// HR-4: factor on unexplained bids above 140 for a seat without a pair of its own.
+    generic_cross_no_pair: f32 = 0.2,
+    /// HR-3: class-independent mass of a bid of exactly 140 (a claim or a defence).
+    claim_140_prior: f32 = 0.3,
+    /// HR-7: P(a barrier bid is a block) right after the other team showed a big pair, else.
+    block_prior: f32 = 0.3,
+    block_base: f32 = 0.02,
+
+    // The pass models (§1.4, §5): P(option | hand) = softmax(score / τ)
+    pass_temperature: f32 = 1.0,
+    // Passing forth (HP-1 … HP-8)
+    w_blank: f32 = 10.0,
+    w_blank_two: f32 = 6.0,
+    w_info_ace: f32 = 4.0,
+    w_info_half: f32 = 2.0,
+    w_info_complete: f32 = 3.0,
+    w_quality: f32 = 0.3,
+    w_need_ace: f32 = 6.0,
+    w_need_half: f32 = 5.0,
+    /// HP-5: very weak tie-breaker (≈ 5 % of `w_blank`).
+    w_green: f32 = 0.5,
+    w_split: f32 = 12.0,
+    w_keep_pair: f32 = 15.0,
+    w_pass_acorns: f32 = 6.0,
+    w_pass_needed: f32 = 10.0,
+    /// HP-8: bonus per small card (6 … U) of a suit the pass makes me blank in.
+    w_small_blank: f32 = 3.0,
+    /// HP-7: multiplier on HP-3/HP-4 when no option makes a suit blank.
+    w_awkward: f32 = 1.5,
+    // Passing back (HK-1 … HK-7)
+    w_trump_keep: f32 = 20.0,
+    w_half_keep: f32 = 30.0,
+    w_side_suit: f32 = 8.0,
+    w_keep_ace: f32 = 10.0,
+    w_keep_standing: f32 = 5.0,
+    w_void: f32 = 4.0,
+    w_short: f32 = 2.0,
+    w_last_trick: f32 = 15.0,
+    /// HK-7 (P9): bonus for giving all my aces back (at most this many) to schnippeln in trick 1.
+    w_schnippeln: f32 = 0.0,
+    schnippeln_max_aces: u32 = 1,
+    /// P-T(s) via MH: minimum P(MH holds the other half).
+    partner_half_conf: f32 = 0.5,
+
+    // Expected game points (§2), the estimate HP1 bids on (read here for HP1 seats, P3). C32:
+    // the design's hand-set formula of M1, 60 + 7 per ace + 3 per ten + 10 × P(partner ace),
+    // plus the best team pair and half the second; no fitted weights (the halves, longest-suit
+    // and void terms came only with the fits and are 0).
+    egp_base: f32 = 60.0,
+    egp_ace: f32 = 7.0,
+    egp_ten: f32 = 3.0,
+    egp_partner_ace: f32 = 10.0,
+    egp_half: f32 = 0.0,
+    egp_long: f32 = 0.0,
+    egp_void: f32 = 0.0,
+    egp_meld: f32 = 1.0,
+    egp_second_pair_share: f32 = 0.5,
+}

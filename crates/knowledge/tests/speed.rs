@@ -63,3 +63,51 @@ fn knowledge_events_per_second() {
         best * events as f64 / streams.len() as f64 / 1000.0
     );
 }
+
+/// The known-form queries K1–K5 (C27): ns per query, read after every event of every seat.
+#[test]
+#[ignore]
+fn known_form_queries() {
+    let streams = recorded_streams(500);
+    let mut sums = [0u128; 5];
+    let mut n = 0u128;
+    let mut sink = 0u32;
+    for (seat, hand, stream) in &streams {
+        let mut tracker = Tracker::new(*seat, *hand);
+        for event in stream {
+            tracker.apply(event).unwrap();
+            let k = tracker.knowledge();
+            let y = (seat + 1) % 4;
+            let t = Instant::now();
+            sink += k.standing(*seat).len();
+            sums[0] += t.elapsed().as_nanos();
+            let t = Instant::now();
+            sink += k.team_pairs(*seat).possible() as u32;
+            sums[1] += t.elapsed().as_nanos();
+            let t = Instant::now();
+            sink += k.count_bounds(y, engine::Suit::Red).1 as u32;
+            sums[2] += t.elapsed().as_nanos();
+            let t = Instant::now();
+            sink += k.dealt_certain(y).len();
+            sums[3] += t.elapsed().as_nanos();
+            let t = Instant::now();
+            sink += k.dealt_possible(y).len();
+            sums[4] += t.elapsed().as_nanos();
+            n += 1;
+        }
+    }
+    std::hint::black_box(sink);
+    let names = [
+        "standing(me)",
+        "team_pairs(me)",
+        "count_bounds",
+        "dealt_certain",
+        "dealt_possible",
+    ];
+    for (name, total) in names.iter().zip(sums) {
+        eprintln!(
+            "{name}: {:.0} ns per query (incl. ~20 ns timer overhead)",
+            total as f64 / n as f64
+        );
+    }
+}

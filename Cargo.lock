@@ -240,6 +240,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "518ef76f2f87365916b142844c16d8fefd85039bc5699050210a7778ee1cd1de"
 
 [[package]]
+name = "marjapussi-agent"
+version = "0.1.0"
+dependencies = [
+ "marjapussi-engine",
+ "marjapussi-knowledge",
+ "marjapussi-observation",
+]
+
+[[package]]
+name = "marjapussi-beliefs"
+version = "0.1.0"
+dependencies = [
+ "marjapussi-agent",
+ "marjapussi-engine",
+ "marjapussi-knowledge",
+ "marjapussi-observation",
+ "rand",
+]
+
+[[package]]
 name = "marjapussi-engine"
 version = "0.1.0"
 dependencies = [
@@ -248,6 +268,32 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+]
+
+[[package]]
+name = "marjapussi-eval"
+version = "0.1.0"
+dependencies = [
+ "marjapussi-agent",
+ "marjapussi-beliefs",
+ "marjapussi-engine",
+ "marjapussi-knowledge",
+ "marjapussi-observation",
+ "marjapussi-solver",
+ "rand",
+]
+
+[[package]]
+name = "marjapussi-heuristic"
+version = "0.1.0"
+dependencies = [
+ "marjapussi-agent",
+ "marjapussi-beliefs",
+ "marjapussi-engine",
+ "marjapussi-knowledge",
+ "marjapussi-observation",
+ "marjapussi-solver",
+ "rand",
 ]
 
 [[package]]
@@ -265,6 +311,30 @@ version = "0.1.0"
 dependencies = [
  "marjapussi-engine",
  "rand",
+]
+
+[[package]]
+name = "marjapussi-solver"
+version = "0.1.0"
+dependencies = [
+ "marjapussi-engine",
+ "marjapussi-knowledge",
+ "marjapussi-observation",
+ "rand",
+]
+
+[[package]]
+name = "marjapussi-tools"
+version = "0.1.0"
+dependencies = [
+ "marjapussi-agent",
+ "marjapussi-beliefs",
+ "marjapussi-engine",
+ "marjapussi-eval",
+ "marjapussi-heuristic",
+ "marjapussi-knowledge",
+ "marjapussi-observation",
+ "serde_json",
 ]
 
 [[package]]

@@ -82,6 +82,7 @@ Measured v0 baseline (tier 0 only, release build, PC under load from other proje
 - `holder_counts()` / `marginals()`: the exact number (probability) of deals in which seat y holds card c; a zero count means the card is impossible there, so this also gives the exact possible sets;
 - `sample(rng)`: one deal, exactly uniform, without rejection;
 - `exact_sets()`: `certain` and `possible` made exact (cards held in every deal, and in some but not all). `Tracker::exact_sets()` caches it by event count, which only grows (undos included), so the cache cannot go stale. The cache is a `Cell`, so `Tracker` is `Send` but not `Sync`. Guards after every event: cache = fresh computation; true hand ⊆ exact may_hold; every live card has a holder; tier-0 certain ⊆ exact certain, exact possible ⊆ tier-0 possible; equal to enumeration on small states;
+- `for_each_deal(f)`: every consistent deal once, for exact evaluation when the count is small. Guard: equal to brute-force enumeration on 16,537 states with ≤ 1,000 deals;
 - `sample_worlds(rng, n, belief)`: uniform samples weighted by a `Belief` (a likelihood hook for the soft layer; the weights are importance weights).
 
 Method (Investigator A §6.4–6.5):
@@ -110,8 +111,76 @@ Speed (`tests/sample_speed.rs`, release, 500 random games, PC shared with other 
 
 The worst case is a NoPair over four suits: 8 tied cards. Splitting each suit's pair as one group cut it from 182 µs (cards placed one by one) to 26 µs. Tier-0 speed is unchanged (A/B against `main`, interleaved: 35–44 ns per event on both).
 
+## Known forms K1–K6 (C26, C26b, C27; reasoning-system design v2 §3.1)
+Each concept below has a **known** form here: sound (it never claims what the true hands
+contradict; checked after every event in `tests/soundness.rs`), from one seat's view, with the
+cards it depends on (its **mask**, a dependency note: an event that changes no fact about these
+cards cannot change the answer). The belief layer invalidates by **epochs**, not by these masks
+(design v2 §8 F3: no card masks unless a benchmark shows a need). The **believed** form (a probability, 1 or 0
+where the known form decides) belongs to the `beliefs` crate (I2), not here.
+
+Notation: `C(x)` certain, `M(x) = C(x) ∪ P(x)` may hold, `Pl` played, `n(x)` hand size,
+`KO(s)` the K and O of suit s, `S(s)` the suit, `H(c)` the cards of c's suit that take c
+without trump (`engine::takes`), `t` the trump (if any), `opp(x)` x's two opponents.
+
+**Incremental or lazy.** State that changes per event is updated in `apply` (a few bit
+operations: the per-seat played cards, the exchange ledger, the public facts of K6). The queries
+K1–K5 are computed on read from that state (tens of ns, no allocation); `Knowledge` is `Copy`, so
+a caller keeps a result for the rest of a decision. Cost per event and per query: see the
+measurements at the end of this section.
+
+### K1 `standing(x)`: the cards of x that certainly win if x leads them now
+`c ∈ C(x)` stands iff
+1. every live card of `H(c)` is certainly with x's team: `H(c) − Pl ⊆ C(x) ∪ C(partner(x))`;
+2. if a trump `t ≠ suit(c)` is set: each opponent `o` certainly must follow (`count_lo(o, suit(c)) ≥ 1`) or certainly holds no trump (`M(o) ∩ S(t) = ∅`).
+
+- **Top trumps count:** for `suit(c) = t`, rule 2 is void (nothing beats a trump but a higher trump).
+- **The team, not the card:** if the partner holds a higher card, it may have to overtake; the trick is still ours. "Stands" means "our team wins this trick when I lead c".
+- **Trump changes:** "if led now" uses the trump as it is now; an announcement before the lead is a new event (and a new answer). Without trump nobody can ruff, so rule 2 is empty.
+- **Trick 1:** the lead rules (ace, then green) restrict *which* cards may be led, not whether they win; `standing` answers for every held card, the caller intersects with the legal cards.
+- **Last trick:** no special case (one card each; the rules above still decide).
+- **Undo:** a query; it follows the restored state.
+- **Mask:** `S(suit(c)) ∪ S(t)` (the suit for rule 1 and the opponents' following; the trump suit for the ruff) plus the opponents' hand sizes (count bounds, K4).
+
+### K2 `pairs(x)`: x's pairs, certain and still meldable
+For each suit `s` not yet called with both halves live (`KO(s) ∩ Pl = ∅`):
+- **certain:** `KO(s) ⊆ C(x)`;
+- **possible (meldable):** `KO(s) ⊆ M(x)` and no constraint of x caps `|H_x ∩ KO(s)|` below 2 (e.g. a "no pair" answer).
+
+Cards only: whether x still has the **right** to announce is a public fact (K6 `rights`), combined by the caller. A called pair is not meldable again (a half answer can only re-call it as trump, "StillTrump", without points). **Mask:** `KO(s)`.
+
+### K3 `team_pairs(x)`: the pairs of x's team, by holder
+MY (x holds both), YOUR (the partner holds both), OUR (one half each, in either assignment), each **certain** (from `C`) and **possible** (from `M`, with K2's constraint check for MY and YOUR). Same suit conditions as K2. **Mask:** `KO(s)`.
+
+### K4 `count_bounds(x, s)`: sound bounds on `|H_x ∩ S(s)|`
+- `lo = max(|C(x) ∩ S(s)|, n(x) − |M(x) − S(s)|, lo of x's constraints whose mask lies in S(s))`;
+- `hi = min(|M(x) ∩ S(s)|, n(x) − |C(x) − S(s)|)`.
+
+Voids are `hi = 0` (`is_void` is the same fact, kept as the cheap form). **Mask:** all cards (the second terms read x's whole hand through `n(x)`).
+
+### K5 the dealt hand (provenance; C26 K5, design D-e)
+Bids describe the **dealt** hand, before the exchange. The exchange is two passes in order: the first passer F gives 4 cards to its partner R (the declarer), then R gives 4 back (they may include cards F gave). From x's view, `gave(x)` / `got(x)` are the cards when x saw the pass (`Passed::Seen`), else `Hidden`.
+- **The first passer F:** `dealt(F) = ((now ∪ played) − got) ∪ gave`. Cards it gave and got back are in `gave`, so they stay.
+- **The second passer R:** `dealt(R) = (now ∪ played ∪ gave) − got`. Cards it passed on from `got` are removed by `− got`.
+- **Without exchange** (all passed): `dealt = now ∪ played`.
+
+Known forms from x's view (`now` known as `C`, unknown as `M`):
+- `dealt_certain(y)`: the formula with `now = C(y)`, where a **hidden** `got(y)` means "any card not certainly dealt elsewhere". So only y's cards that cannot have reached it in the exchange count (cards it played or holds outside what the giver could have given).
+- `dealt_possible(y)`: the formula with `now = M(y)`, a hidden `gave(y)` read as "anything its partner may hold or played" (the cards went there, or came back), minus what was certainly dealt to another seat.
+- **Mine** (x = me): exact, since I see both of my passes.
+- **Undo:** passes cannot be undone, plays can (the snapshot restores `played_by`).
+- **Mask:** the passed cards and the cards played by y.
+
+### K6 public facts (the engine's derivations, carried per seat)
+Rights per seat (Own / Yours / Ours), the declarer, the game value, the trick winners, and the team points (cards with the last-trick bonus, plus announced pairs). These are public, change only per event and must be **undone with it**, so they live in `Knowledge`'s per-event state. Every transition calls the engine's pure rule function (E8), the one owner of the rule: `winning_seat` for the trick winner (also of the trick in progress), `trick_points` for a finished trick (the last-trick bonus included), `trump_points` for a pair made trump, and `PlayerTrumpPossibilities::after_question` / `after_no_pair` for the rights. `knowledge` restates none of them; with a rule mutated in the engine (`trick_points` bonus + 7, "Yours" always to Ours), the soundness harness still passes, because both sides follow the engine. Card points and pair points are kept per team apart (their sum is `team_points`), and `Knowledge::public_state(to_move, announce_open)` gives the engine's `PublicState` for the solver's worlds (C28); the harness checks it equal to `FastState::from_game` at every event. The soundness harness checks after every event that every seat's public facts **equal the engine's** (`GameState::declarer`, the players' `trump` rights, `team_points`), so the engine stays the owner of their values.
+- Voids: `is_void` (K4), never re-derived from the plays in an agent.
+- **Mask:** none (event-level facts).
+
+### Measured (C27, release, PC shared with other projects)
+- **Per event** (`tests/speed.rs`, 435,060 seat events, best of 5): **+3 ns (+11 %)**. Measured by the Judge (J20-I1) in 5 interleaved rounds with two worktrees: `main` 0d4c56c 27–28 ns, I1 30–31 ns, in every round (my own 4 rounds, 31–33 vs 31–38 ns, were too noisy to see it). It is the copy of K5's ledger and K6's public facts in `Tracker`'s per-event snapshot (~40 bytes more), about 0.14 µs per seat per game.
+- **Per query** (`known_form_queries`, read after every event, ~20 ns timer overhead included): `standing(me)` 80 ns, `team_pairs` 55 ns, `count_bounds` 32 ns, `dealt_certain` 30 ns, `dealt_possible` 37 ns. All are lazy: a query nobody reads costs nothing.
+- **Soundness** (`tests/soundness.rs`, 3,000 random games with undos, 180,472 events × 4 seats): every K1–K5 answer against the true hands and the true dealt hands, every K6 fact equal to the engine's after every event. 1.2 M standing cards checked (53,849 of them trumps); 8.6 M dealt-hand facts beyond the current hands.
+
 ## Not in v0 (next)
 - Soft layer (convention likelihoods from the 1,579 games); it plugs into `Belief`.
-- Sure winners (S22).
-- "Can still meld" (S21).
 - A benchmark.
