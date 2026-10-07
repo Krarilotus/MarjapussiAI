@@ -1,0 +1,22 @@
+{
+  "snapshot": "2026-10-07",
+  "description": "Grouped design dependencies, not a Rust call graph. Proposed planning edges are dashed.",
+  "nodes": [
+    {"id": "view", "column": 0, "row": 1, "title": "What I can see", "subtitle": "L0 · visible inputs", "lines": ["My cards + received cards", "Public bids, plays, answers", "Trump, score, contract", "Rules + legal actions"], "kind": "fact"},
+    {"id": "hand", "column": 1, "row": 0, "title": "My hand & exact facts", "subtitle": "L1 · knowledge", "lines": ["Pairs, halves, A+10", "Standing cards, suit lengths", "Possible / certain / void", "Standing against us"], "kind": "fact"},
+    {"id": "belief", "column": 1, "row": 2, "title": "What others may hold", "subtitle": "L1 · beliefs", "lines": ["P(ace / half / pair)", "P(card held), P(void)", "Bids + pass evidence", "Facts stay exactly 0 or 1"], "kind": "belief"},
+    {"id": "bid", "column": 2, "row": 0, "title": "Team & auction", "subtitle": "L2 · bidding concepts", "lines": ["Messages still worth telling", "Pair cover + derived value", "Opponent reach", "P(gate), P(take 140)"], "kind": "decision"},
+    {"id": "pass", "column": 2, "row": 1, "title": "Exchange options", "subtitle": "L2 · passing concepts", "lines": ["Pairs completed or broken", "Voids, standing, trump fit", "Ace entries + known pairs", "Features for each option"], "kind": "decision"},
+    {"id": "plan", "column": 2, "row": 2, "title": "A coordinated plan", "subtitle": "L2 · proposed batch 3", "lines": ["Trump candidates + entries", "Tricks, ruffs, ace/trump split", "Announcement order", "Game estimate + lead order"], "kind": "proposed"},
+    {"id": "bid_action", "column": 3, "row": 0, "title": "Tell, defend, take or pass", "subtitle": "L3 · bidding decision", "lines": ["Useful message or 140 gate", "Cover check above 140", "Defend within reach / limit", "Latest corrections still local"], "kind": "decision"},
+    {"id": "pass_action", "column": 3, "row": 1, "title": "Choose four cards", "subtitle": "L3 · exchange decision", "lines": ["Weighted option features", "P(option) = softmax(score)", "v1 chooses the maximum", "Full concept reading pending"], "kind": "decision"},
+    {"id": "plan_action", "column": 3, "row": 2, "title": "Raise, lead & replan", "subtitle": "L3 · proposed planning", "lines": ["Raise within the estimate", "Transfer lead / activate pairs", "Preserve needed plan cards", "Re-evaluate on new evidence"], "kind": "proposed"}
+  ],
+  "edges": [
+    ["view", "hand"], ["view", "belief"],
+    ["hand", "bid"], ["belief", "bid"],
+    ["hand", "pass"], ["belief", "pass"],
+    ["hand", "plan"], ["belief", "plan"],
+    ["bid", "bid_action"], ["pass", "pass_action"], ["plan", "plan_action"]
+  ]
+}
