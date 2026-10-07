@@ -1,2 +1,41 @@
-/target
+target/
 **/*.rs.bk
+
+# Local configuration; examples contain placeholders only.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Private datasets, recordings and player metadata.
+/data/
+/datasets/
+/private/
+/recordings/
+games.ndjson
+*.ndjson
+*.jsonl
+*player*groups*.json
+
+# Runtime databases, logs and local scratch.
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.log
+/logs/
+/tmp/
+/backups/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+Thumbs.db

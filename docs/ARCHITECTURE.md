@@ -1,23 +1,54 @@
-# Architecture (draft v0 — orchestrator, 2026-10-06)
+# Architecture
 
-Layers, dependencies pointing down. Each crate has one façade (`lib.rs`) and owns its concept alone.
+Updated 2026-10-07 from the concept catalogue and the checked-out workspaces.
+Each crate owns one kind of information and exposes it through its `lib.rs`
+façade. Dependencies point toward the rules and the seat's visible information.
 
-| Layer | Crate (planned) | Owns | Status |
+| Layer | Owner | Role | Availability |
 |---|---|---|---|
-| 6 serve | `server` | thin edge: game server / UI bridge, difficulty profiles | later |
-| 5 policy | `policy` | learned decisions (bid, pass, question/trump, play); trained with PPO-family / GRPO on top of layer 3 features | after research round |
-| 4 search | `search`, `solver` | belief-sampled determinized search; exact endgame solver (last ~4 cards per player) | next |
-| 3 knowledge | `knowledge` | **what a seat can know**: set-theoretic deduction from its own observation (possible / certain cards per player, voids, pairs and halves, standing cards, bidding conventions) | v0 (hard rules) — `docs/design/knowledge.md` |
-| 2 observation | `observation` | the seat's view: own hand + public events. The **only** input to layers 3–6 | v0 |
-| 1 rules | `engine` | game rules, legal actions, scoring (marjapussi.de as source of truth); the `FastState` card-play core for search; a façade in `lib.rs` (inner modules private) (`docs/design/fast-core.md`, `performance.md`) | **done** |
+| Rules | `engine` | Legal actions, ranks, pair values, scoring and fast bitset play | Published on `main`. |
+| Visible information | `observation` | Own hand, public events and private exchanges visible to that seat | Published on `main`. |
+| Exact knowledge | `knowledge` | Possible/certain holdings, voids, standing cards, pairs and sound deductions | Core on `main`; extra hand features in preview/local work. |
+| Uncertain information | `beliefs` | Fact-constrained card/seat distributions and convention readings | Published snapshot on `v1-preview`; newer corrections local. |
+| Decisions | `agent`, `heuristic`, `solver` | Agent interface, concept-based strategy and exact endgame search | Published snapshot on `v1-preview`; newer bidding/passing changes local. |
+| Evaluation | `eval`, `tools` | Duplicate-deal comparisons, recorded-game checks and decision explanations | Published snapshot on `v1-preview`; additional studies local. |
+| Coordinated planning | Proposed concepts within the decision layer | Entries, trump activation, game estimate, raising and replanning | Batch-3 proposal; no complete implemented planner. |
+| Learned policy | Future policy work | Self-play learning above facts and beliefs | Future work. |
+
+The development/debugging UI is a separate application built against a sibling
+AI checkout; it is not part of this crate workspace.
+
+## Concept dependencies
+
+The [concept-store document](design/concept-store.md) provides the current graph,
+its calculations, proposal/implementation labels and revision references.
+
+![Visible information feeds knowledge and beliefs, then bidding, passing and proposed planning decisions.](assets/concept-store.png)
+
+The catalogue is a design source implemented through typed Rust helpers. It
+does not imply a generic runtime graph store. Rules remain in `engine`, exact
+deductions in `knowledge`, uncertain readings in `beliefs`, and the combination
+of those concepts into actions in `heuristic`.
 
 ## Invariants
-1. **No cheating (owner, 2026-10-06):** "The AI can NOT know what the actual cards are that everyone has, it can NOT cheat. It needs to be able to derive information itself." Layers 3–6 depend on `observation`, never on the full `GameState`. A test plays games where hidden hands are swapped consistently with the observation and checks that the decisions do not change.
-2. **Rules have one owner:** legality and scoring come only from `engine`. Other crates call it; they never re-implement it.
-3. **Derived facts are inputs, not things to learn:** the policy gets layer 3's deductions as features. It does not relearn bookkeeping.
-4. **Performance is a feature:** the engine and knowledge layers are hot paths (search calls them millions of times). Bitset card sets (36 bits) are the target representation. Every change to them gets an A/B benchmark and must stay correct (differential tests against the current engine and marjapussi-py).
 
-## Open (decided by research round 1 and the repo-idea investigation)
-- Search family (PIMC / IS-MCTS / αμ / EPIMC); belief weighting.
-- Endgame solver horizon and speed target.
-- PPO → GRPO transfer for the policy layer; reward and baseline design.
+1. **Seat-limited input:** decisions use only that seat's visible information.
+   Other players' actual hidden hands are reserved for simulation and evaluation,
+   never agent evidence. Consistent hidden-hand swaps check this boundary.
+2. **Facts stay exact:** conventions adjust uncertain beliefs, but cannot
+   contradict certain holdings or truthful public answers.
+3. **One owner per rule:** legality and scoring come from `engine`; other crates
+   call that owner rather than copying game rules.
+4. **Understandable decisions:** named concepts carry inputs and reasons.
+   Choice-model coefficients are labelled empirical rather than game-rule facts;
+   proposals are distinguished from implemented, approved behaviour.
+5. **Bounded work:** incremental updates and lazy queries should reuse unchanged
+   information. Performance changes require measurements and correctness checks;
+   the diagram is not evidence that every proposed cache exists.
+
+## Next design work
+
+Complete and review concept-level pass reading, connect exchange choices to a
+coordinated plan, and evaluate decisions with the owner. Whole-game search and
+learned policies follow later; the exact endgame solver is a separate bounded
+tool. See the concept-store status table before treating a design as shipped.
