@@ -2,9 +2,8 @@
 //! Random legal play through the engine, including undos; checked after every event.
 
 use engine::get_all_cards;
-use engine::CardSet;
 use engine::Game;
-use engine::{hands_from_deck, ActionType, GameAction};
+use engine::{hands_from_deck, partner, ActionType, CardSet, GameAction, SUITS};
 use knowledge::Tracker;
 use observation::{start_hand, SeatFilter};
 use rand::rngs::StdRng;
@@ -41,6 +40,121 @@ struct Coverage {
     no_pair: u32,
     yes_pair_or_announce: u32,
     hidden_pass: u32,
+    standing: u32,
+    standing_trump: u32,
+    dealt_certain: u32,
+}
+
+/// The fact queries K1–K5 (C26) against the true hands and the true dealt hands.
+fn check_facts(k: &knowledge::Knowledge, x: u8, game: &Game, seed: u64, cov: &mut Coverage) {
+    let truth = |y: u8| CardSet::from_cards(&game.state.players[y as usize].cards);
+    let dealt = CardSet::from_cards(&game.info.player_start_cards[x as usize]);
+    let mate = partner(x);
+    // K5: the dealt hand.
+    assert!(
+        k.dealt_certain(x).is_subset(dealt) && dealt.is_subset(k.dealt_possible(x)),
+        "seed {seed}: seat {} wrong about the dealt hand of {x}",
+        k.me()
+    );
+    cov.dealt_certain += (k.dealt_certain(x) - k.certain(x)).len();
+    // K6: the public facts equal the engine's.
+    let state = &game.state;
+    assert_eq!(
+        k.rights(x),
+        state.players[x as usize].trump,
+        "seed {seed}: rights of {x}"
+    );
+    if x == 0 {
+        assert_eq!(k.declarer(), state.declarer().map(|p| p.0), "seed {seed}: declarer");
+        assert_eq!(k.value(), state.value.0, "seed {seed}: value");
+        let winners: Vec<u8> = state.all_tricks.iter().map(|t| t.winner.0).collect();
+        assert_eq!(k.trick_winners(), &winners[..], "seed {seed}: trick winners");
+        if let Some(leader) = state.trick_leader() {
+            assert_eq!(k.trick_leader(), leader.0, "seed {seed}: trick leader");
+        }
+        let points = engine::team_points(&state.all_tricks, &game.all_events).total();
+        assert_eq!(k.team_points(), points, "seed {seed}: team points");
+        // The public card-play state the solver builds its worlds on.
+        if let Some(fast) = engine::FastState::from_game(game) {
+            let public = fast.public();
+            assert_eq!(
+                k.public_state(state.player_at_turn.0, public.announce_open),
+                public,
+                "seed {seed}: public state"
+            );
+        }
+        // The per-trick context: every lead in order, and the trump of the trick in progress.
+        let mut leads: Vec<(u8, u8)> = state
+            .all_tricks
+            .iter()
+            .map(|t| (t.leader.0, t.cards[0].index()))
+            .collect();
+        if let (Some(leader), Some(first)) = (state.trick_leader(), state.current_trick.first()) {
+            leads.push((leader.0, first.index()));
+        }
+        let known: Vec<(u8, u8)> = k.leads().map(|l| (l.seat, l.card)).collect();
+        assert_eq!(known, leads, "seed {seed}: leads");
+        // (The engine keeps a finished trick's cards until the next lead.)
+        if (1..4).contains(&state.current_trick.len()) {
+            assert_eq!(
+                k.leads().last().unwrap().trump,
+                k.trump(),
+                "seed {seed}: trump of the trick"
+            );
+        }
+    }
+    for s in SUITS {
+        // K4: count bounds.
+        let (lo, hi) = k.count_bounds(x, s);
+        let n = (truth(x) & CardSet::suit(s)).len() as u8;
+        assert!(
+            lo <= n && n <= hi,
+            "seed {seed}: count bounds of seat {x} in {s:?}: {lo}..{hi}, truth {n}"
+        );
+        // K2, K3: pairs, certain and possible.
+        let halves = CardSet::halves(s);
+        let bit = 1u8 << s as u8;
+        if k.is_called(s) || !(halves & k.played()).is_empty() {
+            continue;
+        }
+        let tp = k.team_pairs(x);
+        let split = !(halves & truth(x)).is_empty() && !(halves & truth(mate)).is_empty();
+        for (held, pairs) in [
+            (halves.is_subset(truth(x)), tp.mine),
+            (halves.is_subset(truth(mate)), tp.yours),
+            (split, tp.ours),
+        ] {
+            assert!(
+                !held || pairs.possible & bit != 0,
+                "seed {seed}: a held pair of seat {x} not possible"
+            );
+            assert!(
+                held || pairs.certain & bit == 0,
+                "seed {seed}: a certain pair of seat {x} not held"
+            );
+        }
+    }
+    // K1: standing cards win if led now.
+    for c in k.standing(x).iter() {
+        let suit = engine::Card::from_index(c).suit;
+        let higher = (CardSet::suit(suit) - k.played())
+            .iter()
+            .filter(|&b| engine::takes(b, c, None))
+            .fold(CardSet::EMPTY, |a, b| a | CardSet::single(b));
+        let ruffable = k.trump().is_some_and(|t| {
+            t != suit
+                && [(x + 1) % 4, (x + 3) % 4]
+                    .iter()
+                    .any(|&o| (truth(o) & CardSet::suit(suit)).is_empty() && !(truth(o) & CardSet::suit(t)).is_empty())
+        });
+        assert!(
+            truth(x).contains(c) && higher.is_subset(truth(x) | truth(mate)) && !ruffable,
+            "seed {seed}: seat {} calls {c} of seat {x} standing",
+            k.me()
+        );
+        cov.standing += 1;
+        cov.standing_trump += (Some(suit) == k.trump()) as u32;
+    }
 }
 
 /// Knowledge facts as (certain cards of others at the last trick, events checked).
@@ -96,6 +210,7 @@ fn play_and_check(seed: u64, cov: &mut Coverage) -> (u32, u32) {
                     k.possible(x),
                 );
                 assert_eq!(k.hand_len(x) as u32, truth.len(), "seed {seed}: hand size of seat {x}");
+                check_facts(k, x, &game, seed, cov);
             }
         }
         events += 1;
@@ -145,4 +260,9 @@ fn knowledge_is_sound_in_random_games() {
     ] {
         assert!(n >= 50, "too little coverage of {name}: {n}");
     }
+    eprintln!(
+        "facts: {} standing cards checked ({} trumps), {} dealt cards known beyond the current hands",
+        cov.standing, cov.standing_trump, cov.dealt_certain
+    );
+    assert!(cov.standing_trump >= 50 && cov.dealt_certain >= 50);
 }

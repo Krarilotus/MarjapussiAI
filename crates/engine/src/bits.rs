@@ -20,6 +20,12 @@ pub const fn next_seat(seat: u8) -> u8 {
     (seat + 1) % 4
 }
 
+/// The two opponents of `seat`: the next seat, then its partner.
+pub const fn opponents(seat: u8) -> [u8; 2] {
+    let left = next_seat(seat);
+    [left, partner(left)]
+}
+
 /// A set of cards as 36 bits.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct CardSet(pub u64);
@@ -54,6 +60,16 @@ impl CardSet {
     pub const fn value(value: Value) -> CardSet {
         let v = value as u64;
         CardSet((1 << v) | (1 << (v + 9)) | (1 << (v + 18)) | (1 << (v + 27)))
+    }
+
+    pub const ACES: CardSet = CardSet::value(Value::Ace);
+    pub const TENS: CardSet = CardSet::value(Value::Ten);
+    /// Every King and Ober (the halves of all four pairs).
+    pub const HALVES: CardSet = CardSet(CardSet::value(Value::King).0 | CardSet::value(Value::Ober).0);
+
+    /// The suits of which this set holds both King and Ober, in engine order.
+    pub fn pair_suits(self) -> impl Iterator<Item = Suit> {
+        SUITS.into_iter().filter(move |&s| CardSet::halves(s).is_subset(self))
     }
 
     pub const fn contains(self, index: u8) -> bool {

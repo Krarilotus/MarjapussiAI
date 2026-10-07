@@ -1,0 +1,310 @@
+//! The solver: exact future points of one team in a full-information card-play state.
+//!
+//! The team maximises its future points (cards, the last-trick bonus, its own announced pairs);
+//! the other team minimises them. Fail-soft alpha-beta with a transposition table at trick
+//! starts (bounds on future points), a static upper bound, safe card equivalence and move
+//! ordering. `value` is one full-window search, `reaches` one zero-window probe (MTD(f) over
+//! zero-window probes measured slower for `value`; docs/design/solver.md). The same search
+//! counts tricks instead of points for `tricks` and `reaches_tricks` (schwarz).
+
+use engine::{
+    points_set, suit_of, takes, trick_winner, value_of, CardSet, FastState, Move, CARD_POINTS, LAST_TRICK_BONUS,
+    PAIR_POINTS, SUITS, TRICKS,
+};
+
+use crate::tt::{Key, TransTable, NO_MOVE};
+
+/// Default transposition table: 2^18 entries of 40 bytes (10 MB).
+pub const DEFAULT_TT_BITS: u32 = 18;
+
+/// The most `team` can still score: every card point left, the last-trick bonus, and every
+/// pair a team seat may still announce.
+#[inline]
+fn max_future(s: &FastState, team: u8) -> i32 {
+    if s.is_over() {
+        return 0;
+    }
+    let trick = s.trick().iter().fold(CardSet::EMPTY, |a, &c| a | CardSet::single(c));
+    let mut most = points_set(s.in_hands() | trick) + LAST_TRICK_BONUS;
+    for suit in SUITS {
+        if s.called() >> suit as u8 & 1 == 0 {
+            let pair = CardSet::halves(suit);
+            if [team, team + 2]
+                .iter()
+                .any(|&x| s.may_announce() >> x & 1 == 1 && pair.is_subset(s.hand(x)))
+            {
+                most += PAIR_POINTS[suit as usize];
+            }
+        }
+    }
+    most
+}
+
+/// The moves searched at a node, best guess first: one card per run of equivalent cards.
+struct MoveList {
+    codes: [u8; 13],
+    scores: [i32; 13],
+    len: usize,
+}
+
+impl MoveList {
+    fn push(&mut self, code: u8, score: i32) {
+        self.codes[self.len] = code;
+        self.scores[self.len] = score;
+        self.len += 1;
+    }
+
+    #[inline]
+    fn new(s: &FastState, tt_best: u8) -> MoveList {
+        let mut list = MoveList {
+            codes: [0; 13],
+            scores: [0; 13],
+            len: 0,
+        };
+        let announce = s.announcements();
+        for suit in 0..4u8 {
+            if announce >> suit & 1 == 1 {
+                list.push(
+                    Move::Announce(SUITS[suit as usize]).code(),
+                    10_000 + PAIR_POINTS[suit as usize],
+                );
+            }
+        }
+        let trick = s.trick();
+        let trump = s.trump();
+        let mover = s.to_move();
+        let hand = s.hand(mover);
+        let live = trick.iter().fold(s.in_hands(), |a, &c| a | CardSet::single(c));
+        let lead = trick.split_first().map(|_| {
+            let w = trick_winner(trick, trump);
+            (trick[w], (s.leader() as usize + w) % 2 == mover as usize % 2)
+        });
+        for c in s.legal_cards().iter() {
+            // Equivalence: the next lower live card of the suit is ours and scores the same, so
+            // no live card lies between them and they are interchangeable from here on.
+            let below = (live & CardSet::suit(suit_of(c))).0 & ((1u64 << c) - 1);
+            if below != 0 {
+                let d = 63 - below.leading_zeros() as u8;
+                if hand.contains(d) && CARD_POINTS[d as usize] == CARD_POINTS[c as usize] {
+                    continue;
+                }
+            }
+            let (p, rank) = (CARD_POINTS[c as usize] as i32, value_of(c) as i32);
+            let score = match lead {
+                None => 4 * p + rank,
+                Some((winner, partner_wins)) => match (takes(c, winner, trump), partner_wins) {
+                    (true, false) => 200 + 4 * p - rank,
+                    (false, true) => 100 + 4 * p,
+                    (true, true) => 50 + p,
+                    (false, false) => -4 * p - rank,
+                },
+            };
+            list.push(c, score);
+        }
+        for i in 0..list.len {
+            if list.codes[i] == tt_best {
+                list.scores[i] = i32::MAX;
+            }
+        }
+        for i in 1..list.len {
+            let mut j = i;
+            while j > 0 && list.scores[j - 1] < list.scores[j] {
+                list.scores.swap(j - 1, j);
+                list.codes.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+        list
+    }
+}
+
+/// Exact solver with its transposition table (reused across calls and teams).
+#[derive(Clone, Debug)]
+pub struct Solver {
+    tt: TransTable,
+    team: u8,
+    /// The searched measure: tricks if set, else points.
+    tricks: bool,
+    nodes: u64,
+}
+
+impl Default for Solver {
+    fn default() -> Self {
+        Solver::with_tt_bits(DEFAULT_TT_BITS)
+    }
+}
+
+impl Solver {
+    pub fn new() -> Solver {
+        Solver::default()
+    }
+
+    /// A solver with 2^`bits` table entries (40 bytes each).
+    pub fn with_tt_bits(bits: u32) -> Solver {
+        Solver {
+            tt: TransTable::new(bits),
+            team: 0,
+            tricks: false,
+            nodes: 0,
+        }
+    }
+
+    /// Nodes searched since the solver was made or `reset_nodes` was called.
+    pub fn nodes(&self) -> u64 {
+        self.nodes
+    }
+
+    pub fn reset_nodes(&mut self) {
+        self.nodes = 0;
+    }
+
+    /// Empties the transposition table.
+    pub fn clear(&mut self) {
+        self.tt.clear();
+    }
+
+    /// The exact future points of `team` (seat % 2) from `s` under best play by both teams:
+    /// `team` maximises them, the other team minimises them.
+    pub fn value(&mut self, s: &FastState, team: u8) -> i32 {
+        self.set(team, false);
+        let most = self.most(s);
+        self.search(s, -1, most + 1)
+    }
+
+    /// The exact number of tricks `team` still takes when it maximises its tricks and the
+    /// other team minimises them.
+    pub fn tricks(&mut self, s: &FastState, team: u8) -> i32 {
+        self.set(team, true);
+        let most = self.most(s);
+        self.search(s, -1, most + 1)
+    }
+
+    /// Whether `team` can take at least `target` more tricks against best defence (one
+    /// zero-window probe). Schwarz: `reaches_tricks(s, team, 1)` for a team without a trick.
+    pub fn reaches_tricks(&mut self, s: &FastState, team: u8, target: i32) -> bool {
+        if target <= 0 {
+            return true;
+        }
+        self.set(team, true);
+        self.search(s, target - 1, target) >= target
+    }
+
+    fn set(&mut self, team: u8, tricks: bool) {
+        self.team = team & 1;
+        self.tricks = tricks;
+    }
+
+    /// The searched measure of `self.team` so far.
+    #[inline]
+    fn so_far(&self, s: &FastState) -> i32 {
+        if self.tricks {
+            s.tricks_won(self.team) as i32
+        } else {
+            s.points(self.team)
+        }
+    }
+
+    /// An upper bound on the measure still to come.
+    #[inline]
+    fn most(&self, s: &FastState) -> i32 {
+        if !self.tricks {
+            max_future(s, self.team)
+        } else {
+            (TRICKS - s.tricks_done()) as i32
+        }
+    }
+
+    /// Whether `team` can make at least `target` future points against best defence (one
+    /// zero-window probe). For a contract: `target = game value - s.points(team)`.
+    pub fn reaches(&mut self, s: &FastState, team: u8, target: i32) -> bool {
+        if target <= 0 {
+            return true;
+        }
+        self.set(team, false);
+        self.search(s, target - 1, target) >= target
+    }
+
+    /// For every legal move (in `FastState::moves` order): the points it gains at once plus
+    /// the exact future points after it, for `team`.
+    pub fn move_values(&mut self, s: &FastState, team: u8) -> Vec<(Move, i32)> {
+        s.moves()
+            .map(|m| {
+                let child = s.after(m);
+                let gain = child.points(team & 1) - s.points(team & 1);
+                (m, gain + self.value(&child, team))
+            })
+            .collect()
+    }
+
+    /// Fail-soft alpha-beta on the future measure (points or tricks) of `self.team`.
+    fn search(&mut self, s: &FastState, mut alpha: i32, mut beta: i32) -> i32 {
+        self.nodes += 1;
+        if s.is_over() {
+            return 0;
+        }
+        let team = self.team;
+        let most = self.most(s);
+        if most <= alpha {
+            return most;
+        }
+        if beta <= 0 {
+            return 0;
+        }
+        let start = s.trick().is_empty();
+        let mut key = Key::default();
+        let mut tt_best = NO_MOVE;
+        if start {
+            key = Key::of(s, team, self.tricks);
+            if let Some(e) = self.tt.probe(&key) {
+                let (lo, hi) = (e.lo as i32, e.hi as i32);
+                if lo >= beta || lo == hi {
+                    return lo;
+                }
+                if hi <= alpha {
+                    return hi;
+                }
+                alpha = alpha.max(lo);
+                beta = beta.min(hi);
+                tt_best = e.best;
+            }
+        }
+        let (alpha0, beta0) = (alpha, beta);
+        let moves = MoveList::new(s, tt_best);
+        let maximizing = s.to_move() & 1 == team;
+        let base = self.so_far(s);
+        let mut best = if maximizing { i32::MIN } else { i32::MAX };
+        let mut best_move = NO_MOVE;
+        for &code in &moves.codes[..moves.len] {
+            let child = s.after(Move::from_code(code));
+            let gain = self.so_far(&child) - base;
+            let v = gain + self.search(&child, alpha - gain, beta - gain);
+            if maximizing {
+                if v > best {
+                    best = v;
+                    best_move = code;
+                }
+                alpha = alpha.max(v);
+            } else {
+                if v < best {
+                    best = v;
+                    best_move = code;
+                }
+                beta = beta.min(v);
+            }
+            if alpha >= beta {
+                break;
+            }
+        }
+        if start {
+            let (lo, hi) = if best <= alpha0 {
+                (0, best)
+            } else if best >= beta0 {
+                (best, most)
+            } else {
+                (best, best)
+            };
+            self.tt.store(key, lo, hi, best_move);
+        }
+        best
+    }
+}

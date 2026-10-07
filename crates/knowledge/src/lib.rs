@@ -12,11 +12,16 @@ use std::cell::Cell;
 use engine::is_first_trick;
 use engine::Suit;
 use engine::HAND_SIZE;
-use engine::{next_seat, partner, play_levels, CardSet, SUITS};
+use engine::{
+    next_seat, partner, play_levels, suit_of, trick_points, trump_points, winning_seat, CardSet,
+    PlayerTrumpPossibilities, QuestionType, NO_BID, SUITS, TRICKS,
+};
 use observation::{Seat, SeatEvent};
 
+mod facts;
 mod sample;
 
+pub use facts::{Pairs, Passed, TeamPairs, BLANK_TEN_FACTOR, STOPPER_CONFIDENCE, STOPPER_MAX_HIGHER};
 pub use sample::{Belief, DealSpace, ExactSets, Hands, Uniform, World};
 
 const MAX_CONSTRAINTS: usize = 16;
@@ -59,9 +64,81 @@ pub struct Knowledge {
     called: u8,
     trick: [u8; 4],
     trick_len: u8,
+    /// Provenance for the dealt hands (K5): cards each seat played, gave and received.
+    played_by: [CardSet; 4],
+    /// K6: cards each seat discarded (played neither in the led suit nor in trump).
+    discarded: [CardSet; 4],
+    given: [Passed; 4],
+    received: [Passed; 4],
+    /// The seat that passed first (the declarer's partner).
+    first_passer: Option<Seat>,
+    /// Public facts (K6), undone with the snapshot.
+    rights: [PlayerTrumpPossibilities; 4],
+    last_bidder: Option<Seat>,
+    value: i32,
+    trick_leader: Seat,
+    trick_winners: [Seat; TRICKS as usize],
+    tricks_done: u8,
+    /// Per team: card points with the last-trick bonus, and announced pair points.
+    card_points: [i32; 2],
+    pair_points: [i32; 2],
+    /// The per-play context, once per trick (packed `Lead`s): who led which card, under which
+    /// trump. Trump only changes before a lead, so it holds for every play of the trick.
+    leads: [u16; TRICKS as usize],
 }
 
+/// One trick's lead and the trump of its plays (`Knowledge::leads`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Lead {
+    pub seat: Seat,
+    pub card: u8,
+    pub trump: Option<Suit>,
+}
+
+impl Lead {
+    fn pack(self) -> u16 {
+        self.card as u16 | (self.seat as u16) << 6 | self.trump.map_or(0, |t| t as u16 + 1) << 8
+    }
+
+    fn unpack(x: u16) -> Lead {
+        Lead {
+            card: (x & 0x3F) as u8,
+            seat: (x >> 6 & 3) as Seat,
+            trump: match x >> 8 {
+                0 => None,
+                t => Some(SUITS[t as usize - 1]),
+            },
+        }
+    }
+}
+
+/// The "seat" of a public instance (`Knowledge::public`): it holds no hand.
+pub const PUBLIC: Seat = 4;
+
 impl Knowledge {
+    /// What every seat knows: no own hand, every pass hidden (feed it the public events, e.g.
+    /// a seat's events with the pass cards removed). Answers possible/certain/hand sizes and
+    /// constraints; the dealt-hand queries (K5) and `deals()` belong to a seat's own instance.
+    pub fn public() -> Self {
+        let mut k = Knowledge::new(0, CardSet::EMPTY);
+        k.me = PUBLIC;
+        k.possible = [CardSet::ALL; 4];
+        k.certain = [CardSet::EMPTY; 4];
+        k
+    }
+
+    /// Whether the two states agree on every fact the beliefs read: possible and certain sets,
+    /// played cards, hand sizes, constraints, trump and called suits.
+    pub fn same_facts(&self, other: &Knowledge) -> bool {
+        self.possible == other.possible
+            && self.certain == other.certain
+            && self.played == other.played
+            && self.hand_len == other.hand_len
+            && self.constraints() == other.constraints()
+            && self.trump == other.trump
+            && self.called == other.called
+    }
+
     pub fn new(me: Seat, hand: CardSet) -> Self {
         let mut possible = [!hand; 4];
         possible[me as usize] = CardSet::EMPTY;
@@ -79,6 +156,20 @@ impl Knowledge {
             called: 0,
             trick: [0; 4],
             trick_len: 0,
+            played_by: [CardSet::EMPTY; 4],
+            discarded: [CardSet::EMPTY; 4],
+            given: [Passed::Nothing; 4],
+            received: [Passed::Nothing; 4],
+            first_passer: None,
+            rights: [PlayerTrumpPossibilities::Own; 4],
+            last_bidder: None,
+            value: NO_BID.0,
+            trick_leader: 0,
+            trick_winners: [0; TRICKS as usize],
+            tricks_done: 0,
+            card_points: [0; 2],
+            pair_points: [0; 2],
+            leads: [0; TRICKS as usize],
         }
     }
 
@@ -125,6 +216,12 @@ impl Knowledge {
         &self.constraints[..self.n_constraints as usize]
     }
 
+    /// The lead of every trick started so far, in order.
+    pub fn leads(&self) -> impl Iterator<Item = Lead> + '_ {
+        let started = self.tricks_done as usize + (self.trick_len > 0) as usize;
+        self.leads[..started].iter().map(|&x| Lead::unpack(x))
+    }
+
     /// Bit indices of the cards in the current trick, in play order.
     pub fn trick(&self) -> &[u8] {
         &self.trick[..self.trick_len as usize]
@@ -137,18 +234,30 @@ impl Knowledge {
 
     pub fn apply(&mut self, event: &SeatEvent) -> Result<(), Contradiction> {
         match *event {
-            SeatEvent::Bid { .. }
-            | SeatEvent::StopBidding { .. }
-            | SeatEvent::AskPair { .. }
-            | SeatEvent::AskHalf { .. }
-            | SeatEvent::Undone => return Ok(()),
+            SeatEvent::Bid { seat, value } => {
+                self.last_bidder = Some(seat);
+                self.value = value;
+                return Ok(());
+            }
+            SeatEvent::AskPair { seat } => {
+                self.ask(seat, QuestionType::Yours);
+                return Ok(());
+            }
+            SeatEvent::AskHalf { seat, suit } => {
+                self.ask(seat, QuestionType::YourHalf(suit));
+                return Ok(());
+            }
+            SeatEvent::StopBidding { .. } | SeatEvent::Undone => return Ok(()),
             SeatEvent::Pass { from, to, cards } => self.pass(from, to, cards)?,
             SeatEvent::CardPlayed { seat, card } => self.play(seat, card)?,
             SeatEvent::AnnounceTrump { seat, suit } | SeatEvent::YesPair { seat, suit } => {
                 self.make_certain(seat, CardSet::halves(suit) - self.played)?;
+                self.meld(seat, suit);
                 self.set_trump(suit);
             }
             SeatEvent::NoPair { seat } => {
+                let asker = &mut self.rights[partner(seat) as usize];
+                *asker = asker.after_no_pair();
                 for suit in SUITS {
                     let live = CardSet::halves(suit) - self.played;
                     if !self.is_called(suit) && live.len() == 2 {
@@ -184,6 +293,7 @@ impl Knowledge {
                     });
                     self.exclude(next_seat(seat), live)?;
                     self.exclude(partner(next_seat(seat)), live)?;
+                    self.meld(seat, suit);
                     self.set_trump(suit);
                 } else {
                     self.add_constraint(Constraint {
@@ -197,6 +307,18 @@ impl Knowledge {
             }
         }
         self.propagate()
+    }
+
+    /// K6: the asker's right after its question (the engine's `after_question`).
+    fn ask(&mut self, seat: Seat, question: QuestionType) {
+        let r = &mut self.rights[seat as usize];
+        *r = r.after_question(question);
+    }
+
+    /// K6: the pair points (the engine's `trump_points`) for the team of the seat whose action
+    /// made `suit` trump.
+    fn meld(&mut self, seat: Seat, suit: Suit) {
+        self.pair_points[(seat % 2) as usize] += trump_points(suit, self.is_called(suit));
     }
 
     fn set_trump(&mut self, suit: Suit) {
@@ -251,6 +373,10 @@ impl Knowledge {
 
     fn pass(&mut self, from: Seat, to: Seat, cards: Option<CardSet>) -> Result<(), Contradiction> {
         let (f, t) = (from as usize, to as usize);
+        let seen = cards.map_or(Passed::Hidden, Passed::Seen);
+        self.first_passer.get_or_insert(from);
+        self.given[f] = seen;
+        self.received[t] = seen;
         self.drop_constraints_of(from);
         self.drop_constraints_of(to);
         match cards {
@@ -308,10 +434,38 @@ impl Knowledge {
             self.certain[x] -= c;
         }
         self.played |= c;
+        self.played_by[s] |= c;
         self.hand_len[s] -= 1;
+        if let Some(&led) = self.trick().first() {
+            let suit = suit_of(played);
+            if suit != suit_of(led) && Some(suit) != self.trump {
+                self.discarded[s] |= c;
+            }
+        }
+        if self.trick_len == 0 {
+            self.trick_leader = seat;
+            self.leads[self.tricks_done as usize] = Lead {
+                seat,
+                card: played,
+                trump: self.trump,
+            }
+            .pack();
+        }
         self.trick[self.trick_len as usize] = played;
         self.trick_len = (self.trick_len + 1) % 4;
+        if self.trick_len == 0 {
+            self.finish_trick();
+        }
         Ok(())
+    }
+
+    /// K6: the trick just completed goes to its winner (the engine's `winning_seat`), with its
+    /// points (the engine's `trick_points`, last-trick bonus included).
+    fn finish_trick(&mut self) {
+        let w = winning_seat(self.trick_leader, &self.trick, self.trump);
+        self.card_points[(w % 2) as usize] += trick_points(self.trick, self.tricks_done);
+        self.trick_winners[self.tricks_done as usize] = w;
+        self.tricks_done += 1;
     }
 
     /// Applies constraints, hand-size counting and card uniqueness until nothing changes.
@@ -395,8 +549,10 @@ impl Knowledge {
 pub struct Tracker {
     now: Knowledge,
     before_last_undoable: Option<Knowledge>,
-    /// Events applied, undos included; never decreases, so it keys the caches.
-    events: u32,
+    /// The fact epoch (F12): a fresh value whenever the facts change (`same_facts`) or an undo
+    /// happens; bids and questions leave it alone. Never reused, so it keys the caches.
+    fact_epoch: u32,
+    next_epoch: u32,
     exact: Cell<Option<(u32, ExactSets)>>,
 }
 
@@ -405,30 +561,53 @@ impl Tracker {
         Tracker {
             now: Knowledge::new(me, hand),
             before_last_undoable: None,
-            events: 0,
+            fact_epoch: 0,
+            next_epoch: 1,
             exact: Cell::new(None),
         }
+    }
+
+    /// A tracker of the public facts (`Knowledge::public`).
+    pub fn public() -> Self {
+        Tracker {
+            now: Knowledge::public(),
+            ..Tracker::new(0, CardSet::EMPTY)
+        }
+    }
+
+    /// The fact epoch: changes exactly when the facts do (and on undo), never repeats.
+    pub fn fact_epoch(&self) -> u32 {
+        self.fact_epoch
     }
 
     pub fn knowledge(&self) -> &Knowledge {
         &self.now
     }
 
-    /// `DealSpace::exact_sets` of the current knowledge, computed on the first call after an
-    /// event and cached until the next one.
+    /// `DealSpace::exact_sets` of the current knowledge, computed on the first call after the
+    /// facts change and cached until they change again (keyed on the fact epoch, F12).
     pub fn exact_sets(&self) -> ExactSets {
-        if let Some((events, sets)) = self.exact.get() {
-            if events == self.events {
+        if let Some((epoch, sets)) = self.exact.get() {
+            if epoch == self.fact_epoch {
                 return sets;
             }
         }
         let sets = self.now.deals().exact_sets();
-        self.exact.set(Some((self.events, sets)));
+        self.exact.set(Some((self.fact_epoch, sets)));
         sets
     }
 
     pub fn apply(&mut self, event: &SeatEvent) -> Result<(), Contradiction> {
-        self.events += 1;
+        let before = self.now;
+        let result = self.apply_event(event);
+        if *event == SeatEvent::Undone || !self.now.same_facts(&before) {
+            self.fact_epoch = self.next_epoch;
+            self.next_epoch += 1;
+        }
+        result
+    }
+
+    fn apply_event(&mut self, event: &SeatEvent) -> Result<(), Contradiction> {
         match event {
             SeatEvent::Undone => {
                 self.now = self

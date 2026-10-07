@@ -11,7 +11,7 @@
 //!
 //! Counts fit `u64`: three hidden seats and at most 36 cards give at most 3^36 < 2^58 deals.
 
-use engine::{CardSet, CARDS};
+use engine::{suit_of, CardSet, CARDS};
 use observation::Seat;
 use rand::RngCore;
 
@@ -193,8 +193,30 @@ fn for_each_split(sig: u8, n: u8, r: [u8; 3], mut f: impl FnMut([u8; 3], u64) ->
     }
 }
 
+/// Calls `f` with every `k`-subset of `cards`, each joined to `chosen`.
+fn subsets(cards: &[u8], k: usize, chosen: CardSet, f: &mut dyn FnMut(CardSet)) {
+    if k == 0 {
+        return f(chosen);
+    }
+    for i in 0..=cards.len().saturating_sub(k) {
+        subsets(&cards[i + 1..], k - 1, chosen | CardSet::single(cards[i]), f);
+    }
+}
+
 impl DealSpace {
     pub fn new(k: &Knowledge) -> DealSpace {
+        DealSpace::build_with(k, false)
+    }
+
+    /// The deal space with the unknown aces, kings and obers as tied groups too (grouped by
+    /// signature, constraints and role: aces, or the halves of one suit), so that the leaves give
+    /// the exact joint distribution of every hidden seat's aces and halves (the feature DP, F5).
+    /// Same count and marginals as `new`.
+    pub fn with_features(k: &Knowledge) -> DealSpace {
+        DealSpace::build_with(k, true)
+    }
+
+    fn build_with(k: &Knowledge, features: bool) -> DealSpace {
         let me = k.me;
         let mut space = DealSpace {
             hidden: [1, 2, 3].map(|d| (me + d) % 4),
@@ -209,10 +231,39 @@ impl DealSpace {
             ways: vec![],
             total: 0,
         };
+        if k.me >= 4 {
+            return space; // a public instance has no own hand: no deal space
+        }
         if let Some(fixed) = space.fixed_part(k) {
-            space.build(k, fixed);
+            space.build(k, fixed, features);
         }
         space
+    }
+
+    /// The hidden seats, in the order of a leaf's splits.
+    pub fn hidden(&self) -> [Seat; 3] {
+        self.hidden
+    }
+
+    /// The cards of every tied group, in the order of a leaf's splits.
+    pub fn group_cards(&self) -> Vec<CardSet> {
+        self.groups
+            .iter()
+            .map(|g| {
+                self.pool[g.start as usize..(g.start + g.n) as usize]
+                    .iter()
+                    .fold(CardSet::EMPTY, |a, &c| a | CardSet::single(c))
+            })
+            .collect()
+    }
+
+    /// Every leaf as (its consistent deals, the split of each tied group over the hidden seats).
+    pub fn leaves(&self) -> impl Iterator<Item = (u64, &[[u8; 3]])> + '_ {
+        let g = self.groups.len();
+        self.leaves
+            .iter()
+            .enumerate()
+            .map(move |(i, l)| (l.mult * self.ways(0, l.rest), &self.leaf_splits[i * g..(i + 1) * g]))
     }
 
     /// The unknown cards and the hidden seats' capacities, or `None` if the fixed part is
@@ -246,7 +297,7 @@ impl DealSpace {
         me_ok.then_some((unknown, cap))
     }
 
-    fn build(&mut self, k: &Knowledge, (unknown, cap): (CardSet, [u8; 3])) {
+    fn build(&mut self, k: &Knowledge, (unknown, cap): (CardSet, [u8; 3]), features: bool) {
         let may = self.hidden.map(|x| k.possible[x as usize] & unknown);
         if !(unknown - (may[0] | may[1] | may[2])).is_empty() {
             return;
@@ -267,16 +318,29 @@ impl DealSpace {
             });
         }
 
-        let tied = ties.iter().fold(CardSet::EMPTY, |a, t| a | t.mask);
-        let mut groups: Vec<(u8, u16, CardSet)> = vec![];
+        let mut tied = ties.iter().fold(CardSet::EMPTY, |a, t| a | t.mask);
+        if features {
+            tied |= (CardSet::ACES | CardSet::HALVES) & unknown;
+        }
+        // The feature role of a card: the aces, the halves of one suit, or none.
+        let role = |c: u8| {
+            if !features || !(CardSet::ACES | CardSet::HALVES).contains(c) {
+                0u8
+            } else if CardSet::ACES.contains(c) {
+                1
+            } else {
+                2 + suit_of(c) as u8
+            }
+        };
+        let mut groups: Vec<(u8, u16, CardSet, u8)> = vec![];
         for c in tied.iter() {
             let sig = (0..3).filter(|&j| may[j].contains(c)).fold(0, |s, j| s | 1 << j);
             let member = (0..ties.len())
                 .filter(|&t| ties[t].mask.contains(c))
                 .fold(0, |m, t| m | 1 << t);
-            match groups.iter_mut().find(|g| (g.0, g.1) == (sig, member)) {
+            match groups.iter_mut().find(|g| (g.0, g.1, g.3) == (sig, member, role(c))) {
                 Some(g) => g.2 |= CardSet::single(c),
-                None => groups.push((sig, member, CardSet::single(c))),
+                None => groups.push((sig, member, CardSet::single(c), role(c))),
             }
         }
         let mut classes = vec![];
@@ -465,6 +529,60 @@ impl DealSpace {
                 hands,
             })
             .collect()
+    }
+
+    /// Calls `f` once for every consistent deal (`count()` calls). Use it when the count is
+    /// small; it visits the deals in a fixed order.
+    pub fn for_each_deal(&self, mut f: impl FnMut(&Hands)) {
+        if self.total == 0 {
+            return;
+        }
+        for (l, leaf) in self.leaves.iter().enumerate() {
+            self.deal_groups(l, 0, leaf.rest, self.known, &mut f);
+        }
+    }
+
+    fn deal_groups(&self, leaf: usize, g: usize, rest: [u8; 3], hands: Hands, f: &mut dyn FnMut(&Hands)) {
+        let Some(&group) = self.groups.get(g) else {
+            return self.deal_classes(0, rest, hands, f);
+        };
+        let split = self.leaf_splits[leaf * self.groups.len() + g];
+        self.deal_all(group, split, hands, &mut |h| self.deal_groups(leaf, g + 1, rest, h, f));
+    }
+
+    fn deal_classes(&self, i: usize, rest: [u8; 3], hands: Hands, f: &mut dyn FnMut(&Hands)) {
+        let Some(&class) = self.classes.get(i) else {
+            return f(&hands);
+        };
+        for_each_split(class.sig, class.n, rest, |split, _| {
+            let to = minus(rest, split);
+            if self.ways(i + 1, to) > 0 {
+                self.deal_all(class, split, hands, &mut |h| self.deal_classes(i + 1, to, h, f));
+            }
+            false
+        });
+    }
+
+    /// Every way to deal the cards of `class` to the hidden seats by `split`.
+    fn deal_all(&self, class: Class, split: [u8; 3], hands: Hands, f: &mut dyn FnMut(Hands)) {
+        let (start, n) = (class.start as usize, class.n as usize);
+        let cards = &self.pool[start..start + n];
+        let all = cards.iter().fold(CardSet::EMPTY, |a, &c| a | CardSet::single(c));
+        subsets(cards, split[0] as usize, CardSet::EMPTY, &mut |first| {
+            let mut left = [0u8; CARDS];
+            let mut n_left = 0;
+            for c in (all - first).iter() {
+                left[n_left] = c;
+                n_left += 1;
+            }
+            subsets(&left[..n_left], split[1] as usize, CardSet::EMPTY, &mut |second| {
+                let mut h = hands;
+                h[self.hidden[0] as usize] |= first;
+                h[self.hidden[1] as usize] |= second;
+                h[self.hidden[2] as usize] |= all - first - second;
+                f(h);
+            });
+        });
     }
 
     /// `[seat][card]`: the number of consistent deals in which `seat` holds `card`.

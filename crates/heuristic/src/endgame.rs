@@ -1,0 +1,108 @@
+//! The endgame (design D-c / F10): with at most `endgame_tricks` tricks left, the
+//! card (or announcement) is chosen by the exact solver over the deals I can believe in, not by
+//! the valuation's closed forms.
+//!
+//! - **Worlds:** the deals consistent with my facts (`knowledge::DealSpace`): all of them when
+//!   there are at most `endgame_worlds`, otherwise that many drawn uniformly.
+//! - **Weights:** each world by my beliefs relative to the facts alone,
+//!   Π over the hidden seats' cards of P_believed(y holds c) / P_facts(y holds c), so with no
+//!   belief beyond the facts every consistent deal counts the same.
+//! - **Objective:** the contract (HC-9: declarers make it, then keep the defenders' points
+//!   down; defenders take points, avoiding schwarz), or the own points in an all-pass game.
+//! - **Ties:** cards the solver values exactly alike are told apart by the valuation (e.g. a
+//!   standing ace that wins either now or later is kept, as the future-trick value says).
+
+use engine::{ActionType, GameAction, Move};
+use knowledge::Hands;
+use solver::{evaluate, Objective, Solver};
+
+use crate::rules::RuleId;
+use crate::valuation::{Choice, Valuation};
+use crate::{decision, fact, Ctx, Decision, Rng};
+
+/// Transposition table of the endgame solver: 2^16 entries (2.6 MB) suffice for 4 tricks.
+const TT_BITS: u32 = 16;
+
+pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option<Decision> {
+    let k = ctx.k;
+    let tricks_left = k.hand_len(ctx.me) as u32;
+    if tricks_left == 0 || tricks_left > ctx.params.endgame_tricks {
+        return None;
+    }
+    let announce_open = legal
+        .iter()
+        .any(|a| matches!(a.action_type, ActionType::AnnounceTrump(_)));
+    let table = k.public_state(ctx.me, announce_open);
+    let objective = match k.declarer() {
+        Some(d) => Objective::Contract {
+            playing_team: d % 2,
+            game_value: k.value(),
+        },
+        None => Objective::Points,
+    };
+    let facts = k.deals().marginals();
+    let ratio: [[f64; 36]; 4] = std::array::from_fn(|y| {
+        std::array::from_fn(|c| {
+            let base = facts[y][c];
+            if y as u8 == ctx.me || base <= 0.0 {
+                1.0
+            } else {
+                ctx.mind.p_holds(y as u8, c as u8) as f64 / base
+            }
+        })
+    });
+    let belief = |hands: &Hands| -> f64 {
+        (0..4)
+            .filter(|&y| y != ctx.me as usize)
+            .map(|y| hands[y].iter().map(|c| ratio[y][c as usize]).product::<f64>())
+            .product()
+    };
+    let mut slot = ctx.solver.borrow_mut();
+    let solver = slot.get_or_insert_with(|| Solver::with_tt_bits(TT_BITS));
+    let mut rng = Rng::new(ctx.seed);
+    let d = evaluate(
+        solver,
+        k,
+        &table,
+        objective,
+        ctx.params.endgame_worlds as usize,
+        &belief,
+        &mut rng,
+    )
+    .ok()?;
+    let mut best = d.best()?;
+    let means = |m: Move| d.moves.iter().find(|v| v.mv == m).map(|v| v.means.clone());
+    let top = means(best)?;
+    if matches!(best, Move::Card(_)) {
+        let choice = Choice::new(ctx);
+        let leading = k.trick().is_empty();
+        let tied = d
+            .moves
+            .iter()
+            .filter_map(|v| match v.mv {
+                Move::Card(c) if v.means == top => Some(c),
+                _ => None,
+            })
+            .map(|c| (c, choice.value_of_play(ctx, val, c, leading)))
+            .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)));
+        if let Some((c, _)) = tied {
+            best = Move::Card(c);
+        }
+    }
+    let action = legal.iter().find(|a| match (best, a.action_type) {
+        (Move::Card(c), ActionType::CardPlayed(x)) => x.index() == c,
+        (Move::Announce(s), ActionType::AnnounceTrump(t)) => s == t,
+        _ => false,
+    })?;
+    let mean = top[0];
+    Some(decision(
+        action,
+        RuleId::HE1,
+        vec![
+            fact("worlds", d.worlds as u32),
+            fact("exact", d.exact as u8),
+            fact("ess", d.ess),
+            fact("value", mean),
+        ],
+    ))
+}

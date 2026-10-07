@@ -1,0 +1,19 @@
+[package]
+name = "marjapussi-tools"
+version = "0.1.0"
+description = "Command-line drivers: arena (over crates/eval), human_eval (the human games), perf (the decision guard); legacy replay and game records."
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+engine = { package = "marjapussi-engine", path = "../engine" }
+observation = { package = "marjapussi-observation", path = "../observation" }
+knowledge = { package = "marjapussi-knowledge", path = "../knowledge" }
+beliefs = { package = "marjapussi-beliefs", path = "../beliefs" }
+heuristic = { package = "marjapussi-heuristic", path = "../heuristic" }
+agent = { package = "marjapussi-agent", path = "../agent" }
+eval = { package = "marjapussi-eval", path = "../eval" }
+serde_json = "1"
+
+[lib]
+name = "tools"

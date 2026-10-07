@@ -1,0 +1,18 @@
+[package]
+name = "marjapussi-eval"
+version = "0.1.0"
+description = "Evaluation of any agent: the table driver, duplicate deals with a sequential test, fixed deal suites, game statistics and plain-language reports."
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+engine = { package = "marjapussi-engine", path = "../engine" }
+observation = { package = "marjapussi-observation", path = "../observation" }
+knowledge = { package = "marjapussi-knowledge", path = "../knowledge" }
+agent = { package = "marjapussi-agent", path = "../agent" }
+beliefs = { package = "marjapussi-beliefs", path = "../beliefs" }
+solver = { package = "marjapussi-solver", path = "../solver" }
+rand = { version = "0.9.0", default-features = false }
+
+[lib]
+name = "eval"
