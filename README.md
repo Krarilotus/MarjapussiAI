@@ -37,6 +37,31 @@ The AI is built in layers, each with one job:
 
 More: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/design/`](docs/design/).
 
+## Current development and concept store
+
+`main` contains the engine, observation and exact knowledge crates. The published
+`v1-preview` branch adds an agent snapshot with beliefs, heuristic decisions,
+the endgame solver and evaluation tools. Newer bidding and passing corrections
+are still local development; the coordinated game planner is proposed work.
+
+The [concept-store dependency graph](docs/design/concept-store.md) explains how
+visible cards become facts and beliefs, then bidding, exchange and planning
+concepts. It includes calculations, ownership and implementation status.
+
+![Overview of the concept store: visible inputs, hand and seat concepts, team and game concepts, then decisions. Dashed planning boxes are proposals.](docs/assets/concept-store.png)
+
+To build the published agent snapshot from a fresh clone:
+
+```sh
+git fetch origin
+git switch v1-preview
+cargo test --workspace
+```
+
+Keep private game data outside the checkout and point `MARJA_GAMES` to it.
+Local datasets, environment files, databases and logs are ignored; example
+environment files can be committed, but must contain placeholders only.
+
 ## How to run it
 
 ### Build and test
