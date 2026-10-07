@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="930" viewBox="0 0 1440 930">
+<title>MarjapussiAI concept-store dependency overview</title>
+<desc>Visible inputs feed exact facts and uncertain seat beliefs. Together these feed bidding and passing decisions, plus proposed coordinated game planning. Dashed boxes and arrows mark proposals.</desc>
+<rect width="100%" height="100%" fill="white"/>
+<text x="40" y="28" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="34" fill="#273449" font-weight="700">From visible cards to a useful decision</text>
+<text x="40" y="80" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="20" fill="#273449">MarjapussiAI concept store  |  7 October 2026  |  Arrows mean: provides an input to</text>
+<text x="40" y="140" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="17" fill="#667389" font-weight="700">VISIBLE INPUTS</text>
+<text x="390" y="140" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="17" fill="#667389" font-weight="700">HAND &amp; SEAT</text>
+<text x="740" y="140" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="17" fill="#667389" font-weight="700">TEAM &amp; GAME</text>
+<text x="1090" y="140" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="17" fill="#667389" font-weight="700">ACTION</text>
+<polyline points="340,497.5 363,497.5 363,282.5 385,282.5" fill="none" stroke="#8390a4" stroke-width="2"/>
+<polygon points="385,282.5 375.9955289764732,278.1503446588877 375.9955289764732,286.8496553411123" fill="#8390a4"/>
+<polyline points="340,497.5 363,497.5 363,712.5 385,712.5" fill="none" stroke="#8390a4" stroke-width="2"/>
+<polygon points="385,712.5 375.9955289764732,708.1503446588877 375.9955289764732,716.8496553411123" fill="#8390a4"/>
+<polyline points="690,282.5 713,282.5 713,282.5 735,282.5" fill="none" stroke="#8390a4" stroke-width="2"/>
+<polygon points="735,282.5 725.9955289764732,278.1503446588877 725.9955289764732,286.8496553411123" fill="#8390a4"/>
+<polyline points="690,712.5 713,712.5 713,282.5 735,282.5" fill="none" stroke="#8390a4" stroke-width="2"/>
+<polygon points="735,282.5 725.9955289764732,278.1503446588877 725.9955289764732,286.8496553411123" fill="#8390a4"/>
+<polyline points="690,282.5 713,282.5 713,497.5 735,497.5" fill="none" stroke="#8390a4" stroke-width="2"/>
+<polygon points="735,497.5 725.9955289764732,493.1503446588877 725.9955289764732,501.8496553411123" fill="#8390a4"/>
+<polyline points="690,712.5 713,712.5 713,497.5 735,497.5" fill="none" stroke="#8390a4" stroke-width="2"/>
+<polygon points="735,497.5 725.9955289764732,493.1503446588877 725.9955289764732,501.8496553411123" fill="#8390a4"/>
+<polyline points="690,282.5 724,282.5 724,712.5 735,712.5" fill="none" stroke="#9a681b" stroke-width="2" stroke-dasharray="8 6"/>
+<polygon points="735,712.5 725.9955289764732,708.1503446588877 725.9955289764732,716.8496553411123" fill="#9a681b"/>
+<polyline points="690,712.5 724,712.5 724,712.5 735,712.5" fill="none" stroke="#9a681b" stroke-width="2" stroke-dasharray="8 6"/>
+<polygon points="735,712.5 725.9955289764732,708.1503446588877 725.9955289764732,716.8496553411123" fill="#9a681b"/>
+<polyline points="1040,282.5 1063,282.5 1063,282.5 1085,282.5" fill="none" stroke="#8390a4" stroke-width="2"/>
+<polygon points="1085,282.5 1075.9955289764732,278.1503446588877 1075.9955289764732,286.8496553411123" fill="#8390a4"/>
+<polyline points="1040,497.5 1063,497.5 1063,497.5 1085,497.5" fill="none" stroke="#8390a4" stroke-width="2"/>
+<polygon points="1085,497.5 1075.9955289764732,493.1503446588877 1075.9955289764732,501.8496553411123" fill="#8390a4"/>
+<polyline points="1040,712.5 1074,712.5 1074,712.5 1085,712.5" fill="none" stroke="#9a681b" stroke-width="2" stroke-dasharray="8 6"/>
+<polygon points="1085,712.5 1075.9955289764732,708.1503446588877 1075.9955289764732,716.8496553411123" fill="#9a681b"/>
+<rect x="40" y="405" width="300" height="185" rx="14" fill="#eaf2ff"/>
+<text x="56" y="419" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="16" fill="#2860a4" font-weight="700">L0 · visible inputs</text>
+<text x="56" y="447" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="21" fill="#18273c" font-weight="700">What I can see</text>
+<text x="56" y="485" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">My cards + received cards</text>
+<text x="56" y="509" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Public bids, plays, answers</text>
+<text x="56" y="533" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Trump, score, contract</text>
+<text x="56" y="557" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Rules + legal actions</text>
+<rect x="390" y="190" width="300" height="185" rx="14" fill="#eaf2ff"/>
+<text x="406" y="204" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="16" fill="#2860a4" font-weight="700">L1 · knowledge</text>
+<text x="406" y="232" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="21" fill="#18273c" font-weight="700">My hand &amp; exact facts</text>
+<text x="406" y="270" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Pairs, halves, A+10</text>
+<text x="406" y="294" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Standing cards, suit lengths</text>
+<text x="406" y="318" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Possible / certain / void</text>
+<text x="406" y="342" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Standing against us</text>
+<rect x="390" y="620" width="300" height="185" rx="14" fill="#e7f5ef"/>
+<text x="406" y="634" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="16" fill="#17745b" font-weight="700">L1 · beliefs</text>
+<text x="406" y="662" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="21" fill="#18273c" font-weight="700">What others may hold</text>
+<text x="406" y="700" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">P(ace / half / pair)</text>
+<text x="406" y="724" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">P(card held), P(void)</text>
+<text x="406" y="748" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Bids + pass evidence</text>
+<text x="406" y="772" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Facts stay exactly 0 or 1</text>
+<rect x="740" y="190" width="300" height="185" rx="14" fill="#f2edff"/>
+<text x="756" y="204" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="16" fill="#7051a0" font-weight="700">L2 · bidding concepts</text>
+<text x="756" y="232" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="21" fill="#18273c" font-weight="700">Team &amp; auction</text>
+<text x="756" y="270" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Messages still worth telling</text>
+<text x="756" y="294" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Pair cover + derived value</text>
+<text x="756" y="318" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Opponent reach</text>
+<text x="756" y="342" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">P(gate), P(take 140)</text>
+<rect x="740" y="405" width="300" height="185" rx="14" fill="#f2edff"/>
+<text x="756" y="419" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="16" fill="#7051a0" font-weight="700">L2 · passing concepts</text>
+<text x="756" y="447" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="21" fill="#18273c" font-weight="700">Exchange options</text>
+<text x="756" y="485" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Pairs completed or broken</text>
+<text x="756" y="509" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Voids, standing, trump fit</text>
+<text x="756" y="533" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Ace entries + known pairs</text>
+<text x="756" y="557" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Features for each option</text>
+<rect x="740" y="620" width="300" height="185" rx="14" fill="#fff3df"/>
+<polyline points="748,620 1032,620" fill="none" stroke="#9a681b" stroke-width="2" stroke-dasharray="8 6"/>
+<polyline points="1040,628 1040,797" fill="none" stroke="#9a681b" stroke-width="2" stroke-dasharray="8 6"/>
+<polyline points="1032,805 748,805" fill="none" stroke="#9a681b" stroke-width="2" stroke-dasharray="8 6"/>
+<polyline points="740,797 740,628" fill="none" stroke="#9a681b" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="756" y="634" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="16" fill="#9a681b" font-weight="700">L2 · proposed batch 3</text>
+<text x="756" y="662" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="21" fill="#18273c" font-weight="700">A coordinated plan</text>
+<text x="756" y="700" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Trump candidates + entries</text>
+<text x="756" y="724" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Tricks, ruffs, ace/trump split</text>
+<text x="756" y="748" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Announcement order</text>
+<text x="756" y="772" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Game estimate + lead order</text>
+<rect x="1090" y="190" width="300" height="185" rx="14" fill="#f2edff"/>
+<text x="1106" y="204" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="16" fill="#7051a0" font-weight="700">L3 · bidding decision</text>
+<text x="1106" y="232" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="21" fill="#18273c" font-weight="700">Tell, defend, take or pass</text>
+<text x="1106" y="270" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Useful message or 140 gate</text>
+<text x="1106" y="294" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Cover check above 140</text>
+<text x="1106" y="318" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Defend within reach / limit</text>
+<text x="1106" y="342" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Latest corrections still local</text>
+<rect x="1090" y="405" width="300" height="185" rx="14" fill="#f2edff"/>
+<text x="1106" y="419" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="16" fill="#7051a0" font-weight="700">L3 · exchange decision</text>
+<text x="1106" y="447" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="21" fill="#18273c" font-weight="700">Choose four cards</text>
+<text x="1106" y="485" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Weighted option features</text>
+<text x="1106" y="509" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">P(option) = softmax(score)</text>
+<text x="1106" y="533" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">v1 chooses the maximum</text>
+<text x="1106" y="557" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Full concept reading pending</text>
+<rect x="1090" y="620" width="300" height="185" rx="14" fill="#fff3df"/>
+<polyline points="1098,620 1382,620" fill="none" stroke="#9a681b" stroke-width="2" stroke-dasharray="8 6"/>
+<polyline points="1390,628 1390,797" fill="none" stroke="#9a681b" stroke-width="2" stroke-dasharray="8 6"/>
+<polyline points="1382,805 1098,805" fill="none" stroke="#9a681b" stroke-width="2" stroke-dasharray="8 6"/>
+<polyline points="1090,797 1090,628" fill="none" stroke="#9a681b" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="1106" y="634" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="16" fill="#9a681b" font-weight="700">L3 · proposed planning</text>
+<text x="1106" y="662" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="21" fill="#18273c" font-weight="700">Raise, lead &amp; replan</text>
+<text x="1106" y="700" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Raise within the estimate</text>
+<text x="1106" y="724" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Transfer lead / activate pairs</text>
+<text x="1106" y="748" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Preserve needed plan cards</text>
+<text x="1106" y="772" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Re-evaluate on new evidence</text>
+<text x="40" y="830" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#2860a4" font-weight="700">Exact facts</text>
+<text x="220" y="830" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#17745b" font-weight="700">Uncertain beliefs</text>
+<text x="460" y="830" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#7051a0" font-weight="700">Decision concepts</text>
+<text x="720" y="830" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#9a681b" font-weight="700">Dashed = proposed full planner</text>
+<text x="40" y="872" dominant-baseline="text-before-edge" font-family="Arial, sans-serif" font-size="18" fill="#273449">Published: main = core; v1-preview = agent snapshot. Latest corrections remain local. See the document for status and exact edges.</text>
+</svg>
