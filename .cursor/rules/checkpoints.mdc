@@ -1,0 +1,11 @@
+---
+description: Preserve a reviewed checkpoint after every major feature or refactor iteration
+alwaysApply: true
+---
+
+Follow `AGENTS.md` and `docs/WORKFLOW.md` for all implementation work.
+After each major feature or refactor iteration, save a focused commit, its
+validation record under `docs/checkpoints/`, and an annotated Git tag named
+`checkpoint/YYYY-MM-DD-<iteration>`.
+Keep tags immutable and distinguish review-only, verified, and incomplete results.
+Never commit another person's changes or private game data as part of a checkpoint.

@@ -68,6 +68,10 @@ pub(crate) struct Valuation {
     /// My cards in the suits of those pairs (P7): the suit becomes trump once the pair is
     /// announced, so they are not cashed or counted as sure leads before.
     pub plan_cards: CardSet,
+    /// My cards in the suits of the uncalled pairs the partner certainly holds (e.g. one I
+    /// passed it, K5): plan suits for me too, not led before the announcement, since the
+    /// partner would have to follow with a half (F10, owner #25 item 7).
+    pub protect: CardSet,
     /// Per suit: what one more lead adds to that pair's activation value (an announcement or a
     /// question it enables), as long as I still hold my half.
     lead_gain: [f32; 4],
@@ -108,6 +112,7 @@ impl Valuation {
             plan: [0.0; 36],
             halves: CardSet::EMPTY,
             plan_cards: CardSet::EMPTY,
+            protect: CardSet::EMPTY,
             lead_gain: [0.0; 4],
             at_risk: [0.0; 4],
             avg_card,
@@ -127,7 +132,13 @@ impl Valuation {
         let n = k.hand_len(me) as f32;
         let before_last = ((n - 2.0) / (n - 1.0).max(1.0)).max(0.0);
         let leads = (hand.iter().map(|c| v.p_win[c as usize]).sum::<f32>() + reach.p_partner_lead) * before_last;
+        let mate = ctx.mind.features(partner(me));
         for s in SUITS.into_iter().filter(|&s| !k.is_called(s)) {
+            // The believed pair is 1 where the facts decide.
+            if mate.pair[s as usize] >= 1.0 {
+                v.protect |= hand & CardSet::suit(s);
+                v.plan_cards |= hand & CardSet::suit(s);
+            }
             let mine = hand & CardSet::halves(s);
             let p_team = match mine.len() {
                 2 => 1.0,

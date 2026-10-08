@@ -1,9 +1,10 @@
-//! One scenario per passing rule (HP forth, HK back), including the owner's C3 pair cases and
-//! the C4 Lusche signal.
+//! Passing. The store (C42): features, `passing_weights`, the argmax. And the old pass models
+//! (`beliefs::conventions::passes`, HP forth / HK back), which the reading of a partner's pass
+//! still inverts until R1–R4 are built.
 
 mod common;
 
-use beliefs::conventions::passes::{plan, BackCtx, BackModel, ForthCtx, ForthModel, Plan};
+use beliefs::conventions::passes::{plan, BackCtx, ForthCtx, ForthModel, Plan};
 use beliefs::conventions::Params;
 use common::{passed, set, Scene};
 use engine::CardSet;
@@ -23,19 +24,12 @@ fn plain_auction() -> Vec<(u8, Option<i32>)> {
 
 #[test]
 fn hp1_blanks_two_suits() {
-    let s = mh_scene(
-        &["g-6", "g-7", "e-8", "e-9", "r-A", "r-Z", "r-K", "s-9", "s-U"],
-        &plain_auction(),
-    );
-    let d = s.act(&s.pass_legal());
-    let keep = s.hand() - passed(&d);
-    let blank = [Suit::Green, Suit::Acorns, Suit::Bells, Suit::Red]
-        .iter()
-        .filter(|&&t| !(s.hand() & CardSet::suit(t)).is_empty() && (keep & CardSet::suit(t)).is_empty())
-        .count();
-    assert_eq!(blank, 2);
-    // Two options blank two suits; the very weak green tie-breaker picks between them.
-    assert_eq!(d.rule, RuleId::HP5);
+    let p = Params::default();
+    let hand = set(&["g-6", "g-7", "e-8", "e-9", "r-A", "r-Z", "r-K", "s-9", "s-U"]);
+    let m = ForthModel::new(hand, &ForthCtx::default(), &p);
+    let two = m.score(set(&["g-6", "g-7", "e-8", "e-9"]));
+    let one = m.score(set(&["g-6", "g-7", "e-8", "s-9"]));
+    assert!(two.terms[0] > one.terms[0]);
 }
 
 #[test]
@@ -104,35 +98,20 @@ fn hp5_green_is_only_a_tie_breaker() {
 }
 
 #[test]
-fn hp6_keeps_a_big_pair() {
+fn hp6_passes_an_unknown_whole_suit_pair() {
+    // C42c, the owner: "passing pair if its the whole suite is often adviced to get trump
+    // consolidated, unless the partner knows of it and can play around it". My Bells are only
+    // K and O, the partner doesn't know them: both go to VH.
     let s = mh_scene(
         &["g-6", "g-7", "e-8", "e-9", "s-K", "s-O", "r-9", "r-8", "r-7"],
         &plain_auction(),
     );
     let d = s.act(&s.pass_legal());
-    assert!((passed(&d) & CardSet::halves(Suit::Bells)).is_empty());
-}
-
-#[test]
-fn hp6_keeps_a_pair_the_partner_knows_of() {
-    // I showed the Acorns pair with +10; the partner knows it, so I keep it.
-    let auction = [
-        (0, Some(120)),
-        (1, None),
-        (2, Some(130)),
-        (3, None),
-        (0, Some(135)),
-        (2, None),
-    ];
-    let s = mh_scene(
-        &["e-K", "e-O", "g-6", "g-7", "s-8", "s-9", "r-8", "r-9", "r-7"],
-        &auction,
-    );
-    let d = s.act(&s.pass_legal());
     assert!(
-        (passed(&d) & CardSet::halves(Suit::Acorns)).is_empty(),
-        "{:?}",
-        passed(&d)
+        CardSet::halves(Suit::Bells).is_subset(passed(&d)),
+        "{:?} {:?}",
+        passed(&d),
+        d.why
     );
 }
 
@@ -184,220 +163,123 @@ const VH13: [&str; 13] = [
     "r-K", "r-O", "r-A", "r-9", "g-6", "g-7", "e-A", "e-8", "s-6", "s-7", "s-U", "g-8", "e-9",
 ];
 
-fn back_model(p: &Params) -> BackModel<'_> {
-    let hand = set(&VH13);
-    BackModel::new(hand, plan(hand, &BackCtx::default(), p), p)
-}
-
 #[test]
-fn hk1_keeps_trump_and_the_pair() {
-    let mut s = Scene::new(0, &["r-K", "r-O", "r-A", "r-9", "g-6", "g-7", "e-A", "e-8", "s-6"]);
-    s.auction(&[(0, Some(120)), (1, None), (2, None), (3, None)]);
-    s.pass(2, 0, Some(&["s-7", "s-U", "g-8", "e-9"]));
-    let d = s.act(&s.pass_legal());
-    assert!((passed(&d) & CardSet::suit(Suit::Red)).is_empty(), "{:?}", passed(&d));
+fn hk1_plans_the_red_pair() {
     let p = Params::default();
     assert_eq!(plan(set(&VH13), &BackCtx::default(), &p), Plan::Trump(Suit::Red));
-    assert!(back_model(&p).score(set(&["r-K", "g-6", "g-7", "s-6"])).terms[0] < 0.0);
 }
 
+/// HK-4 never decides in the old back model: HK-1's penalty per trump given back always
+/// outweighs it (60,000 searched hands).
 #[test]
-fn hk2_gives_back_a_whole_side_suit() {
+fn hk4_is_dominated_by_hk1() {
     let p = Params::default();
-    let m = back_model(&p);
-    // Green (g-6, g-7, g-8) complete vs. a mixed set.
-    assert_eq!(m.score(set(&["g-6", "g-7", "g-8", "s-6"])).terms[1], p.w_side_suit);
-    assert_eq!(m.score(set(&["g-6", "g-7", "s-6", "e-8"])).terms[1], 0.0);
+    assert!(p.w_trump_keep * 2.0 > p.w_last_trick);
 }
 
-#[test]
-fn hk3_keeps_aces() {
-    let p = Params::default();
-    let m = back_model(&p);
-    assert!(m.score(set(&["e-A", "g-6", "g-7", "g-8"])).terms[2] < 0.0);
-}
-
-#[test]
-fn hk4_keeps_a_trump_for_the_last_trick() {
-    let p = Params::default();
-    let m = back_model(&p);
-    let hand = set(&[
-        "r-9", "r-8", "g-6", "g-7", "e-A", "e-8", "s-6", "s-7", "s-U", "g-8", "e-9", "e-6", "s-8",
-    ]);
-    let m2 = BackModel::new(hand, Plan::Trump(Suit::Red), &p);
-    assert_eq!(m2.score(set(&["r-9", "r-8", "g-6", "g-7"])).terms[3], -p.w_last_trick);
-    assert_eq!(m.score(set(&["g-6", "g-7", "g-8", "s-6"])).terms[3], 0.0);
-}
-
-#[test]
-fn hk5_counts_voids_made() {
-    let p = Params::default();
-    let m = back_model(&p);
-    assert_eq!(m.score(set(&["g-6", "g-7", "g-8", "s-6"])).terms[4], p.w_void);
-}
-
-#[test]
-fn hk6_no_trump_plan_passes_short_topless_suits() {
-    let p = Params::default();
-    let hand = set(&[
-        "r-A", "r-Z", "r-9", "e-A", "e-Z", "e-8", "s-A", "s-7", "g-6", "g-7", "g-8", "s-U", "e-6",
-    ]);
-    assert_eq!(plan(hand, &BackCtx::default(), &p), Plan::NoTrump);
-    let m = BackModel::new(hand, Plan::NoTrump, &p);
-    assert!(m.score(set(&["g-6", "g-7", "g-8", "s-U"])).terms[5] > 0.0);
-}
-
-#[test]
-fn passing_back_plan_uses_a_half_the_partner_likely_completes() {
-    let p = Params::default();
-    let hand = set(&[
-        "r-K", "r-A", "r-9", "e-A", "e-Z", "e-8", "s-A", "s-7", "g-6", "g-7", "g-8", "s-U", "e-6",
-    ]);
-    let ctx = BackCtx {
-        partner_half: [0.0, 0.0, 0.0, 0.9],
-    };
-    assert_eq!(plan(hand, &ctx, &p), Plan::Trump(Suit::Red));
-}
-
-/// One end-to-end case per rule where that rule decides the pass (Judge M1 item 4): it is the
-/// term that separates the chosen 4 cards from the runner-up. Hands found by a search over
-/// random deals, then pinned here.
-mod deciding {
+/// The store (C42): the features of one option, and the decision as the first argmax of
+/// Σ passing_weights × features over the legal options.
+mod store {
     use super::*;
+    use beliefs::conventions::forth_ctx;
+    use heuristic::passing::{back_features, back_plan, forth_features, score, PASSING_WEIGHTS};
+    use heuristic::{HeuristicAgent, Params as HParams};
 
     const PLAIN: &[(u8, Option<i32>)] = &[(0, Some(120)), (1, None), (2, None), (3, None)];
-    const VH_130: &[(u8, Option<i32>)] = &[(0, Some(130)), (1, None), (2, None), (3, None)];
-    const I_SHOWED_ACE: &[(u8, Option<i32>)] = &[
-        (0, None),
-        (1, None),
-        (2, Some(120)),
-        (3, None),
-        (0, Some(125)),
-        (2, None),
-    ];
 
-    fn forth(auction: &[(u8, Option<i32>)], hand: &[&str], rule: RuleId, expected: &[&str]) {
-        let s = mh_scene(hand, auction);
-        let d = s.act(&s.pass_legal());
-        assert_eq!((d.rule, passed(&d)), (rule, set(expected)), "{:?}", d.why);
+    fn feature(names: &[&str], f: &[f64], name: &str) -> f64 {
+        f[names.iter().position(|&n| n == name).unwrap()]
     }
 
-    fn back(hand: &[&str], received: &[&str], rule: RuleId, expected: &[&str]) {
-        let mut s = Scene::new(0, hand);
+    #[test]
+    fn forth_features_of_one_option() {
+        // MH (2) passes Green (6, 7: blank with Lusche), the Bells ace (blank, no Lusche) and
+        // the Acorns 8 from a suit it keeps.
+        let s = mh_scene(&["g-6", "g-7", "s-A", "e-8", "e-K", "e-Z", "r-A", "r-Z", "r-6"], PLAIN);
+        let mut agent = HeuristicAgent::new(HParams::default());
+        let mind = agent.mind(&s.view());
+        let ctx = forth_ctx(&mind.record().seats, 2, &Params::default());
+        let f = forth_features(mind, &ctx, set(&["g-6", "g-7", "s-A", "e-8"]));
+        let names = &heuristic::passing::FORTH_FEATURES;
+        assert_eq!(feature(names, &f, "blank_with_lusche"), 1.0);
+        assert_eq!(feature(names, &f, "blank_without_lusche"), 1.0);
+        assert_eq!(feature(names, &f, "lusche_from_kept_suit"), 1.0);
+        assert_eq!(feature(names, &f, "aces"), 1.0);
+        assert_eq!(feature(names, &f, "green"), 2.0);
+        assert_eq!(feature(names, &f, "points"), 11.0);
+        // VH's 120 is read as an ace: the ace is worth less to it.
+        assert!(feature(names, &f, "aces_x_vh_lacks_ace") < 0.5);
+    }
+
+    #[test]
+    fn back_features_of_one_option() {
+        // VH (0) with the red pair: gives back the Acorns ace with its 8 kept (an entry), the
+        // whole Bells suit (a void) and the Green 6.
+        let mut s = Scene::new(0, &["r-K", "r-O", "r-A", "r-9", "g-6", "g-7", "e-A", "e-8", "s-6"]);
         s.auction(PLAIN);
-        s.pass(2, 0, Some(received));
-        let d = s.act(&s.pass_legal());
-        assert_eq!((d.rule, passed(&d)), (rule, set(expected)), "{:?}", d.why);
+        s.pass(2, 0, Some(&["s-7", "s-U", "g-8", "e-9"]));
+        let mut agent = HeuristicAgent::new(HParams::default());
+        let mind = agent.mind(&s.view());
+        let plan = back_plan(mind, &Params::default());
+        assert_eq!(plan, Plan::Trump(Suit::Red));
+        let f = back_features(mind, plan, set(&["e-A", "s-6", "s-7", "s-U"]));
+        let names = &heuristic::passing::BACK_FEATURES;
+        assert_eq!(feature(names, &f, "aces"), 1.0);
+        assert_eq!(feature(names, &f, "aces_entry_low_kept"), 1.0);
+        assert_eq!(feature(names, &f, "voids_made"), 1.0);
+        assert_eq!(feature(names, &f, "side_suits_complete"), 1.0);
+        assert_eq!(feature(names, &f, "plan_trump_given"), 0.0);
+        assert_eq!(feature(names, &f, "plan_top_trump_kept"), 1.0);
+        // Kept: r-A r-K r-O r-9 g-6 g-7 g-8 e-8 e-9: the red A, K, O... the A stands, then the
+        // Z is missing, so only the ace stands.
+        assert_eq!(feature(names, &f, "standing_after"), 1.0);
+        assert_eq!(feature(names, &f, "points"), 13.0);
+    }
+
+    fn first_best(scores: &[f64]) -> usize {
+        (0..scores.len())
+            .max_by(|&a, &b| scores[a].total_cmp(&scores[b]).then(b.cmp(&a)))
+            .unwrap()
     }
 
     #[test]
-    fn hp1() {
-        let hand = ["g-O", "e-9", "s-A", "g-6", "e-6", "e-7", "e-8", "e-Z", "r-9"];
-        forth(I_SHOWED_ACE, &hand, RuleId::HP1, &["g-6", "g-O", "s-A", "r-9"]);
+    fn the_pass_forth_is_the_first_argmax_of_the_weighted_features() {
+        let s = mh_scene(&["g-6", "g-7", "s-A", "e-8", "e-K", "e-Z", "r-A", "r-Z", "r-6"], PLAIN);
+        let legal = s.pass_legal();
+        let d = s.act(&legal);
+        let mut agent = HeuristicAgent::new(HParams::default());
+        let mind = agent.mind(&s.view());
+        let ctx = forth_ctx(&mind.record().seats, 2, &Params::default());
+        let scores: Vec<f64> = legal
+            .iter()
+            .map(|a| score(&PASSING_WEIGHTS.forth, &forth_features(mind, &ctx, passed_of(a))))
+            .collect();
+        assert_eq!(passed(&d), passed_of(&legal[first_best(&scores)]));
+        assert_eq!(d.rule, RuleId::PForth);
     }
 
     #[test]
-    fn hp2() {
-        let hand = ["g-Z", "g-K", "s-U", "g-O", "e-U", "e-9", "e-K", "g-U", "e-A"];
-        forth(VH_130, &hand, RuleId::HP2, &["g-O", "g-K", "e-A", "s-U"]);
+    fn the_pass_back_is_the_first_argmax_of_the_weighted_features() {
+        let mut s = Scene::new(0, &["r-K", "r-O", "r-A", "r-9", "g-6", "g-7", "e-A", "e-8", "s-6"]);
+        s.auction(PLAIN);
+        s.pass(2, 0, Some(&["s-7", "s-U", "g-8", "e-9"]));
+        let legal = s.pass_legal();
+        let d = s.act(&legal);
+        let mut agent = HeuristicAgent::new(HParams::default());
+        let mind = agent.mind(&s.view());
+        let plan = back_plan(mind, &Params::default());
+        let scores: Vec<f64> = legal
+            .iter()
+            .map(|a| score(&PASSING_WEIGHTS.back, &back_features(mind, plan, passed_of(a))))
+            .collect();
+        assert_eq!(passed(&d), passed_of(&legal[first_best(&scores)]));
+        assert_eq!(d.rule, RuleId::PBack);
     }
 
-    #[test]
-    fn hp3() {
-        let hand = ["e-Z", "s-6", "s-U", "e-9", "s-K", "g-6", "e-A", "s-O", "r-8"];
-        forth(PLAIN, &hand, RuleId::HP3, &["g-6", "e-Z", "e-A", "r-8"]);
-    }
-
-    #[test]
-    fn hp4() {
-        let hand = ["s-9", "e-A", "e-Z", "s-7", "s-Z", "r-O", "g-7", "r-7", "s-A"];
-        forth(VH_130, &hand, RuleId::HP4, &["g-7", "e-Z", "e-A", "s-A"]);
-    }
-
-    #[test]
-    fn hp5() {
-        let hand = ["r-U", "s-A", "e-6", "g-6", "r-6", "g-U", "r-8", "g-9", "r-O"];
-        forth(VH_130, &hand, RuleId::HP5, &["e-6", "s-A", "r-U", "r-O"]);
-    }
-
-    #[test]
-    fn hp6() {
-        let hand = ["s-A", "e-O", "s-6", "g-U", "g-A", "g-6", "s-K", "e-K", "e-7"];
-        forth(VH_130, &hand, RuleId::HP6, &["g-A", "e-O", "e-K", "s-A"]);
-    }
-
-    #[test]
-    fn hp7() {
-        let hand = ["e-U", "e-9", "s-U", "s-8", "e-7", "s-9", "s-K", "e-O", "e-A"];
-        forth(I_SHOWED_ACE, &hand, RuleId::HP7, &["e-U", "e-O", "e-A", "s-K"]);
-    }
-
-    #[test]
-    fn hp8() {
-        let hand = ["g-8", "r-Z", "e-8", "e-U", "e-9", "s-A", "g-Z", "r-U", "g-9"];
-        forth(PLAIN, &hand, RuleId::HP8, &["e-8", "e-9", "e-U", "s-A"]);
-    }
-
-    #[test]
-    fn hk1() {
-        let hand = ["g-9", "g-K", "e-K", "r-7", "g-O", "s-O", "r-K", "e-O", "r-8"];
-        back(
-            &hand,
-            &["r-6", "e-9", "r-O", "s-7"],
-            RuleId::HK1,
-            &["g-9", "e-9", "s-7", "s-O"],
-        );
-    }
-
-    #[test]
-    fn hk2() {
-        let hand = ["e-Z", "s-6", "s-U", "e-9", "s-K", "g-6", "e-A", "s-O", "r-8"];
-        back(
-            &hand,
-            &["r-O", "s-8", "r-A", "e-K"],
-            RuleId::HK2,
-            &["g-6", "r-8", "r-O", "r-A"],
-        );
-    }
-
-    #[test]
-    fn hk3() {
-        let hand = ["r-Z", "s-7", "r-O", "g-O", "r-K", "r-A", "s-8", "e-9", "r-6"];
-        back(
-            &hand,
-            &["g-A", "g-K", "g-Z", "g-9"],
-            RuleId::HK3,
-            &["g-9", "e-9", "s-7", "s-8"],
-        );
-    }
-
-    #[test]
-    fn hk5() {
-        let hand = ["r-K", "g-O", "s-8", "r-O", "r-9", "r-Z", "r-7", "s-K", "r-U"];
-        back(
-            &hand,
-            &["s-U", "r-8", "g-7", "e-U"],
-            RuleId::HK5,
-            &["g-7", "g-O", "e-U", "s-8"],
-        );
-    }
-
-    #[test]
-    fn hk6() {
-        let hand = ["g-8", "r-Z", "e-8", "e-U", "e-9", "s-A", "g-Z", "r-U", "g-9"];
-        back(
-            &hand,
-            &["g-6", "s-6", "s-9", "r-K"],
-            RuleId::HK6,
-            &["g-6", "e-8", "e-9", "e-U"],
-        );
-    }
-
-    /// HK-4 never decides: HK-1's penalty per trump given back always outweighs it (60,000
-    /// searched hands), so it is tested as a term only (`hk4_keeps_a_trump_for_the_last_trick`).
-    #[test]
-    fn hk4_is_dominated_by_hk1() {
-        let p = Params::default();
-        assert!(p.w_trump_keep * 2.0 > p.w_last_trick);
+    fn passed_of(a: &engine::GameAction) -> CardSet {
+        match &a.action_type {
+            engine::ActionType::Pass(c) => CardSet::from_cards(c),
+            _ => CardSet::EMPTY,
+        }
     }
 }

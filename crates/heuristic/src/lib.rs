@@ -11,7 +11,7 @@ mod endgame;
 mod hand;
 mod leads;
 mod params;
-mod passing;
+pub mod passing;
 mod play;
 mod rules;
 mod stakes;

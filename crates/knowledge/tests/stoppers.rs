@@ -94,3 +94,21 @@ fn an_ace_hand_can_have_21_against_it() {
         21
     );
 }
+
+#[test]
+fn standing_potential_counts_the_lower_cards_of_a_long_suit_headed_by_a_z() {
+    use knowledge::standing_potential_of;
+    let set = |hand: &[&str]| {
+        hand.iter().fold(CardSet::EMPTY, |a, c| {
+            a | CardSet::single(c.parse::<Card>().unwrap().index())
+        })
+    };
+    // Seed 42, S1: Eichel A Z U 9 (run 2, length 4) → 2; Grün K U 6 has no ace → 0.
+    assert_eq!(
+        standing_potential_of(set(&["e-9", "g-K", "e-Z", "e-U", "s-K", "g-6", "g-U", "e-A", "r-Z"])),
+        2
+    );
+    // A Z K with two more → 2; A Z with only one more (length 3) → 0.
+    assert_eq!(standing_potential_of(set(&["r-A", "r-Z", "r-K", "r-9", "r-6"])), 2);
+    assert_eq!(standing_potential_of(set(&["r-A", "r-Z", "r-9"])), 0);
+}
