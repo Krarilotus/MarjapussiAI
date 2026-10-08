@@ -147,12 +147,9 @@ impl rand::RngCore for Rng {
 
 /// The `Mind` of the seat HP1 plays, and how far it has read the view's events.
 struct Synced {
-    seat: Seat,
     start: CardSet,
-    kinds: [SeatKind; 4],
-    /// The number of the view's events applied, and the last of them.
-    applied: usize,
-    last: Option<SeatEvent>,
+    /// Raw input prefix, including undo events (unlike `Mind::events`).
+    history: Vec<SeatEvent>,
     mind: Mind,
 }
 
@@ -189,7 +186,7 @@ impl HeuristicAgent {
     }
 
     /// My `Mind` for this view: the seat's start hand and its own events, read on from where
-    /// the last view stopped. Another game, seat or table starts a fresh one.
+    /// the last view stopped. Changed input or belief parameters start a fresh one.
     pub fn mind(&mut self, view: &SeatView) -> &Mind {
         sync(&mut self.mind, &self.params, view)
     }
@@ -198,28 +195,25 @@ impl HeuristicAgent {
 fn sync<'a>(slot: &'a mut Option<Synced>, params: &Params, view: &SeatView) -> &'a Mind {
     let start = view.knowledge.dealt_certain(view.seat);
     let continues = slot.as_ref().is_some_and(|m| {
-        m.seat == view.seat
+        m.mind.seat() == view.seat
             && m.start == start
-            && m.kinds == view.kinds
-            && m.applied <= view.events.len()
-            && m.applied.checked_sub(1).map(|i| &view.events[i]) == m.last.as_ref()
+            && m.mind.kinds() == view.kinds
+            && m.mind.params() == &params.beliefs
+            && view.events.starts_with(&m.history)
     });
     if !continues {
         *slot = Some(Synced {
-            seat: view.seat,
             start,
-            kinds: view.kinds,
-            applied: 0,
-            last: None,
+            history: Vec::new(),
             mind: Mind::new(view.seat, start, view.kinds, params.beliefs.clone()),
         });
     }
     let m = slot.as_mut().expect("set above");
-    for e in &view.events[m.applied..] {
+    let tail = &view.events[m.history.len()..];
+    for e in tail {
         m.mind.apply(e).expect("a seat's own events are consistent");
     }
-    m.applied = view.events.len();
-    m.last = view.events.last().cloned();
+    m.history.extend_from_slice(tail);
     &m.mind
 }
 
