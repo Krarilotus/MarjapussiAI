@@ -12,7 +12,8 @@ preserves play; it does not introduce pass-choice inference.
 | Order | Iteration | Done when | Checkpoint suffix |
 |---|---|---|---|
 | 0, completed | Condense pass choice and remove the unused reader (corrected F1) | One active C42 scorer; explicit giver inputs; obsolete code/config/tests removed; original choices and explanations preserved. See [passing models](PASSING.md). | `exchange-cleanup` |
-| 1 | Fix history and configuration contracts (F3/F4) | Validate the complete event prefix before incremental reuse (or add an explicit history identity/extension contract). Include belief parameters in invalidation. Fresh/reused agents agree on extension, rewind, equal-length branches, new games and parameter changes. Validate finite/ranged values at configuration boundaries. | `state-config` |
+| 1a, completed | Fix history and belief-parameter reuse (F3) | Complete raw-prefix and belief-parameter comparison; fresh/reused agents agree on forks, extensions, rewinds, undo, seat/hand/kind and parameter changes. | `history-cache` |
+| 1b | Validate configuration values (F4) | Reject nonfinite/out-of-range parameters at configuration boundaries while preserving deliberate zeros. | `config-validation` |
 | 2 | Qualify evaluation and weight provenance (F2/F5) | Record each fit's source, data fingerprint, feature order and command. Split by complete game/session before fitting. Freeze weights before held-out evaluation. Use predeclared fixed-size duplicate comparisons and label approximate intervals; defer unsupported anytime-valid claims. | `evaluation` |
 | 3 | Add pass-choice inference (remaining F1 capability) | Define the modelled actor and pre-pass information; reuse the current scorer from hypothetical giver views; validate synthetic same-policy likelihoods/void predictions and privacy before testing held-out human behaviour. Bound runtime and disposition the ignored historical calibration check. | `exchange-reading` |
 | 4 | Consolidate a runnable baseline (F6) | Selectively reconcile preview docs/data safeguards; pin AI/testbed revisions in a dedicated sibling setup. Add public-fixture CI and a tested Rust version; report required checks, skipped lanes and deferred checks separately. | `baseline` |
@@ -47,9 +48,7 @@ No GPU training or new runtime graph framework is needed for the next iterations
 
 ## Next implementation task
 
-Promote the existing F3/F4 probes into normal regression tests and fix their
-owning contracts. Start with complete-prefix comparison and parameter comparison
-unless profiling justifies adding a new identity/revision API. Validate parameters
-once at construction/loading, preserving deliberate zeros such as disabling the
-endgame. Use the frozen exchange trace plus targeted reuse/configuration scenarios
-to distinguish fixes from accidental policy changes.
+Promote the remaining F4 probe into a regression test and validate parameters
+at construction/loading, preserving deliberate zeros such as disabling the
+endgame. F3 is fixed without a new identity/revision API. Keep its history tests
+and the frozen exchange trace as regression evidence.
