@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "The interface of every AI player: one seat's view in, one legal action and its explanation out."
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 engine = { package = "marjapussi-engine", path = "../engine" }

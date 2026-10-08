@@ -1,5 +1,8 @@
 # Heuristic Player v1: tuning log
 
+> Historical design/tuning record. The pass implementation and APIs have changed;
+> see [current passing semantics](../PASSING.md) and the checkpoint records.
+
 Every change of a default in `crates/heuristic/src/params.rs` is logged here (spec §8). Evidence is labelled per RULES.md R4. All runs: release build, CARGO_BUILD_JOBS=2, PC shared with other projects.
 
 Commands:

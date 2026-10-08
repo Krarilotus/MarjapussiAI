@@ -244,9 +244,16 @@ mod tests {
         };
         assert!(bid_prob(Some(135), red, &ctx, &p) > 0.9);
         assert!(bid_prob(None, empty, &ctx, &p) > 0.95);
-        // With a pair, the ace first (C39).
+        // A Rot pair goes before the ace (C43); with only a Grün pair the ace first.
         let red_ace = HandClass { ace: true, ..red };
-        assert!(bid_prob(Some(120), red_ace, &ctx, &p) > 0.9);
+        assert!(bid_prob(Some(135), red_ace, &ctx, &p) > 0.9);
+        let green_ace = HandClass {
+            ace: true,
+            halves: [2, 0, 0, 0],
+        };
+        // (Its only bid is the ace's 120; how often it bids is the EGP gate's.)
+        assert!(bid_prob(Some(120), green_ace, &ctx, &p) > 0.0);
+        assert_eq!(bid_prob(Some(125), green_ace, &ctx, &p), 0.0);
         let total: f32 = [None, Some(120), Some(135)]
             .iter()
             .map(|&b| bid_prob(b, red, &ctx, &p))

@@ -86,7 +86,7 @@ fn shape(x: CardSet) -> &'static str {
 }
 
 #[test]
-#[ignore = "C28: the reading moved to `beliefs`, whose P(MH void) after the pass forth is 0.25-0.32 below the real rate; reported to the Search Coder"]
+#[ignore = "Pass-choice inference is not implemented; human void rates are a historical diagnostic, not a calibration target for the current policy"]
 fn c5_vh_reads_mh_voids_like_the_humans_do() {
     // HP1 bids and passes; at VH's first decision after the pass forth, compare its posterior
     // P(MH void in each suit MH passed) with the human rates and with what MH really holds.

@@ -6,7 +6,13 @@
 //! 2. **B-tell:** while `info_channel_open`, the first message of `info_to_tell` (with a pair,
 //!    the ace first, then the pair; 3+ halves without a pair before the ace; a +10/+15 landing
 //!    on 140 goes to 145, a +5 stays 140). A step across 140 only if `team_pair_cover(target)`
-//!    ≥ `over_140_cover` (**B-over140**), else that message is skipped.
+//!    ≥ `over_140_cover` (**B-over140**), else that message is skipped. **The tie-break**
+//!    (batch 1c), when the message is a +5/+10 landing on 135 or below, in this order:
+//!    - over 140 (**B-over140**): no own pair message left to tell (my pair goes by its own
+//!      message) and `team_pair_cover` at the lowest bid above 140 ≥ `over_140_cover`, the team
+//!      pair being derived from my single halves and the partner's signals: that bid;
+//!    - 140 (**B-gate**) if `game_drive` ≥ 0.5;
+//!    - else the step.
 //! 3. **B-defend:** no ace, no pair and no 3+ halves in the hand, the partner's first call was a
 //!    pass, the opponents are bidding, and my hand is near hopeless (`schwarz_defend`, from
 //!    `standing_against_us`): first 140, then +5, just enough to stay ahead, up to its limit
@@ -21,11 +27,13 @@
 //! Taking the game (HB-8), claiming 140 (HB-140c), the barriers and raising come with the game
 //! estimate in batch 2; until then they are off.
 
-use beliefs::conventions::{follow_target, info_to_tell, next_context, HandClass, Message, PAIR_LINE, PAIR_MESSAGES};
-use engine::{ActionType, CardSet, GameAction, SUITS};
+use beliefs::conventions::{
+    follow_target, info_to_tell, next_context, pair_value, BidContext, HandClass, Message, PAIR_LINE, PAIR_MESSAGES,
+};
+use engine::{ActionType, CardSet, GameAction, Suit, SUITS};
 
 use crate::rules::RuleId;
-use crate::{decision, fact, Ctx, Decision};
+use crate::{decision, fact, Ctx, Decision, Fact};
 
 // The 140 gate's thresholds: the orchestrator's proposal (`findings/kb/concepts.md`, batch 1b),
 // read from the human 140 jumpers (KB-01 P2: 2.5 standing cards, 0.6 A+10, 1.7 aces on
@@ -49,6 +57,235 @@ const GATE2_MAX_VALUE: i32 = 135;
 /// 25–26 → 220, 24 → 200, 23 → 180, 21–22 → 140; 20 or fewer, no protective bid.
 /// Owner-confirmed 2026-10-07 (`findings/kb/concepts.md`, batch 1b addendum 7).
 const DEFEND_LIMITS: [(u32, i32); 5] = [(27, 240), (25, 220), (24, 200), (23, 180), (21, 140)];
+
+/// KB `game_drive` (batch 1c): the weights of P(prefer 140 over the step) = σ(Σ wᵢ·xᵢ −
+/// `threshold`), in standing-card units. From the joint human-game analysis, owner-requested
+/// (`findings/kb/concepts.md`, "Batch 1c"; the derived-pair weight is provisional). Not tuned.
+struct DriveWeights {
+    /// Per card standing from my hand alone (`own_standing`).
+    standing: f32,
+    /// Per suit with its ace and ten (`ace_ten`).
+    ace_ten: f32,
+    /// Per 100 of my own complete pairs' value.
+    own_pair_per_100: f32,
+    /// Per 100 of `derived_pair_value` (provisional).
+    derived_pair_per_100: f32,
+    /// The step lands on 135.
+    lands_on_135: f32,
+    /// The partner's last call was a pass.
+    partner_passed: f32,
+    /// The partner has not called yet.
+    partner_not_acted: f32,
+    /// The partner sent a pair message.
+    partner_pair: f32,
+    /// Messages still to tell (`info_to_tell`), each once.
+    tell_two_halves: f32,
+    tell_ace: f32,
+    tell_small_pair: f32,
+    tell_three_halves: f32,
+    /// A big (or red) pair message whose bid crosses 140.
+    tell_big_pair_over_140: f32,
+    /// Σ ≥ this ⇔ P ≥ 0.5.
+    threshold: f32,
+}
+
+const GAME_DRIVE: DriveWeights = DriveWeights {
+    standing: 1.0,
+    ace_ten: 0.9,
+    own_pair_per_100: 1.9,
+    derived_pair_per_100: 1.9,
+    lands_on_135: 1.9,
+    partner_passed: 0.3,
+    partner_not_acted: -0.8,
+    partner_pair: -0.6,
+    tell_two_halves: -2.1,
+    tell_ace: -1.2,
+    tell_small_pair: -0.9,
+    tell_three_halves: -0.4,
+    tell_big_pair_over_140: 3.2,
+    threshold: 4.3,
+};
+
+/// KB `p_take_140` (C43b): the log-odds of P(take the game at 140 rather than pass) when
+/// nothing is left to tell. From the human-game analysis (B-quiet: 140 vs pass, 1,261
+/// decisions at 125–135, `tools/kbstudy/quietfit.py`), owner-requested. Not tuned.
+struct QuietWeights {
+    intercept: f32,
+    /// Per card standing from my hand alone (`own_standing`).
+    standing: f32,
+    /// Per suit with its ace and ten.
+    ace_ten: f32,
+    /// Per 100 of my own complete pairs' value.
+    own_pair_per_100: f32,
+    /// `team_pair_cover_derivable(145)`.
+    cover_145: f32,
+    /// Per card of `standing_potential`.
+    potential: f32,
+    /// The value is 135.
+    at_135: f32,
+    /// The partner's last call was a pass.
+    partner_passed: f32,
+    /// The partner has not called yet.
+    partner_not_acted: f32,
+    /// Per ace.
+    aces: f32,
+}
+
+const P_TAKE_140: QuietWeights = QuietWeights {
+    intercept: -4.85,
+    standing: 0.39,
+    ace_ten: 0.10,
+    own_pair_per_100: 1.07,
+    cover_145: 3.21,
+    potential: 0.42,
+    at_135: 0.84,
+    partner_passed: -0.48,
+    partner_not_acted: -0.21,
+    aces: 0.76,
+};
+
+fn uncalled_pair_value(k: &knowledge::Knowledge, class: HandClass) -> i32 {
+    SUITS
+        .into_iter()
+        .filter(|&s| class.has_pair(s) && !k.is_called(s))
+        .map(pair_value)
+        .sum()
+}
+
+/// KB `p_take_140` (C43b): P(bid 140 to take the game rather than pass), a probability; the
+/// terms go to `why`.
+fn p_take_140(ctx: &Ctx, class: HandClass, value: i32, mate: PartnerCalls, why: &mut Vec<Fact>) -> f32 {
+    let w = &P_TAKE_140;
+    let (k, me) = (ctx.k, ctx.me);
+    let hand = k.certain(me);
+    let own_pairs = uncalled_pair_value(k, class);
+    let terms = [
+        ("standing", w.standing * k.own_standing(me).len() as f32),
+        (
+            "ace_ten",
+            w.ace_ten * SUITS.into_iter().filter(|&s| k.ace_ten(me, s)).count() as f32,
+        ),
+        ("own_pairs", w.own_pair_per_100 * own_pairs as f32 / 100.0),
+        (
+            "cover_145",
+            w.cover_145 * ctx.mind.team_pair_cover_derivable(PAIR_LINE + 5),
+        ),
+        (
+            "standing_potential",
+            w.potential * knowledge::standing_potential_of(hand) as f32,
+        ),
+        ("at_135", if value == PAIR_LINE - 5 { w.at_135 } else { 0.0 }),
+        ("partner_passed", if mate.passed { w.partner_passed } else { 0.0 }),
+        (
+            "partner_not_acted",
+            if mate.not_acted { w.partner_not_acted } else { 0.0 },
+        ),
+        ("aces", w.aces * (hand & CardSet::ACES).len() as f32),
+    ];
+    let x = w.intercept + terms.iter().map(|t| t.1).sum::<f32>();
+    why.extend(terms.iter().filter(|t| t.1 != 0.0).map(|&(n, v)| fact(n, v)));
+    let p = 1.0 / (1.0 + (-x).exp());
+    why.push(fact("p_take_140", p));
+    p
+}
+
+/// The partner in the auction so far: no call yet, its last call a pass, a pair message sent.
+#[derive(Clone, Copy)]
+struct PartnerCalls {
+    not_acted: bool,
+    passed: bool,
+    pair: bool,
+}
+
+/// What the tie-break looks at: my hand class, the messages I still have to tell, the auction
+/// context, the step's bid, and the partner's calls.
+struct TieBreak<'a> {
+    class: HandClass,
+    tell: &'a [Message],
+    bctx: &'a BidContext,
+    target: i32,
+    mate: PartnerCalls,
+}
+
+/// KB `game_drive` (batch 1c): P(prefer 140 over the step), a probability (the store's
+/// principle). v1 bids 140 at P ≥ 0.5.
+fn game_drive(ctx: &Ctx, t: &TieBreak) -> f32 {
+    let w = &GAME_DRIVE;
+    let p = ctx.params.conv();
+    let (k, me) = (ctx.k, ctx.me);
+    let own_pairs = uncalled_pair_value(k, t.class);
+    let mut x = w.standing * k.own_standing(me).len() as f32
+        + w.ace_ten * SUITS.into_iter().filter(|&s| k.ace_ten(me, s)).count() as f32
+        + w.own_pair_per_100 * own_pairs as f32 / 100.0
+        + w.derived_pair_per_100 * ctx.mind.derived_pair_value() / 100.0;
+    if t.target == PAIR_LINE - 5 {
+        x += w.lands_on_135;
+    }
+    if t.mate.not_acted {
+        x += w.partner_not_acted;
+    } else if t.mate.passed {
+        x += w.partner_passed;
+    }
+    if t.mate.pair {
+        x += w.partner_pair;
+    }
+    let small_pair = !t.class.has_pair(Suit::Red)
+        && !t.class.has_pair(Suit::Bells)
+        && (t.class.has_pair(Suit::Acorns) || t.class.has_pair(Suit::Green));
+    for &m in t.tell {
+        x += match m {
+            Message::TwoHalves => w.tell_two_halves,
+            Message::Ace => w.tell_ace,
+            Message::SmallOrHalves if small_pair => w.tell_small_pair,
+            Message::SmallOrHalves => w.tell_three_halves,
+            Message::BigPair | Message::RedPair if follow_target(m, t.bctx, p) > PAIR_LINE => w.tell_big_pair_over_140,
+            Message::BigPair | Message::RedPair => 0.0,
+        };
+    }
+    1.0 / (1.0 + (w.threshold - x).exp())
+}
+
+/// The tie-break (batch 1c) for a +5/+10 message landing on 135 or below: over 140, else 140,
+/// else None (the step).
+fn tie_break(ctx: &Ctx, legal: &[GameAction], t: &TieBreak, why: &mut Vec<Fact>) -> Option<Decision> {
+    why.push(fact("tie_break", 1));
+    if let Some(d) = over_140(ctx, legal, t, why) {
+        return Some(d);
+    }
+    // 2. 140 if the game drive says so.
+    let drive = game_drive(ctx, t);
+    why.push(fact("game_drive", drive));
+    if drive >= 0.5 {
+        return Some(decision(find(legal, Some(PAIR_LINE))?, RuleId::BGate, why.clone()));
+    }
+    None
+}
+
+/// Step 1 of the chain: over 140, "we have a pair together", once my own pair and halves
+/// messages are told (C43), on my complete pairs and the pairs derivable from the partner's
+/// messages: the lowest legal bid above 140.
+fn over_140(ctx: &Ctx, legal: &[GameAction], t: &TieBreak, why: &mut Vec<Fact>) -> Option<Decision> {
+    let own_to_tell = t
+        .tell
+        .iter()
+        .any(|m| (PAIR_MESSAGES | Message::TwoHalves.bit()) & m.bit() != 0);
+    let over = legal
+        .iter()
+        .filter_map(|a| match a.action_type {
+            ActionType::NewBid(v) if v > PAIR_LINE => Some(v),
+            _ => None,
+        })
+        .min();
+    if let (false, Some(v)) = (own_to_tell, over) {
+        let cover = ctx.mind.team_pair_cover_derivable(v);
+        why.push(fact("team_pair_cover", cover));
+        why.push(fact("derived_pair_value", ctx.mind.derived_pair_value()));
+        if cover >= ctx.params.over_140_cover {
+            return Some(decision(find(legal, Some(v))?, RuleId::BOver140, why.clone()));
+        }
+    }
+    None
+}
 
 fn find(legal: &[GameAction], bid: Option<i32>) -> Option<&GameAction> {
     legal.iter().find(|a| match (&a.action_type, bid) {
@@ -83,13 +320,21 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     let p = ctx.params.conv();
     let class = HandClass::of(ctx.k.certain(ctx.me));
     // Read the record once (the believed reads below recompute the Mind's cache).
-    let (bctx, calls, plan_formed, opponents_stepped) = {
+    let (bctx, calls, plan_formed, opponents_stepped, mate) = {
         let record = ctx.mind.record();
+        let bids = &record.seats[engine::partner(ctx.me) as usize].bids;
         (
             next_context(&record.auction, ctx.me, p),
             record.calls(ctx.me),
             record.team_plan_formed(ctx.me),
             record.opponents_stepped(ctx.me),
+            PartnerCalls {
+                not_acted: bids.is_empty(),
+                passed: bids.last().is_some_and(|b| b.bid.is_none()),
+                pair: bids
+                    .iter()
+                    .any(|b| b.nominal.is_some_and(|m| PAIR_MESSAGES & m.bit() != 0)),
+            },
         )
     };
     let v = bctx.value;
@@ -123,6 +368,18 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
                 }
             }
             if let Some(a) = find(legal, Some(target)) {
+                if m.step() <= 10 && target < PAIR_LINE {
+                    let t = TieBreak {
+                        class,
+                        tell: &tell,
+                        bctx: &bctx,
+                        target,
+                        mate,
+                    };
+                    if let Some(d) = tie_break(ctx, legal, &t, &mut why) {
+                        return d;
+                    }
+                }
                 why.push(fact("message", m as u8));
                 why.push(fact("step", target - v));
                 if gate1 {
@@ -155,6 +412,27 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
         if let Some(a) = find(legal, Some(PAIR_LINE)) {
             why.push(fact("gate_part", 1));
             return decision(a, RuleId::BGate, why);
+        }
+    }
+    // B-quiet with nothing left to tell (C43, C43b; owner on seed 42: "should have gone for the
+    // 140 to take the game"), while 140 is still open: over 140, else 140 if `p_take_140` ≥ 0.5
+    // (the real alternative here is the pass), else pass.
+    if tell.is_empty() && v < PAIR_LINE {
+        let t = TieBreak {
+            class,
+            tell: &tell,
+            bctx: &bctx,
+            target: v,
+            mate,
+        };
+        why.push(fact("tie_break", 1));
+        if let Some(d) = over_140(ctx, legal, &t, &mut why) {
+            return d;
+        }
+        if p_take_140(ctx, class, v, mate, &mut why) >= 0.5 {
+            if let Some(a) = find(legal, Some(PAIR_LINE)) {
+                return decision(a, RuleId::BGate, why);
+            }
         }
     }
     // B-quiet (B-over140 when it held a message back).

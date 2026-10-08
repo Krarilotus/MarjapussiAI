@@ -53,8 +53,8 @@ rules! {
     // Bidding (§3.1)
     // KB batch 1 (`findings/kb/concepts.md`)
     BTell "B-tell" Bidding 0 1 "[O]" "tell the first live message: with a pair, the ace first, then the pair; 3+ halves without a pair before the ace; a +10/+15 landing on 140 goes to 145";
-    BOver140 "B-over140" Bidding 1 1 "[O]" "a step across 140 only with team_pair_cover(target) >= 0.75, else the message is skipped";
-    BGate "B-gate" Bidding 4 1 "[O]" "the 140 gate: block instead of telling (part 2) or with strong cards and nothing to tell (part 1); thresholds proposed";
+    BOver140 "B-over140" Bidding 1 1 "[O]" "a step across 140 only with team_pair_cover(target) >= 0.75, else the message is skipped; in the tie-break, over 140 when the team pair (derived) covers 145";
+    BGate "B-gate" Bidding 4 1 "[O]" "the 140 gate: block instead of telling (part 2), with strong cards and nothing to tell (part 1; thresholds proposed), or in the tie-break when game_drive >= 0.5";
     BDefend "B-defend" Bidding 3 1 "[O]" "nothing to tell, the partner passed first, many cards standing against us: 140, then +5 up to the limit";
     BQuiet "B-quiet" Bidding 5 1 "[O]" "nothing to tell: pass";
     HB8 "HB-8" Bidding 7 3 "[D]" "nothing left to tell: +5 to take the game (off until KB batch 2)";
@@ -75,23 +75,9 @@ rules! {
     HZ1 "HZ-1" Raising 0 3 "[O]" "after the exchange, compute EGP from my 9 cards and the 4 given back";
     HZ2 "HZ-2" Raising 1 3 "[O] [D]" "raise to round_down_5(EGP - raise_margin) if above the value, else play";
     HZ3 "HZ-3" Raising 2 3 "[O]" "never raise across 140 without a certain team pair";
-    // Passing forth (§5.1)
-    HP1 "HP-1" PassingForth 0 1 "[O] [RV]" "make suits blank, best two";
-    HP2 "HP-2" PassingForth 1 1 "[O]" "pass what the partner does not know yet";
-    HP3 "HP-3" PassingForth 2 1 "[O]" "better cards are preferred";
-    HP4 "HP-4" PassingForth 3 1 "[O]" "pass what VH needs for its likely game";
-    HP5 "HP-5" PassingForth 4 1 "[O]" "very weak: avoid passing green";
-    HP6 "HP-6" PassingForth 5 1 "[O] [RV]" "keep known or big pairs; pass an unknown small pair (Acorns more readily) when needed";
-    HP7 "HP-7" PassingForth 6 1 "[O]" "awkward hand: no blank possible, pass for VH's game";
-    HP8 "HP-8" PassingForth 7 1 "[O]" "blank a suit with its Lusche: signals 'blank in s' for schnippeln";
-    // Passing back (§5.2)
-    HK1 "HK-1" PassingBack 0 1 "[RV]" "keep trump and both halves of the planned pair";
-    HK2 "HK-2" PassingBack 1 1 "[O]" "pass back one complete side suit MH can lead";
-    HK3 "HK-3" PassingBack 2 1 "[D]" "keep aces and standing cards";
-    HK4 "HK-4" PassingBack 3 1 "[O]" "keep a trump or sure winner for the last trick";
-    HK5 "HK-5" PassingBack 4 1 "[O] [RV]" "make myself void in a side suit";
-    HK6 "HK-6" PassingBack 5 1 "[D]" "no-trump plan: keep long suits with top cards, pass back short ones";
-    HK7 "HK-7" PassingBack 6 1 "[O]" "give my few aces back, keeping a low card of one of their suits, to schnippeln in trick 1";
+    // Passing (KB batch 2, C42): the store, score = Σ passing_weights × features
+    PForth "P-forth" PassingForth 0 1 "[O] [A]" "pass forth: the best Σ passing_weights × features (human choice analysis, owner-requested)";
+    PBack "P-back" PassingBack 0 1 "[O] [A]" "pass back: the best Σ passing_weights × features (human choice analysis, owner-requested)";
     // Trump and questions (§6.1)
     HQ1 "HQ-1" Trump 1 3 "[RV]" "cash side-suit standing cards first while HC-2 holds";
     HQ2 "HQ-2" Trump 2 3 "[RV]" "replaced by HC-2's trigger";

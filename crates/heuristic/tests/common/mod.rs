@@ -108,15 +108,18 @@ impl Scene {
     }
 
     pub fn pass_legal(&self) -> Vec<GameAction> {
-        beliefs::conventions::passes::options(self.hand())
-            .into_iter()
-            .map(|x| {
-                let mut cards = x.cards();
-                cards.sort();
-                cards.reverse();
-                self.action(ActionType::Pass(cards.try_into().expect("four cards")))
-            })
-            .collect()
+        let cards: Vec<_> = self.hand().iter().collect();
+        let mut legal = Vec::new();
+        for a in 0..cards.len() {
+            for b in a + 1..cards.len() {
+                for c in b + 1..cards.len() {
+                    for d in c + 1..cards.len() {
+                        legal.push(self.action(ActionType::Pass([cards[d], cards[c], cards[b], cards[a]].map(card))));
+                    }
+                }
+            }
+        }
+        legal
     }
 
     /// The cards the engine allows now.

@@ -1,5 +1,4 @@
-//! Every weight of the convention models in one place: the encoders (what a seat sends with a
-//! bid or a pass) and their readings. Defaults are HP1's "normal" profile (moved from
+//! Parameters of bid conventions and their readings. Defaults are HP1's "normal" profile (moved from
 //! `heuristic::Params`, D-d). A flat TOML file (`key = value` lines) overrides single keys.
 
 macro_rules! params {
@@ -87,7 +86,7 @@ params! {
     read_hp1_as_hp1: bool = false,
     /// Share of the non-conforming mass that still reads the step literally (no 140 shift).
     literal_share: f32 = 0.5,
-    /// Likelihood floor ε of every convention reading (bids and passes): a belief never
+    /// Likelihood floor ε of every bid convention reading: a belief never
     /// becomes a fact.
     convention_floor: f32 = 0.02,
     /// §3.4 trust θ per seat kind (D-f): human seats by relation and HP1 seats. C32: all at the
@@ -107,42 +106,6 @@ params! {
     /// HR-7: P(a barrier bid is a block) right after the other team showed a big pair, else.
     block_prior: f32 = 0.3,
     block_base: f32 = 0.02,
-
-    // The pass models (§1.4, §5): P(option | hand) = softmax(score / τ)
-    pass_temperature: f32 = 1.0,
-    // Passing forth (HP-1 … HP-8)
-    w_blank: f32 = 10.0,
-    w_blank_two: f32 = 6.0,
-    w_info_ace: f32 = 4.0,
-    w_info_half: f32 = 2.0,
-    w_info_complete: f32 = 3.0,
-    w_quality: f32 = 0.3,
-    w_need_ace: f32 = 6.0,
-    w_need_half: f32 = 5.0,
-    /// HP-5: very weak tie-breaker (≈ 5 % of `w_blank`).
-    w_green: f32 = 0.5,
-    w_split: f32 = 12.0,
-    w_keep_pair: f32 = 15.0,
-    w_pass_acorns: f32 = 6.0,
-    w_pass_needed: f32 = 10.0,
-    /// HP-8: bonus per small card (6 … U) of a suit the pass makes me blank in.
-    w_small_blank: f32 = 3.0,
-    /// HP-7: multiplier on HP-3/HP-4 when no option makes a suit blank.
-    w_awkward: f32 = 1.5,
-    // Passing back (HK-1 … HK-7)
-    w_trump_keep: f32 = 20.0,
-    w_half_keep: f32 = 30.0,
-    w_side_suit: f32 = 8.0,
-    w_keep_ace: f32 = 10.0,
-    w_keep_standing: f32 = 5.0,
-    w_void: f32 = 4.0,
-    w_short: f32 = 2.0,
-    w_last_trick: f32 = 15.0,
-    /// HK-7 (P9): bonus for giving all my aces back (at most this many) to schnippeln in trick 1.
-    w_schnippeln: f32 = 0.0,
-    schnippeln_max_aces: u32 = 1,
-    /// P-T(s) via MH: minimum P(MH holds the other half).
-    partner_half_conf: f32 = 0.5,
 
     // Expected game points (§2), the estimate HP1 bids on (read here for HP1 seats, P3). C32:
     // the design's hand-set formula of M1, 60 + 7 per ace + 3 per ten + 10 × P(partner ace),
