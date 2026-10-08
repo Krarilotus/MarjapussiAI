@@ -1,6 +1,6 @@
 //! Every weight and threshold of HP1 in one place (spec §8). Defaults are the "normal"
 //! profile. A flat TOML file (`key = value` lines, `#` comments) overrides single keys; the
-//! convention keys (bid and pass encoders, EGP weights, readings) go to `beliefs`.
+//! convention keys (bid messages, EGP weights, readings) go to `beliefs`.
 
 use beliefs::BeliefParams;
 
@@ -57,6 +57,9 @@ params! {
     /// least this ([O] 2026-10-06: "P(team pair) high, ~75 %").
     over_140_cover: f32 = 0.75,
 
+    /// Pass-back plan: minimum P(partner holds a half of the suit) to favour my single half.
+    partner_half_conf: f32 = 0.5,
+
     /// HL-2: cash a side-suit standing card before the valuation leads.
     lead_cash_standing: bool = true,
     // Planned leads (M3, Judge item 5; `leads.rs`), each switchable for its A/B against the
@@ -101,7 +104,7 @@ pub enum Selection {
 }
 
 impl Params {
-    /// The convention models HP1 acts with (bid and pass encoders, EGP).
+    /// The bid conventions and EGP parameters.
     pub fn conv(&self) -> &beliefs::conventions::Params {
         &self.beliefs.conventions
     }
@@ -142,10 +145,16 @@ mod tests {
     fn toml_round_trip_and_override() {
         let defaults = Params::default();
         assert_eq!(Params::from_toml(&defaults.to_toml()).unwrap(), defaults);
-        let p = Params::from_toml("# tuned\nw_blank = 12.5\nlead_draw_trump = true  # on\n").unwrap();
-        assert_eq!(p.conv().w_blank, 12.5);
+        let p = Params::from_toml("# override\ntrust_partner = 0.75\nlead_draw_trump = true  # on\n").unwrap();
+        assert_eq!(p.conv().trust_partner, 0.75);
         assert!(p.lead_draw_trump);
         assert!(Params::from_toml("nope = 1").is_err());
-        assert!(Params::from_toml("w_blank = x").is_err());
+        assert!(Params::from_toml("w_blank = 12.5").is_err());
+        assert!(Params::from_toml("pass_temperature = 1").is_err());
+        assert_eq!(
+            Params::from_toml("partner_half_conf = 0.7").unwrap().partner_half_conf,
+            0.7
+        );
+        assert!(Params::from_toml("trust_partner = x").is_err());
     }
 }

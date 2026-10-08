@@ -1,14 +1,11 @@
-//! The convention models (D-d, one owner): the encoders a seat acts with (bid messages and
-//! targets, the pass scores, HP1's bid policy and its EGP) and their readings (likelihoods over
-//! the 162 hand classes, the pass likelihood). HP1 acts with the encoders; every `Mind` reads
-//! with the readings.
+//! Bid conventions: messages and targets, likelihoods over the 162 hand classes,
+//! and the optional historical HP1 bid/EGP model. Pass choice belongs to `heuristic`;
+//! the active `Mind` does not infer intent from the choice of exchanged cards.
 
 mod bids;
 mod classes;
 pub mod hp1;
 mod params;
-mod pass_read;
-pub mod passes;
 
 pub use agent::SeatKind;
 pub use bids::{
@@ -20,7 +17,6 @@ pub use classes::{
     SMALL_PAIRS,
 };
 pub use params::Params;
-pub use pass_read::{back_ctx, forth_ctx, PassReading};
 
 use engine::Suit;
 

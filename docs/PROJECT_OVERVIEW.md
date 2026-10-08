@@ -29,7 +29,7 @@ Remote branch references were inspected locally; they were not fetched or pushed
 | `observation` | Own hand and seat-filtered public/private events | Clear fairness boundary; hidden exchanges are redacted. |
 | `knowledge` | Certain/possible cards, constraints, exact deal counts and samples | Appropriate separation of deductions from conventions; soundness and hidden-card-swap tests exist. |
 | `agent` | `SeatView`, actions, explanations, seat metadata | Small shared contract; does not supply the full game state to the policy. |
-| `beliefs` | Uncertain card/hand features, bid/pass interpretation, lazy caches | Useful fact-constrained model; several joint probabilities remain approximations. Pass interpretation lags the current acting policy. |
+| `beliefs` | Uncertain card/hand features, bidding evidence, exchange bookkeeping, lazy caches | Useful fact-constrained model; several joint probabilities remain approximations. Pass-choice intent is not currently inferred. |
 | `heuristic` | Bidding, exchange, trump/lead decisions, card valuation | Explainable prototype with local owner-informed corrections and empirically fitted choice weights. No complete coordinated game planner. |
 | `solver` | Perfect-information endgame solving and aggregation over possible deals | Sensible bounded aid. Exact solving within a deal is distinct from optimal imperfect-information play. |
 | `eval` | Table runner, duplicate deals, statistics, detectors | Good reusable evaluation boundary; statistical claims need tightening. |
@@ -52,7 +52,7 @@ Rust helpers; a diagram is not evidence that a complete planner already exists.
 
 ## Current limits
 
-- The pass selector and pass reader use different models.
+- Pass choice uses the C42 feature score. The unused HP/HK reader and scorer have been removed; the active beliefs never called that reader. Inferring intent from chosen passes remains separate capability work. See [passing models](PASSING.md).
 - Raising is deliberately disabled; coordinated entries/trump/contract planning remains incomplete.
 - Fitted human-choice weights measure imitation, not necessarily good play. Their inspected fit scripts report in-sample agreement.
 - The endgame uses at most 64 worlds by default with a four-card trigger; questions/activation can keep decisions on the heuristic path.

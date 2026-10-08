@@ -1,5 +1,8 @@
 # Design: Heuristic Player v1 (HP1), a rule-based benchmark player
 
+> Historical design/tuning record. The pass implementation and APIs have changed;
+> see [current passing semantics](../PASSING.md) and the checkpoint records.
+
 Orchestrator, 2026-10-06. **Status: draft for implementation.**
 
 Serves:
