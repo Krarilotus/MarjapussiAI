@@ -5,6 +5,7 @@ description = "Marjapussi rules engine (single owner of the game rules)."
 authors = ["Samuel Leßmann <samuel@lessmann.dev>", "Krarilotus"]
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 chrono = "0.4.40"
