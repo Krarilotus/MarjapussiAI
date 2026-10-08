@@ -14,7 +14,7 @@ This work stands on the shoulders of the Marjapussi community's code:
 | Earlier AI work: perfect-information search and bidding heuristics | [schmiddihhh](https://github.com/schmiddihhh) | [marjapussi-ki](https://github.com/schmiddihhh/marjapussi-ki), [marjapussi-ki-py](https://github.com/schmiddihhh/marjapussi-ki-py), [marjapussi](https://github.com/schmiddihhh/marjapussi) |
 | Earlier AI work | [HerrMotz](https://github.com/HerrMotz) | [marjapussi-ki](https://github.com/HerrMotz/marjapussi-ki), [marjapussi](https://github.com/HerrMotz/marjapussi) |
 
-The engine in `crates/engine` is imported from marjapussi-rs with rule corrections; the details are in [`NOTICE`](NOTICE).
+The engine in `crates/engine` is an included, corrected copy of [marjapussi-rs](https://github.com/Krarilotus/marjapussi-rs), not a separate build dependency; see [`NOTICE`](NOTICE). To play with the AI, use the [testbed and its setup instructions](https://github.com/Krarilotus/MarjapussiAI-testbed#run-it).
 
 ## What the project is about
 Marjapussi is a 4-player, 2-against-2 trick-taking game with imperfect information:
@@ -40,15 +40,16 @@ More: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/design/`](docs/d
 ## Current development and concept store
 
 `main` contains the engine, observation and exact knowledge crates. The published
-`v1-preview` branch adds an agent snapshot with beliefs, heuristic decisions,
-the endgame solver and evaluation tools. Newer bidding and passing corrections
-are still local development; the coordinated game planner is proposed work.
+`v1-preview` branch contains the continuing agent, including the reviewed pass
+cleanup and history-cache fix. The coordinated game planner remains proposed work.
 
-The [concept-store dependency graph](docs/design/concept-store.md) explains how
+The [current concept-store dependency graph](https://github.com/Krarilotus/MarjapussiAI/blob/v1-preview/docs/design/concept-store.md) explains how
 visible cards become facts and beliefs, then bidding, exchange and planning
 concepts. It includes calculations, ownership and implementation status.
 
 ![Overview of the concept store: visible inputs, hand and seat concepts, team and game concepts, then decisions. Dashed planning boxes are proposals.](docs/assets/concept-store.png)
+
+The graphic is the 7 October design snapshot; publication status is updated above.
 
 To build the published agent snapshot from a fresh clone:
 

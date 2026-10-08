@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "What one seat may know: the privacy boundary between the engine and the AI."
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 engine = { package = "marjapussi-engine", path = "../engine" }

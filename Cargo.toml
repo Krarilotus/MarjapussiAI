@@ -5,7 +5,7 @@ members = ["crates/engine", "crates/observation", "crates/knowledge"]
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0"
-repository = "local: Documents/MarjaAI/MarjapussiAI"
+repository = "https://github.com/Krarilotus/MarjapussiAI"
 
 [profile.release]
 opt-level = 3
