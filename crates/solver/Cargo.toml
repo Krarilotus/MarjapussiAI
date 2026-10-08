@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Exact card-play solver on engine::fast, and move evaluation over sampled worlds (layer 4)."
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 engine = { package = "marjapussi-engine", path = "../engine" }

@@ -20,7 +20,7 @@ impl Partner {
         let seat = partner(mind.seat());
         let features = mind.features(seat);
         Self {
-            cards: std::array::from_fn(|c| mind.p_holds(seat, c as u8)),
+            cards: mind.holds_row(seat),
             ace: features.ace,
             void: SUITS.map(|s| mind.p_void(seat, s)),
             half: features.half,

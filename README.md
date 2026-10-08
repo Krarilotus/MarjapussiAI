@@ -14,7 +14,7 @@ This work stands on the shoulders of the Marjapussi community's code:
 | Earlier AI work: perfect-information search and bidding heuristics | [schmiddihhh](https://github.com/schmiddihhh) | [marjapussi-ki](https://github.com/schmiddihhh/marjapussi-ki), [marjapussi-ki-py](https://github.com/schmiddihhh/marjapussi-ki-py), [marjapussi](https://github.com/schmiddihhh/marjapussi) |
 | Earlier AI work | [HerrMotz](https://github.com/HerrMotz) | [marjapussi-ki](https://github.com/HerrMotz/marjapussi-ki), [marjapussi](https://github.com/HerrMotz/marjapussi) |
 
-The engine in `crates/engine` is imported from marjapussi-rs with rule corrections; the details are in [`NOTICE`](NOTICE).
+The engine in `crates/engine` is an included, corrected copy of [marjapussi-rs](https://github.com/Krarilotus/marjapussi-rs), not a separate build dependency; see [`NOTICE`](NOTICE). To play with the AI, use the [testbed and its setup instructions](https://github.com/Krarilotus/MarjapussiAI-testbed#run-it).
 
 ## What the project is about
 Marjapussi is a 4-player, 2-against-2 trick-taking game with imperfect information:
@@ -27,7 +27,7 @@ The AI is built in layers, each with one job:
 - **Rules (`engine`):** legal moves, scoring as on marjapussi.de, and a fast bitset core for search (about 20–30 ns per move).
 - **Observation (`observation`):** each seat sees only what that player could see. **The AI never looks at hidden cards;** tests check this.
 - **Known facts (`knowledge`):** what a seat can deduce for certain (who can still hold which card, voids, standing cards, pairs). Updated in about 30 ns per event, and checked against the true hands in thousands of games.
-- **Beliefs (`beliefs`):** probabilities over the cards that are still uncertain. The base is the combinatorial distribution of the unknown cards under the facts. The conventions of bids, passes and leads adjust it, and probabilities stay exactly 0 or 1 where the facts decide.
+- **Beliefs (`beliefs`):** probabilities over uncertain cards, constrained by the facts and exchanges and adjusted by bid evidence. Probabilities stay exactly 0 or 1 where the facts decide; interpreting pass-choice intent remains future work.
 - **The players:**
   - **`heuristic`** (agent A): a strategy built from general ideas (what a card is worth to keep or to give, how likely our pair can be announced, what the contract still needs), not a pile of case rules;
   - **`solver`**: an exact endgame search over the deals the player can believe in.
@@ -40,15 +40,18 @@ More: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/design/`](docs/d
 ## Current development and concept store
 
 `main` contains the engine, observation and exact knowledge crates. The published
-`v1-preview` branch adds an agent snapshot with beliefs, heuristic decisions,
-the endgame solver and evaluation tools. Newer bidding and passing corrections
-are still local development; the coordinated game planner is proposed work.
+`v1-preview` branch contains the continuing agent, including the reviewed pass
+cleanup and history-cache fix. The coordinated game planner remains proposed work.
+See the [overview](docs/PROJECT_OVERVIEW.md), [next steps](docs/NEXT_STEPS.md)
+and [checkpoint workflow](docs/WORKFLOW.md).
 
 The [concept-store dependency graph](docs/design/concept-store.md) explains how
 visible cards become facts and beliefs, then bidding, exchange and planning
 concepts. It includes calculations, ownership and implementation status.
 
 ![Overview of the concept store: visible inputs, hand and seat concepts, team and game concepts, then decisions. Dashed planning boxes are proposals.](docs/assets/concept-store.png)
+
+The graphic is the 7 October design snapshot; publication status is updated above.
 
 To build the published agent snapshot from a fresh clone:
 
@@ -73,7 +76,7 @@ cargo test --workspace
 
 ## What's planned
 **v1 (now):** a playable heuristic agent that doesn't feel dumb.
-- It reads its partner's and opponents' bids, passes and leads as Bayesian evidence.
+- It reads bids as uncertain evidence; interpreting pass-choice intent remains planned work.
 - It values cards by one consistent idea of the expected score.
 - It plays the last tricks with the exact solver.
 

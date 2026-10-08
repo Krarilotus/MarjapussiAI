@@ -1,8 +1,8 @@
 # Next steps
 
 Goal: a fair, understandable agent that is enjoyable to play with, developed in
-small reviewable iterations. Start from `planning/ai-review-next-steps`, based on
-local AI `4782c65`. Every iteration follows the [checkpoint workflow](WORKFLOW.md).
+small reviewable iterations. Continue from published `v1-preview` or its immutable
+checkpoints. Every iteration follows the [checkpoint workflow](WORKFLOW.md).
 The order below is proposed engineering work, not approval of new strategic rules.
 
 Owner priority, 2026-10-08: condense the pass implementation first. Remove deprecated
@@ -16,7 +16,7 @@ preserves play; it does not introduce pass-choice inference.
 | 1b | Validate configuration values (F4) | Reject nonfinite/out-of-range parameters at configuration boundaries while preserving deliberate zeros. | `config-validation` |
 | 2 | Qualify evaluation and weight provenance (F2/F5) | Record each fit's source, data fingerprint, feature order and command. Split by complete game/session before fitting. Freeze weights before held-out evaluation. Use predeclared fixed-size duplicate comparisons and label approximate intervals; defer unsupported anytime-valid claims. | `evaluation` |
 | 3 | Add pass-choice inference (remaining F1 capability) | Define the modelled actor and pre-pass information; reuse the current scorer from hypothetical giver views; validate synthetic same-policy likelihoods/void predictions and privacy before testing held-out human behaviour. Bound runtime and disposition the ignored historical calibration check. | `exchange-reading` |
-| 4 | Consolidate a runnable baseline (F6) | Selectively reconcile preview docs/data safeguards; pin AI/testbed revisions in a dedicated sibling setup. Add public-fixture CI and a tested Rust version; report required checks, skipped lanes and deferred checks separately. | `baseline` |
+| 4, partially completed | Consolidate a runnable baseline (F6) | Preview docs/data safeguards reconciled and sibling AI/testbed pair verified in the publication checkpoint. Public-fixture CI and supported toolchain policy remain. | `publication`, then `baseline-ci` |
 | 5 | Add one coordinated planning slice | Compose existing exchange, entry, trump activation and first-lead concepts in named owner scenarios. Then separately review contract estimates/raising. Avoid new abstractions without a concrete consumer. | `plan-entries`, then `plan-raising` |
 | 6 | Make play/replay responsive (F7) | Snapshot state under the store lock, compute on a bounded worker, then revision-check before saving under a short lock. Test concurrent/stale-step handling. Reuse agent state only after F3 is fixed. | `playable-v1` |
 

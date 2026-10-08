@@ -16,10 +16,17 @@ The real workspace is `Documents/MarjaAI`; the T3 project at
 | AI `kb/batch1` | `4782c65` | Newer local bidding/passing work; the base of this continuation branch. |
 | Testbed `main` | `0665818` | Separate Rust API and Next.js play/debug UI. Reviewed statically. |
 
-Continuation branch: `planning/ai-review-next-steps`.
-Worktree: `Documents/MarjaAI/wt/ai-review-next-steps`.
-Existing AI/testbed checkouts and the outer workspace's uncommitted work are preserved.
-Remote branch references were inspected locally; they were not fetched or pushed.
+The table records the original review inputs. Continued work is published on
+`v1-preview`, integrated through `integration/reviewed-ai`. It includes the pass
+cleanup and history/parameter-cache correction. Original local checkpoints remain
+immutable; publication uses clean ancestry and separate tags. See the
+[publication record](checkpoints/2026-10-08-publication.md) for verification.
+
+The [testbed](https://github.com/Krarilotus/MarjapussiAI-testbed#run-it) documents
+the sibling checkout setup and tested revision pair. All nine AI crates resolve
+inside this repository; its engine is included source derived from
+[marjapussi-rs](https://github.com/Krarilotus/marjapussi-rs), not an external Cargo
+dependency. `NOTICE` records its provenance.
 
 ## Implementation map
 
@@ -57,8 +64,8 @@ Rust helpers; a diagram is not evidence that a complete planner already exists.
 - Fitted human-choice weights measure imitation, not necessarily good play. Their inspected fit scripts report in-sample agreement.
 - The endgame uses at most 64 worlds by default with a four-card trigger; questions/activation can keep decisions on the heuristic path.
 - Two behaviour-related tests are ignored, alongside deliberate performance tests.
-- This local branch predates preview documentation and private-data safeguards. Reconcile those selectively before publishing.
-- The existing testbed's sibling AI is on core-only `main`, so that pairing currently cannot resolve its agent dependencies.
+- Published continuation preserves the preview documentation, assets and private-data safeguards.
+- Core-only `main` still lacks agent dependencies; use `v1-preview` as documented in the testbed.
 
 See the [review](REVIEW-2026-10-08.md) for concrete defects and the
 [plan](NEXT_STEPS.md) for the order of work.
