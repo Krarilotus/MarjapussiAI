@@ -9,6 +9,39 @@ use observation::Seat;
 
 use crate::Knowledge;
 
+/// KB `standing_potential` of a hand (C43b): Σ over the suits headed by A Z (my top run from
+/// the ace ≥ 2 cards) with ≥ 4 cards of (length − run), the lower cards that become standing
+/// once the opponents' cards of the suit are gone. The count form is the orchestrator's, of the
+/// owner's "the other U and 9 can become standing pretty easy he just needs two more of that
+/// suit given to him. Even more if there would be the king".
+pub fn standing_potential_of(hand: CardSet) -> u32 {
+    let run = own_standing_of(hand);
+    SUITS
+        .into_iter()
+        .map(|s| {
+            let (len, top) = ((hand & CardSet::suit(s)).len(), (run & CardSet::suit(s)).len());
+            if top >= 2 && len >= 4 {
+                len - top
+            } else {
+                0
+            }
+        })
+        .sum()
+}
+
+/// KB `own_standing` of a set of cards (e.g. the 9 VH keeps, `vh_standing`): the cards that
+/// stand from the set alone, the top run of each suit: every higher card of the suit is in it.
+pub fn own_standing_of(hand: CardSet) -> CardSet {
+    hand.iter()
+        .filter(|&c| {
+            CardSet::suit(suit_of(c))
+                .iter()
+                .filter(|&b| takes(b, c, None))
+                .all(|b| hand.contains(b))
+        })
+        .fold(CardSet::EMPTY, |a, c| a | CardSet::single(c))
+}
+
 /// `stopper`: the lowest card that can stop a suit has 3 higher cards (the ober); the unter
 /// (4 higher) and lower never stop it ([O] 2026-10-07).
 pub const STOPPER_MAX_HIGHER: u32 = 3;
@@ -179,15 +212,7 @@ impl Knowledge {
     /// KB `own_standing`: the cards of `seat` that stand from its own certain cards alone, the
     /// top run of each suit (A; A, Z; A, Z, K; …): every higher card of the suit is its own.
     pub fn own_standing(&self, seat: Seat) -> CardSet {
-        let mine = self.certain(seat);
-        mine.iter()
-            .filter(|&c| {
-                CardSet::suit(suit_of(c))
-                    .iter()
-                    .filter(|&b| takes(b, c, None))
-                    .all(|b| mine.contains(b))
-            })
-            .fold(CardSet::EMPTY, |a, c| a | CardSet::single(c))
+        own_standing_of(self.certain(seat))
     }
 
     /// KB `stopper(s)`: the highest card of `suit` in `seat`'s certain hand that stops the

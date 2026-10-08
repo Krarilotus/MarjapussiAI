@@ -442,3 +442,25 @@ fn c34_a_discard_keeps_the_colour_the_partner_drops() {
     let d = s.act(&s.card_legal());
     assert_eq!(played(&d), Some(c("s-6")), "{d:?}");
 }
+
+#[test]
+fn a_pair_passed_to_the_partner_is_not_led_before_its_announcement() {
+    // Seed 42 under C42: VH (3) received s-K from MH (1) and gave the whole Schell pair back
+    // with its green. The partner's pair is certain to me (my own pass, K5), so Schell is a plan
+    // suit for me too: I don't cash s-A (MH would have to follow with a half) or lead s-9
+    // before the pair is announced (F10, owner #25 item 7).
+    let mut s = Scene::new(3, &["s-A", "s-O", "r-K", "g-8", "e-7", "g-9", "e-K", "s-9", "r-9"]);
+    s.auction(&[
+        (0, Some(120)),
+        (1, Some(125)),
+        (2, None),
+        (3, Some(145)),
+        (0, None),
+        (1, None),
+    ]);
+    s.pass(1, 3, Some(&["r-Z", "s-K", "e-A", "e-Z"]));
+    s.pass(3, 1, Some(&["s-K", "s-O", "g-9", "g-8"]));
+    let d = s.act(&s.card_legal());
+    let card = played(&d).expect("a card");
+    assert_ne!(engine::suit_of(card), Suit::Bells, "{d:?}");
+}

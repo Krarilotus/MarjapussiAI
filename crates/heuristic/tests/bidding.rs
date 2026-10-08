@@ -34,13 +34,53 @@ fn b_tell_big_pair_is_plus_15() {
 }
 
 #[test]
-fn b_tell_with_a_pair_the_ace_goes_first() {
-    // The owner's correction (C39): with a pair, the ace (+5) first, then the pair (+10).
+fn b_tell_a_green_pair_waits_for_the_ace() {
+    // C43: with only a Grün pair, the ace (+5) first ([O] "not valuable enough to forgo the
+    // ace"), then the pair (+10).
     let pair_ace = hand(&["g-K", "g-O", "r-A"]);
     assert_eq!(tell(&Scene::new(0, &pair_ace)), (Some(120), RuleId::BTell));
     let mut s = Scene::new(0, &pair_ace);
     s.auction(&[(0, Some(120)), (1, Some(125)), (2, None), (3, None)]);
     assert_eq!(tell(&s), (Some(135), RuleId::BTell));
+}
+
+#[test]
+fn b_tell_a_red_pair_from_120_goes_to_145() {
+    // C43c ([O] "red pair also applies so goes to 145"): pair first, +20 from 120 lands on 140
+    // and shifts to 145.
+    let mut s = Scene::new(1, &hand(&["r-K", "r-O", "s-A"]));
+    s.auction(&[(0, Some(120))]);
+    assert_eq!(tell(&s), (Some(145), RuleId::BTell));
+}
+
+#[test]
+fn b_tell_a_schell_pair_goes_before_the_ace() {
+    // C43: [O] "announce the pair first, your partner then has the option to announce his ace".
+    assert_eq!(
+        tell(&Scene::new(0, &hand(&["s-K", "s-O", "r-A"]))),
+        (Some(130), RuleId::BTell)
+    );
+}
+
+#[test]
+fn seed_42_s3_tells_its_halves_without_a_jump() {
+    // C43, the owner's seed-42 game: S3 at 125 holds three halves (no pair) and an ace: +10,
+    // no over-140 on base rates (its halves message is still to tell).
+    let mut s = Scene::new(3, &["s-A", "s-O", "r-K", "g-8", "e-7", "g-9", "e-K", "s-9", "r-9"]);
+    s.auction(&[(0, Some(120)), (1, Some(125)), (2, None)]);
+    assert_eq!(tell(&s), (Some(135), RuleId::BTell));
+}
+
+#[test]
+fn b_quiet_runs_the_tie_break_with_strong_cards() {
+    // C43: nothing left to tell (the partner told the team's ace), seven cards standing: 140
+    // by p_take_140 (C43b) instead of a pass.
+    let strong = ["g-A", "g-Z", "g-K", "e-A", "e-Z", "s-A", "s-Z", "r-6", "r-7"];
+    let mut s = Scene::new(2, &strong);
+    s.auction(&[(0, Some(120)), (1, Some(130))]);
+    let d = s.act(&s.bid_legal());
+    assert_eq!((bid_of(&d), d.rule), (Some(140), RuleId::BGate), "{:?}", d.why);
+    assert!(d.why.iter().any(|f| f.key == "p_take_140" && f.value >= 0.5));
 }
 
 #[test]
@@ -119,18 +159,17 @@ fn b_defend_overbids_against_schwarz_after_the_partners_pass() {
     assert_eq!(at(hopeless, None, 120), (Some(140), RuleId::BDefend));
     // No pair signal from them: they can't reach above 140, so no defence above it.
     assert_eq!(at(hopeless, None, 140), (None, RuleId::BQuiet));
-    // After their +15 (a big pair; my red ober makes it Bells, 80). Before C39 the Bells pair
-    // was read at ≥ 0.75, so up to min(240, 220). Since C39 (with a pair, the ace first) a +15
-    // also says "no ace": the Bells pair reads 0.64, a pair worth ≥ 60 (Bells, Acorns) 0.80, so
-    // their reach is 200 and the defence stops there.
+    // After their +15 (a big pair; my red ober makes it Bells, 80): up to min(240, 220). (Under
+    // C39 a +15 also said "no ace" and the reach was 200; with the pair first again, C43, the
+    // Bells pair reads at ≥ 0.75.)
     let after_big = |value: i32| {
         let mut s = Scene::new(2, &hopeless);
         s.auction(&[(0, None), (1, Some(130)), (2, Some(140)), (3, None), (1, Some(value))]);
         tell(&s)
     };
     assert_eq!(after_big(145), (Some(150), RuleId::BDefend));
-    assert_eq!(after_big(195), (Some(200), RuleId::BDefend));
-    assert_eq!(after_big(200), (None, RuleId::BQuiet));
+    assert_eq!(after_big(215), (Some(220), RuleId::BDefend));
+    assert_eq!(after_big(220), (None, RuleId::BQuiet));
     // A king with 2 more and junk, 23: the limit 180 caps it below their reach.
     let king = ["s-K", "s-8", "s-7", "g-6", "g-7", "g-8", "e-6", "e-7", "e-8"];
     let king_after_big = |value: i32| {
@@ -212,4 +251,53 @@ fn raising_is_off_until_batch_2() {
     legal.remove(0);
     legal.extend(s.card_legal());
     assert_eq!(bid_of(&s.act(&legal)), None);
+}
+
+#[test]
+fn tie_break_over_140_with_a_derived_team_pair() {
+    // Batch 1c, the owner's example: the partner +10 (3+ halves or a small pair), I hold the
+    // Red and Acorns halves and an ace to tell: our team likely holds a pair, so over 140.
+    let mut s = Scene::new(2, &["r-K", "e-O", "g-A", "g-6", "s-6", "s-7", "e-6", "e-7", "g-7"]);
+    s.auction(&[(0, Some(125)), (1, None)]);
+    let d = s.act(&s.bid_legal());
+    assert_eq!((bid_of(&d), d.rule), (Some(145), RuleId::BOver140), "{:?}", d.why);
+    let fact = |k: &str| d.why.iter().find(|f| f.key == k).map(|f| f.value).unwrap();
+    assert!(fact("team_pair_cover") >= Params::default().over_140_cover);
+    assert!(fact("derived_pair_value") > 60.0);
+}
+
+#[test]
+fn tie_break_140_with_a_strong_hand_after_the_partners_pass() {
+    // Only the ace to tell, six cards standing and two A+10 suits, the partner passed:
+    // game_drive ≥ 0.5, so 140 instead of +5.
+    let mut s = Scene::new(2, &["g-A", "g-Z", "g-K", "e-A", "e-Z", "s-A", "s-6", "r-6", "r-7"]);
+    s.auction(&[(0, None), (1, None)]);
+    let d = s.act(&s.bid_legal());
+    assert_eq!((bid_of(&d), d.rule), (Some(140), RuleId::BGate), "{:?}", d.why);
+    assert!(d.why.iter().any(|f| f.key == "game_drive" && f.value >= 0.5));
+}
+
+#[test]
+fn tie_break_steps_with_a_pair_still_to_tell_and_the_partner_yet_to_call() {
+    // The ace first (+5), the green pair still to tell, the partner hasn't called: the step.
+    let s = Scene::new(0, &["g-K", "g-O", "r-A", "g-6", "e-6", "e-7", "s-6", "s-7", "e-8"]);
+    let d = s.act(&s.bid_legal());
+    assert_eq!((bid_of(&d), d.rule), (Some(120), RuleId::BTell), "{:?}", d.why);
+    assert!(d.why.iter().any(|f| f.key == "game_drive" && f.value < 0.5));
+}
+
+#[test]
+fn seed_42_s1_takes_the_game_at_140() {
+    // C43b, the owner's seed-42 game: S1 told its ace (125), S3 +10 (135), nothing left to
+    // tell: p_take_140 ≈ 0.69 → 140 ([O] "should have gone for the 140 to take the game");
+    // without standing_potential (Eichel A Z U 9) it would be below 0.5.
+    let mut s = Scene::new(1, &["e-9", "g-K", "e-Z", "e-U", "s-K", "g-6", "g-U", "e-A", "r-Z"]);
+    s.auction(&[(0, Some(120)), (1, Some(125)), (2, None), (3, Some(135)), (0, None)]);
+    let d = s.act(&s.bid_legal());
+    let fact = |k: &str| d.why.iter().find(|f| f.key == k).map(|f| f.value);
+    assert_eq!((bid_of(&d), d.rule), (Some(140), RuleId::BGate), "{:?}", d.why);
+    let p = fact("p_take_140").unwrap();
+    assert!((p - 0.69).abs() < 0.03, "{p}");
+    let without = 1.0 / (1.0 + ((1.0 - p) / p).ln().exp() * fact("standing_potential").unwrap().exp());
+    assert!(without < 0.5, "{without}");
 }

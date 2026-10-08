@@ -139,14 +139,19 @@ impl BidContext {
 }
 
 /// KB `info_to_tell`: the messages a hand of `class` holds that are still live (HB-0), in the
-/// order they are told: with a pair, the ace first (+5), then the pair; with 3+ halves and no
-/// pair, the halves (+10) before the ace ([O] Q1a; the owner's correction of 2026-10-07, C39:
-/// "halves first" is for halves only).
+/// order they are told: a Rot, Schell or Eichel pair before the ace ([O] 2026-10-07, C43: "announce
+/// the pair first, your partner then has the option to announce his ace"); with only a Grün pair
+/// the ace first ("not valuable enough to forgo the ace"); 3+ halves without a pair before the
+/// ace (C39).
 pub fn info_to_tell(class: HandClass, ctx: &BidContext, params: &Params) -> impl Iterator<Item = Message> {
     let live = ctx.live(params);
     let in_window = params.tell_window == 0 || ctx.n_before < params.tell_window;
     let strict = params.strict_two_halves;
-    let order = if class.any_pair() {
+    let only_green_pair = class.has_pair(Suit::Green)
+        && !class.has_pair(Suit::Red)
+        && !class.has_pair(Suit::Bells)
+        && !class.has_pair(Suit::Acorns);
+    let order = if only_green_pair {
         [
             Message::Ace,
             Message::RedPair,
@@ -175,12 +180,15 @@ pub fn message(class: HandClass, ctx: &BidContext, params: &Params) -> Option<Me
 
 /// The messages whose landing on 140 makes the shift (owner, verbatim file #12: "you probably skip the 140 and
 /// make a 15"; the answer to #16: "some humans … don't care for the +5 step for the two
-/// halves"): +10 and +15. A +5 (ace, two halves) landing on 140 stays 140 and shifts nothing.
-const SHIFTS_OFF_140: u8 = 1 << Message::SmallOrHalves as u8 | 1 << Message::BigPair as u8;
+/// halves"): +10, +15 and the red pair's +20 ([O] 2026-10-07, C43c: "red pair also applies so
+/// goes to 145"). A +5 (ace, two halves) landing on 140 stays 140 and shifts nothing.
+const SHIFTS_OFF_140: u8 =
+    1 << Message::SmallOrHalves as u8 | 1 << Message::BigPair as u8 | 1 << Message::RedPair as u8;
 
-/// HB-140a: the bid that carries `m`, for the encoder and the reading alike. If a live +10 or
-/// +15 message's raw target lands exactly on 140, it and every live message with a larger raw
-/// target shift by +5 (from 130: +10 → 145, +15 → 150; from 125: +15 → 145, +20 → 150). A +5
+/// HB-140a: the bid that carries `m`, for the encoder and the reading alike. If a live +10,
+/// +15 or +20 message's raw target lands exactly on 140, it and every live message with a larger
+/// raw target shift by +5 (from 130: +10 → 145, +15 → 150; from 125: +15 → 145, +20 → 150; from
+/// 120: +20 → 145). A +5
 /// neither shifts nor makes a shift (from 135: +5 → 140, +10 → 145, +15 → 150). The variant
 /// `skip_on_any_cross` shifts every step that crosses 140 instead.
 pub fn follow_target(m: Message, ctx: &BidContext, params: &Params) -> i32 {
@@ -509,8 +517,11 @@ mod tests {
         let c = ctx(125, false);
         assert_eq!(follow_target(Message::BigPair, &c, &p), 145);
         assert_eq!(follow_target(Message::RedPair, &c, &p), 150);
+        // 120: the red pair's +20 → 145 (C43c).
+        assert_eq!(follow_target(Message::RedPair, &ctx(120, false), &p), 145);
         // The reading takes the same targets.
         assert_eq!(nominal(Some(140), &ctx(135, false), &p), Some(Message::Ace));
+        assert_eq!(nominal(Some(145), &ctx(120, false), &p), Some(Message::RedPair));
         assert_eq!(nominal(Some(145), &ctx(130, false), &p), Some(Message::SmallOrHalves));
     }
 

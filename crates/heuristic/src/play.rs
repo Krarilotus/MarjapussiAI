@@ -107,6 +107,12 @@ fn term_rule(ctx: &Ctx, choice: &Choice, best: &Best, set: CardSet, val: &Valuat
 }
 
 fn lead(ctx: &Ctx, legal: CardSet, val: &Valuation) -> (u8, RuleId, Vec<Fact>) {
+    // The suit of a pair the partner certainly holds isn't led before its announcement,
+    // unless I hold nothing else.
+    let legal = match legal - val.protect {
+        open if open.is_empty() => legal,
+        open => open,
+    };
     if let Some(l) = leads::before_standing(ctx, legal) {
         return l;
     }

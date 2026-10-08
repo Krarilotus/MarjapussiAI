@@ -72,3 +72,18 @@ fn the_partners_strict_two_halves_connect_with_my_two_big_halves() {
     let cover = m.team_pair_cover(145);
     assert!(cover > 0.5, "team_pair_cover(145) = {cover}");
 }
+
+#[test]
+fn derived_pair_value_counts_my_single_halves_except_green() {
+    // Batch 1c: the partner (2) +10; I hold the Red king, the Acorns ober and the Green king.
+    // Red and Acorns count with P(the partner holds the other half) × the pair value; Green
+    // is left out.
+    let m = mind(
+        &["r-K", "e-O", "g-K", "g-6", "e-6", "e-7", "s-6", "s-7", "r-6"],
+        &[(0, None), (1, None), (2, Some(125))],
+    );
+    let expected = m.team_pair(Suit::Red) * 100.0 + m.team_pair(Suit::Acorns) * 60.0;
+    assert!((m.derived_pair_value() - expected).abs() < 1e-3);
+    assert!(m.derived_pair_value() > 60.0, "{}", m.derived_pair_value());
+    assert!(m.team_pair(Suit::Green) > 0.0);
+}

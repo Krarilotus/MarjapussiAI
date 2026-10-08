@@ -21,7 +21,10 @@ use observation::{Seat, SeatEvent};
 mod facts;
 mod sample;
 
-pub use facts::{Pairs, Passed, TeamPairs, BLANK_TEN_FACTOR, STOPPER_CONFIDENCE, STOPPER_MAX_HIGHER};
+pub use facts::{
+    own_standing_of, standing_potential_of, Pairs, Passed, TeamPairs, BLANK_TEN_FACTOR, STOPPER_CONFIDENCE,
+    STOPPER_MAX_HIGHER,
+};
 pub use sample::{Belief, DealSpace, ExactSets, Hands, Uniform, World};
 
 const MAX_CONSTRAINTS: usize = 16;

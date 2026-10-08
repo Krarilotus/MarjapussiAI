@@ -261,6 +261,22 @@ impl Mind {
         }
     }
 
+    /// KB `derived_pair_value` (batch 1c): the pair value my team likely holds around my single
+    /// halves, Σ over the suits where I hold exactly one half of P(the partner holds the other)
+    /// × the pair's value. Nothing is assumed about which half matches ([O] "we can only
+    /// estimate the value of the pair around the matching half"). Green is left out ([O] "green
+    /// often being non considered at all as its so weak"); my own complete pairs are not part
+    /// of it.
+    pub fn derived_pair_value(&self) -> f32 {
+        let mine = self.knowledge().certain(self.seat);
+        engine::SUITS
+            .into_iter()
+            .filter(|&s| s != Suit::Green && (mine & CardSet::halves(s)).len() == 1)
+            .map(|s| self.team_pair(s) * crate::conventions::pair_value(s) as f32)
+            .sum::<f32>()
+            + 0.0 // an empty sum is -0.0
+    }
+
     /// KB `team_pair_cover(V)`: P(my team holds an uncalled pair worth at least V − 140). Above
     /// 140 the card points cannot reach V, so only a pair can cover the excess.
     pub fn team_pair_cover(&self, v: i32) -> f32 {
@@ -269,6 +285,32 @@ impl Mind {
             .into_iter()
             .filter(|&s| crate::conventions::pair_value(s) >= need)
             .map(|s| 1.0 - self.team_pair(s))
+            .product::<f32>()
+    }
+
+    /// The C40 step-1 cover as the owner confirmed it (C43): P(my team holds an uncalled pair
+    /// worth at least V − 140), counting only my own complete pairs and the pairs derivable
+    /// from the partner's messages (a halves or pair message sent: `team_pair(s)`), Green left
+    /// out. No halves at base rates ([O] "only if really a pair was derivable!").
+    pub fn team_pair_cover_derivable(&self, v: i32) -> f32 {
+        let need = v - crate::conventions::PAIR_LINE;
+        let mine = self.knowledge().certain(self.seat);
+        let mate_signalled = self.record().seats[partner(self.seat) as usize].bids.iter().any(|b| {
+            b.nominal.is_some_and(|m| {
+                (crate::conventions::PAIR_MESSAGES | crate::conventions::Message::TwoHalves.bit()) & m.bit() != 0
+            })
+        });
+        1.0 - engine::SUITS
+            .into_iter()
+            .filter(|&s| s != Suit::Green && crate::conventions::pair_value(s) >= need)
+            .map(|s| {
+                let held = if CardSet::halves(s).is_subset(mine) || mate_signalled {
+                    self.team_pair(s)
+                } else {
+                    0.0
+                };
+                1.0 - held
+            })
             .product::<f32>()
     }
 
