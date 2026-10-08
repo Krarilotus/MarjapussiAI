@@ -104,6 +104,41 @@ pub enum Selection {
 }
 
 impl Params {
+    /// Check the configuration before use. `from_toml` calls this after all overrides;
+    /// Rust callers must call it after constructing or changing public fields.
+    pub fn validate(&self) -> Result<(), HeuristicError> {
+        self.beliefs.validate().map_err(HeuristicError::Params)?;
+        for (name, p) in [
+            ("over_140_cover", self.over_140_cover),
+            ("partner_half_conf", self.partner_half_conf),
+            ("destroy_pair_conf", self.destroy_pair_conf),
+            ("partner_trump_conf", self.partner_trump_conf),
+            ("partner_pair_min", self.partner_pair_min),
+            ("partner_lead_conf", self.partner_lead_conf),
+        ] {
+            if !(0.0..=1.0).contains(&p) {
+                return Err(HeuristicError::Params(format!("{name} must be finite and in [0, 1]")));
+            }
+        }
+        if !self.sample_temperature.is_finite() || self.sample_temperature < 0.0 {
+            return Err(HeuristicError::Params(
+                "sample_temperature must be finite and nonnegative".into(),
+            ));
+        }
+        if self.endgame_tricks > engine::TRICKS as u32 {
+            return Err(HeuristicError::Params(format!(
+                "endgame_tricks must be in 0..={}",
+                engine::TRICKS
+            )));
+        }
+        if self.endgame_tricks != 0 && self.endgame_worlds == 0 {
+            return Err(HeuristicError::Params(
+                "endgame_worlds must be positive when endgame_tricks is nonzero".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// The bid conventions and EGP parameters.
     pub fn conv(&self) -> &beliefs::conventions::Params {
         &self.beliefs.conventions
@@ -120,7 +155,8 @@ impl Params {
         }
     }
 
-    /// Defaults overridden by the `key = value` lines of a flat TOML document.
+    /// Defaults overridden by the `key = value` lines of a flat TOML document,
+    /// then validated as one complete configuration.
     pub fn from_toml(text: &str) -> Result<Params, HeuristicError> {
         let mut params = Params::default();
         for line in text.lines() {
@@ -133,6 +169,7 @@ impl Params {
                 .ok_or_else(|| HeuristicError::Params(format!("expected key = value: {line}")))?;
             params.set(key.trim(), value.trim())?;
         }
+        params.validate()?;
         Ok(params)
     }
 }

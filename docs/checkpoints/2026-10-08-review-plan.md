@@ -51,18 +51,18 @@ fixture for later reviews; the private records and player identifiers remain out
 
 ## Reproducing the new findings
 
-The [probe source](../reviews/2026-10-08-probes.rs) uses only synthetic seed 42 and
-invalid configuration text. In a disposable implementation worktree, copy it to
-`crates/tools/tests/review_probe.rs`, then run:
+At this checkpoint the standalone probes used synthetic seed 42 and invalid
+configuration text. They failed at the reviewed base for the reasons above.
+The original artifact remains in this checkpoint's Git history. Later fixes
+promoted their coverage into the normal tests and removed the duplicate probe:
 
 ```sh
 CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=<owned-target> \
-  cargo test --offline --locked -j 2 -p marjapussi-tools --test review_probe -- --test-threads=2
+  cargo test --offline --locked -j 2 -p marjapussi-heuristic --test history --test params -- --test-threads=2
 ```
 
-At the reviewed base both tests fail for the reasons above. Promote them to normal
-regression tests in the state/configuration fix, then make them pass. The review
-keeps them outside the normal targets to avoid changing the baseline suite.
+See the [history](2026-10-08-history-cache.md) and
+[configuration](2026-10-08-config-validation.md) checkpoints for the fixes.
 
 ## Remaining work
 

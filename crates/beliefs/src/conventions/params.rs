@@ -26,6 +26,7 @@ macro_rules! params {
             }
 
             /// Sets one key; `Ok(false)` if the key is not a convention parameter.
+            /// Call `validate` after applying all overrides.
             pub fn set(&mut self, key: &str, value: &str) -> Result<bool, String> {
                 match key {
                     $(stringify!($name) => {
@@ -120,4 +121,60 @@ params! {
     egp_void: f32 = 0.0,
     egp_meld: f32 = 1.0,
     egp_second_pair_share: f32 = 0.5,
+}
+
+impl Params {
+    /// Validate the completed configuration; individual overrides may temporarily
+    /// violate a joint constraint while a file is being loaded.
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, p) in [
+            ("conf_general", self.conf_general),
+            ("conf_two_halves", self.conf_two_halves),
+            ("conf_team_first", self.conf_team_first),
+            ("conf_partner_passed", self.conf_partner_passed),
+            ("human_red_as_big", self.human_red_as_big),
+            ("literal_share", self.literal_share),
+            ("trust_partner", self.trust_partner),
+            ("trust_opponent", self.trust_opponent),
+            ("trust_agent", self.trust_agent),
+            ("generic_eps", self.generic_eps),
+            ("cross_without_own_pair", self.cross_without_own_pair),
+            ("generic_cross_no_pair", self.generic_cross_no_pair),
+            ("claim_140_prior", self.claim_140_prior),
+            ("block_prior", self.block_prior),
+            ("block_base", self.block_base),
+        ] {
+            if !(0.0..=1.0).contains(&p) {
+                return Err(format!("{name} must be finite and in [0, 1]"));
+            }
+        }
+        if !(self.convention_floor > 0.0 && self.convention_floor <= 1.0) {
+            return Err("convention_floor must be finite and in (0, 1]".into());
+        }
+        for (name, block) in [("block_prior", self.block_prior), ("block_base", self.block_base)] {
+            if block + self.claim_140_prior > 1.0 {
+                return Err(format!("{name} + claim_140_prior must not exceed 1"));
+            }
+        }
+        // These are coefficients and point margins, not probability masses.
+        for (name, value) in [
+            ("bid_overreach", self.bid_overreach),
+            ("take_margin", self.take_margin),
+            ("hp1_info_margin", self.hp1_info_margin),
+            ("egp_base", self.egp_base),
+            ("egp_ace", self.egp_ace),
+            ("egp_ten", self.egp_ten),
+            ("egp_partner_ace", self.egp_partner_ace),
+            ("egp_half", self.egp_half),
+            ("egp_long", self.egp_long),
+            ("egp_void", self.egp_void),
+            ("egp_meld", self.egp_meld),
+            ("egp_second_pair_share", self.egp_second_pair_share),
+        ] {
+            if !value.is_finite() {
+                return Err(format!("{name} must be finite"));
+            }
+        }
+        Ok(())
+    }
 }

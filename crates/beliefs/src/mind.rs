@@ -91,6 +91,39 @@ impl Default for BeliefParams {
 }
 
 impl BeliefParams {
+    /// Check parameter domains before constructing a mind from external or modified
+    /// configuration. This does not impose a workload budget or tune the model.
+    pub fn validate(&self) -> Result<(), String> {
+        self.conventions.validate()?;
+        if !(0.0..=1.0).contains(&self.bands.low)
+            || !(0.0..=1.0).contains(&self.bands.high)
+            || self.bands.low > self.bands.high
+        {
+            return Err("bands must satisfy 0 <= low <= high <= 1".into());
+        }
+        for (kind, factors, kernel) in [
+            ("human", &self.factors.human, &self.kernel.human),
+            ("agent", &self.factors.agent, &self.kernel.agent),
+        ] {
+            if factors
+                .pass
+                .iter()
+                .flatten()
+                .chain(factors.lead.iter())
+                .any(|&v| !v.is_finite() || v < 0.0)
+            {
+                return Err(format!("{kind} card factors must be finite and nonnegative"));
+            }
+            if kernel.stay.iter().flatten().any(|v| !(0.0..=1.0).contains(v)) {
+                return Err(format!("{kind} exchange probabilities must be finite and in [0, 1]"));
+            }
+        }
+        if self.calibration.temperature.iter().any(|&t| !t.is_finite() || t <= 0.0) {
+            return Err("calibration temperatures must be finite and positive".into());
+        }
+        Ok(())
+    }
+
     /// The default parameters with the facts only (`Signals::BaseOnly`).
     pub fn base_only() -> Self {
         BeliefParams {
@@ -157,6 +190,8 @@ pub struct Mind {
 }
 
 impl Mind {
+    /// Construct from trusted parameters; validate externally supplied or modified
+    /// settings with `BeliefParams::validate` first.
     pub fn new(seat: Seat, hand: CardSet, kinds: [SeatKind; 4], params: BeliefParams) -> Mind {
         Mind {
             seat,

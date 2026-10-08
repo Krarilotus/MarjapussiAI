@@ -177,6 +177,8 @@ impl std::fmt::Debug for HeuristicAgent {
 }
 
 impl HeuristicAgent {
+    /// Construct from trusted parameters; use `Params::from_toml` for external
+    /// configuration, or `Params::validate` after setting fields directly.
     pub fn new(params: Params) -> Self {
         HeuristicAgent {
             params,
