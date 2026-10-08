@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Heuristic Player v1: a rule-based, explainable benchmark player that sees only its seat's view."
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 engine = { package = "marjapussi-engine", path = "../engine" }

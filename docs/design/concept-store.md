@@ -1,6 +1,8 @@
 # Concept store: from cards to decisions
 
-Snapshot: 2026-10-07. This document describes the current concept catalogue and its dependencies, including work that is still local or proposed. It is a design graph, not an automatically extracted Rust call graph.
+Updated: 2026-10-08. This document describes the concept catalogue and its dependencies, including proposed work. It is a design graph, not an automatically extracted Rust call graph.
+
+The graphics and machine-readable graph below preserve the **7 October design snapshot**. Their "corrections remain local" labels are historical; the current publication status is in the table below.
 
 ![Concept-store overview: visible information becomes facts and beliefs, which feed bidding, passing and proposed game planning. Dashed connections indicate proposed planning work.](../assets/concept-store.png)
 
@@ -13,8 +15,7 @@ Read arrows as **“provides an input to”**. L0 contains visible information a
 | Version | Available work |
 |---|---|
 | `main` | Published rules engine, seat observations and exact knowledge. The other layers below describe the wider design, not crates present on this branch. |
-| `v1-preview` | Published snapshot of the heuristic agent, beliefs, solver and evaluation tools, originally based on `kb/batch1` at `aff90ec`. It predates the latest bidding and passing corrections. |
-| Local development | `kb/batch1` at `4782c65`: C42/C42b passing features, C43 pair-message order, C43b take-the-game probability, C43c red-pair shift and C42c passing tests. `feat/study-full` at `d98a519` contains additional evaluation work. These references describe local evidence, not branches a fresh clone can fetch. |
+| `v1-preview` | Continuing heuristic agent, beliefs, solver and evaluation tools, including the `kb/batch1` corrections, condensed C42 pass model and history-cache fix. See [checkpoints](../checkpoints/2026-10-08-publication.md). Additional `feat/study-full` evaluation experiments remain local. |
 | Proposed game plan | Batch 3: entries, announcement order, coordinated trump and ace splits, estimated secured points, raises and replanning. These dependencies are proposals; the full planner is not implemented. |
 
 The source is the working catalogue `findings/kb/concepts.md`, with passing clarifications in `findings/kb/03-passing.md`. Both live in the separate local research workspace. This repository carries a portable summary without recorded games, player identities or private workspace links. Later dated corrections in the catalogue supersede earlier drafts. Implementation status was checked against the local Rust source at the revisions above; this documentation update changes no agent behaviour.
@@ -96,7 +97,7 @@ back:  standing_after, aces_entry_low_kept, pair_broken,
        plan_trump_given, aces_x_mh_holds_suit, green, tens
 ```
 
-The catalogue's R1–R4 reading proposals infer likely voids from low-card groups, likely remaining suit cards from a ten/king without a low card, a whole suit in the return pass, and a mild low-card indicator. **The local implementation still inverts the older pass models** in `beliefs::conventions::passes`; it does not yet use the full new concept-level reading. No reading is allowed to inspect the partner's hidden remaining hand.
+The catalogue's R1–R4 reading proposals infer likely voids from low-card groups, likely remaining suit cards from a ten/king without a low card, a whole suit in the return pass, and a mild low-card indicator. **Pass-choice interpretation is not implemented.** The older reader was unused and has been removed. Active beliefs account for exchange constraints without inferring why the giver chose those cards; see [passing models](../PASSING.md). A future reader must use the giver's possible view, never its hidden remaining hand.
 
 ## Proposed game plan: connect the exchange to later play
 

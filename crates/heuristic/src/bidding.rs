@@ -144,17 +144,21 @@ const P_TAKE_140: QuietWeights = QuietWeights {
     aces: 0.76,
 };
 
+fn uncalled_pair_value(k: &knowledge::Knowledge, class: HandClass) -> i32 {
+    SUITS
+        .into_iter()
+        .filter(|&s| class.has_pair(s) && !k.is_called(s))
+        .map(pair_value)
+        .sum()
+}
+
 /// KB `p_take_140` (C43b): P(bid 140 to take the game rather than pass), a probability; the
 /// terms go to `why`.
 fn p_take_140(ctx: &Ctx, class: HandClass, value: i32, mate: PartnerCalls, why: &mut Vec<Fact>) -> f32 {
     let w = &P_TAKE_140;
     let (k, me) = (ctx.k, ctx.me);
     let hand = k.certain(me);
-    let own_pairs: i32 = SUITS
-        .into_iter()
-        .filter(|&s| class.has_pair(s) && !k.is_called(s))
-        .map(pair_value)
-        .sum();
+    let own_pairs = uncalled_pair_value(k, class);
     let terms = [
         ("standing", w.standing * k.own_standing(me).len() as f32),
         (
@@ -209,11 +213,7 @@ fn game_drive(ctx: &Ctx, t: &TieBreak) -> f32 {
     let w = &GAME_DRIVE;
     let p = ctx.params.conv();
     let (k, me) = (ctx.k, ctx.me);
-    let own_pairs: i32 = SUITS
-        .into_iter()
-        .filter(|&s| t.class.has_pair(s) && !k.is_called(s))
-        .map(pair_value)
-        .sum();
+    let own_pairs = uncalled_pair_value(k, t.class);
     let mut x = w.standing * k.own_standing(me).len() as f32
         + w.ace_ten * SUITS.into_iter().filter(|&s| k.ace_ten(me, s)).count() as f32
         + w.own_pair_per_100 * own_pairs as f32 / 100.0

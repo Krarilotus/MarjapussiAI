@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Evaluation of any agent: the table driver, duplicate deals with a sequential test, fixed deal suites, game statistics and plain-language reports."
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 engine = { package = "marjapussi-engine", path = "../engine" }

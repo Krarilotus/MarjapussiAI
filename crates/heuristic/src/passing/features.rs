@@ -7,7 +7,7 @@ use engine::{points_set, suit_of, takes, CardSet, Suit, SUITS};
 /// The giver's current estimates, not the recipient's private information.
 #[derive(Clone, Debug)]
 pub struct Partner {
-    pub cards: [f32; 36],
+    pub cards: [f32; engine::CARDS],
     pub ace: f32,
     pub void: [f32; 4],
     pub half: [f32; 4],
