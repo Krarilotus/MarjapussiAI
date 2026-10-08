@@ -20,6 +20,12 @@ preserves play; it does not introduce pass-choice inference.
 | 5 | Add one coordinated planning slice | Compose existing exchange, entry, trump activation and first-lead concepts in named owner scenarios. Then separately review contract estimates/raising. Avoid new abstractions without a concrete consumer. | `plan-entries`, then `plan-raising` |
 | 6 | Make play/replay responsive (F7) | Snapshot state under the store lock, compute on a bounded worker, then revision-check before saving under a short lock. Test concurrent/stale-step handling. Reuse agent state only after F3 is fixed. | `playable-v1` |
 
+The [return-pass planning proposal](design/return-pass-plan.md) breaks the
+coordinated planning slice into six checkpoints with domain scenarios. Begin
+with candidate allocations and legal activation routes; review the comparisons
+before changing selection. Pass-choice inference is independent of that first
+slice and need not delay it.
+
 Evaluation preparation and checkout pairing can proceed independently. Each major
 implementation/refactor still receives its own checkpoint. The validation suite
 should grow from concrete failure modes, not tests that restate implementation.
