@@ -1,4 +1,5 @@
 use super::*;
+use crate::{HeuristicAgent, Params};
 use std::cell::RefCell;
 
 #[test]

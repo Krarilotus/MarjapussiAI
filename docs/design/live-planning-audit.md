@@ -113,3 +113,27 @@ Other unresolved dependencies: pass-choice intent is not inferred; positive
 probability of a split pair currently reserves an entire suit; ordinary auction
 continuation above 140 and raising still lack a game-value model. These findings
 must not be described as fixed by the allocation change.
+
+## Shared continuation evidence
+
+`heuristic::planning` now owns the existing policy rollout and outcome aggregation;
+return selection calls it. Each forecast credits the actual winning card of each
+completed trick. A developed winner had higher ranks outside its initial hand,
+all of which fell in earlier tricks of that same continuation. A card below an
+Ace is counted as a developed winner only if it actually wins in the forecast.
+
+The return explanation separates wins and developed wins from kept cards and
+returned cards. These are weighted conditional outcomes under the current policy,
+not independent bonuses, guaranteed winners or calibrated probabilities of optimal
+play. They do not change selection: engine scores still compare complete routes.
+An interrupted comparison publishes none of these partial outcome estimates.
+
+This is the first shared planning implementation slice. The card-play policy still
+uses its earlier `future_win` approximation and pair protection; bidding has not
+been connected. The dependency map above remains the intended complete structure.
+See the [continuation checkpoint](../checkpoints/2026-10-09-coherent-forecasts.md).
+
+For future pass interpretation, the same ideas must be evaluated from the
+hypothetical giver's information. Observing its choice can then update the
+likelihood of those hands; it cannot turn a plausible intention into a fact or
+reuse the recipient's private knowledge as though the giver had seen it.

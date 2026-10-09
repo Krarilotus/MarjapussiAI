@@ -4,39 +4,15 @@
 use std::time::{Duration, Instant};
 
 use agent::Table;
-use engine::{ActionType, CardSet, Clock, GameAction, GameFinishedInfo, PlaceAtTable, Suit, SUITS};
+use engine::{ActionType, CardSet, Clock, GameAction, PlaceAtTable, Suit, SUITS};
 use knowledge::Hands;
 use observation::SeatEvent;
 
 use super::{back_features, Partner, BACK_FEATURES, PASSING_WEIGHTS};
-use crate::{fact, Ctx, Decision, HeuristicAgent, Params, Rng};
+use crate::planning::{rollout, Outcome};
+use crate::{fact, Ctx, Decision, Rng};
 
 const BUDGET: Duration = Duration::from_millis(2_000);
-
-#[derive(Default)]
-struct Outcome {
-    score: f64,
-    points: f64,
-    made: f64,
-    shortfall: f64,
-    tricks: f64,
-    pairs: f64,
-    last: f64,
-    opening: u8,
-}
-
-impl Outcome {
-    fn add(&mut self, other: &Self, weight: f64) {
-        self.score += weight * other.score;
-        self.points += weight * other.points;
-        self.made += weight * other.made;
-        self.shortfall += weight * other.shortfall;
-        self.tricks += weight * other.tricks;
-        self.pairs += weight * other.pairs;
-        self.last += weight * other.last;
-        self.opening = other.opening;
-    }
-}
 
 /// Represent suit length, pair ownership and each legal returned-Ace entry.
 /// C42 orders alternatives within each allocation; continuation play values them.
@@ -136,53 +112,6 @@ fn before_return(ctx: &Ctx, mut hands: Hands) -> Option<Table> {
     Some(table)
 }
 
-fn rollout(mut table: Table, action: GameAction, params: &Params, deadline: Instant) -> Option<Outcome> {
-    let team = action.player.0 as usize % 2;
-    table.apply(action);
-    let mut players: [HeuristicAgent; 4] = std::array::from_fn(|_| HeuristicAgent::new(params.clone()));
-    let mut opening = None;
-    // Negative questions are suppressed by the existing policy. The cap is a
-    // defensive bound, not a terminal heuristic: unfinished games do not count.
-    for _ in 0..128 {
-        let Some((seat, legal)) = table.to_act() else {
-            break;
-        };
-        if Instant::now() >= deadline {
-            return None;
-        }
-        let decision = players[seat as usize].decide(&table.view(seat), legal);
-        if !legal.contains(&decision.action) {
-            return None;
-        }
-        if let ActionType::CardPlayed(c) = decision.action.action_type {
-            opening.get_or_insert(c.index());
-        }
-        table.apply(decision.action);
-    }
-    if !table.game.ended() {
-        return None;
-    }
-    let info = GameFinishedInfo::from(table.game);
-    let scores = info.scores();
-    let outcome = info.outcome();
-    let card_points: i32 = info
-        .tricks
-        .iter()
-        .filter(|t| t.winner.0 as usize % 2 == team)
-        .map(|t| t.points.0)
-        .sum();
-    Some(Outcome {
-        score: (scores[team] - scores[1 - team]) as f64,
-        points: info.team_points[team] as f64,
-        made: f64::from(info.team_points[team] >= info.game_value.0),
-        shortfall: (info.game_value.0 - info.team_points[team]).max(0) as f64,
-        tricks: outcome.team_tricks[team] as f64,
-        pairs: (info.team_points[team] - card_points) as f64,
-        last: f64::from(info.tricks.last()?.winner.0 as usize % 2 == team),
-        opening: opening?,
-    })
-}
-
 pub(super) fn choose(
     ctx: &Ctx,
     options: Vec<(GameAction, CardSet, f64)>,
@@ -266,7 +195,19 @@ fn choose_until(
     }
     baseline.why.extend(progress);
     let chosen = &outcomes[best];
+    let ActionType::Pass(cards) = baseline.action.action_type else {
+        unreachable!()
+    };
+    let returned = CardSet::from_cards(&cards);
+    let kept = ctx.k.certain(ctx.me) - returned;
     baseline.why.extend([
+        fact("forecast_kept_wins", chosen.wins(kept) / mass),
+        fact("forecast_kept_developed_wins", chosen.developed_wins(kept) / mass),
+        fact("forecast_returned_wins", chosen.wins(returned) / mass),
+        fact(
+            "forecast_returned_developed_wins",
+            chosen.developed_wins(returned) / mass,
+        ),
         fact("forecast_target", ctx.k.value()),
         fact("forecast_ess", mass * mass / squared),
         fact("forecast_score", chosen.score / mass),

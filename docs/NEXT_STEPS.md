@@ -78,3 +78,6 @@ playing quality and maps the dependencies for developing suit control. The
 [allocation checkpoint](checkpoints/2026-10-09-return-suit-allocations.md) broadens
 return candidates; it does not complete that planner. Next: validate coherent
 promotion/entry/trump continuations, then reuse them for bidding and play.
+The [continuation checkpoint](checkpoints/2026-10-09-coherent-forecasts.md) extracts
+the shared rollout and exposes kept/returned developed winners without changing
+the score model. Use that evidence to audit the continuation policy next.

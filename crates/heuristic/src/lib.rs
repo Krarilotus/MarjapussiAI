@@ -12,6 +12,7 @@ mod hand;
 mod leads;
 mod params;
 pub mod passing;
+mod planning;
 mod play;
 mod routes;
 mod rules;
