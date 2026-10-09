@@ -4,6 +4,9 @@
 //! `SeatEvent`s, plus the engine's legal actions for that seat. It never sees the engine's full
 //! game state. Implementations: the heuristic player, random play, and later the search agent.
 
+mod table;
+pub use table::Table;
+
 use engine::GameAction;
 use engine::SeriesTally;
 use knowledge::Knowledge;
