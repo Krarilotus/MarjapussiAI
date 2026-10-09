@@ -80,7 +80,7 @@ pub struct FastState {
     leader: u8,
     /// Trump suit as `Suit as u8`, or `NO_TRUMP`.
     trump: u8,
-    /// Suits scored so far (bit `Suit as u8`); a half answer may restore one as trump.
+    /// Suits already called (bit `Suit as u8`); none can become trump again.
     called: u8,
     /// Two bits per seat: Own, Yours, Ours.
     rights: u8,
@@ -491,7 +491,11 @@ impl FastState {
     #[inline]
     fn answer(&mut self, answer: AnswerType) {
         debug_assert!(self.moves().any(|m| m == Move::Answer(answer)), "illegal answer");
-        if let Some(suit) = answer_trump(self.hand(self.leader), answer) {
+        let already_called = match answer {
+            AnswerType::YesPair(suit) | AnswerType::YesHalf(suit) => self.called >> suit as u8 & 1 != 0,
+            _ => false,
+        };
+        if let Some(suit) = answer_trump(self.hand(self.leader), answer, already_called) {
             self.pair_points[(self.leader & 1) as usize] +=
                 trump_points(suit, self.called >> suit as u8 & 1 != 0) as i16;
             self.trump = suit as u8;

@@ -95,6 +95,24 @@ pub enum Passed {
 }
 
 impl Knowledge {
+    /// Known presence of a live half, from card sets and cardinality constraints.
+    /// `None` means these facts do not decide the answer; no belief threshold is used.
+    pub fn known_half(&self, seat: Seat, suit: Suit) -> Option<bool> {
+        let halves = CardSet::halves(suit);
+        if (self.may_hold(seat) & halves).is_empty() {
+            Some(false)
+        } else if !(self.certain(seat) & halves).is_empty()
+            || self
+                .constraints()
+                .iter()
+                .any(|c| c.seat == seat && c.lo > 0 && c.mask.is_subset(halves))
+        {
+            Some(true)
+        } else {
+            None
+        }
+    }
+
     /// Whether `seat` may hold all of `set`: every card holdable, and no constraint of the seat
     /// caps its count of them below that.
     fn may_hold_all(&self, seat: Seat, set: CardSet) -> bool {

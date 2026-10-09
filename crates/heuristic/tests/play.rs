@@ -213,6 +213,109 @@ fn fact(d: &heuristic::Decision, key: &str) -> Option<f32> {
     d.why.iter().find(|f| f.key == key).map(|f| f.value)
 }
 
+/// Compact root-choice fixtures: eight completed tricks leave one card per seat.
+fn last_trick_questions(me: u8, split_acorns: bool) -> Scene {
+    let mut s = pass_game(
+        me,
+        if split_acorns {
+            &["e-K", "r-A", "r-6", "r-7", "r-8", "r-9", "r-U", "r-O", "r-K"]
+        } else {
+            &["r-Z", "r-A", "r-6", "r-7", "r-8", "r-9", "r-U", "r-O", "r-K"]
+        },
+    );
+    let leads = ["r-A", "r-6", "r-7", "r-8", "r-9", "r-U", "r-O", "r-K"];
+    let bells = ["s-6", "s-7", "s-8", "s-9", "s-U", "s-O", "s-K", "s-Z"];
+    let partner = if split_acorns {
+        ["r-Z", "e-6", "e-7", "e-8", "e-9", "e-U", "e-Z", "e-A"]
+    } else {
+        ["e-6", "e-7", "e-8", "e-9", "e-U", "e-O", "e-K", "e-Z"]
+    };
+    let last = if split_acorns {
+        ["g-6", "g-7", "g-8", "g-9", "g-U", "g-O", "g-K", "g-Z"]
+    } else {
+        ["e-A", "g-6", "g-7", "g-8", "g-9", "g-U", "g-Z", "g-A"]
+    };
+    for i in 0..8 {
+        trick(
+            &mut s,
+            &[
+                (me, leads[i]),
+                ((me + 1) % 4, bells[i]),
+                ((me + 2) % 4, partner[i]),
+                ((me + 3) % 4, last[i]),
+            ],
+        );
+    }
+    s
+}
+
+#[test]
+fn root_does_not_repeat_called_half_questions_on_either_team() {
+    for me in [0, 1] {
+        let mut s = last_trick_questions(me, true);
+        s.ev(SeatEvent::YesHalf {
+            seat: (me + 2) % 4,
+            suit: Suit::Acorns,
+            asker_has_half: true,
+        });
+        for endgame_tricks in [0, 4] {
+            let d = s.act_with(
+                heuristic::Params {
+                    endgame_tricks,
+                    ..Default::default()
+                },
+                &ask_legal(&s, &[], true),
+            );
+            assert!(matches!(d.action.action_type, ActionType::CardPlayed(_)), "{d:?}");
+            if endgame_tricks != 0 {
+                assert_eq!(d.rule, RuleId::HE1, "exercise the solver root filter");
+            }
+        }
+    }
+}
+
+#[test]
+fn root_keeps_unknown_half_questions_but_drops_a_known_yes_without_own_half() {
+    for me in [0, 1] {
+        let mut s = last_trick_questions(me, false);
+        let mate = (me + 2) % 4;
+        s.ev(SeatEvent::NoPair { seat: mate });
+        assert_eq!(s.tracker.knowledge().known_half(mate, Suit::Green), None);
+        let unknown = s.act(&ask_legal(&s, &[], true));
+        assert_eq!(unknown.rule, RuleId::HE1);
+        assert_eq!(
+            unknown.action.action_type,
+            ActionType::Question(QuestionType::YourHalf(Suit::Green))
+        );
+        s.ev(SeatEvent::YesHalf {
+            seat: mate,
+            suit: Suit::Green,
+            asker_has_half: false,
+        });
+        assert_eq!(s.tracker.knowledge().known_half(mate, Suit::Green), Some(true));
+        assert!((s.tracker.knowledge().certain(mate) & engine::CardSet::halves(Suit::Green)).is_empty());
+        let known = s.act(&ask_legal(&s, &[], true));
+        assert_eq!(known.rule, RuleId::HE1);
+        assert!(
+            matches!(known.action.action_type, ActionType::CardPlayed(_)),
+            "{known:?}"
+        );
+    }
+}
+
+#[test]
+fn endgame_root_does_not_repeat_known_no_pair_or_no_half() {
+    let mut s = last_trick_questions(0, false);
+    s.ev(SeatEvent::NoPair { seat: 2 });
+    s.ev(SeatEvent::NoHalf {
+        seat: 2,
+        suit: Suit::Green,
+    });
+    let d = s.act(&ask_legal(&s, &[], true));
+    assert_eq!(d.rule, RuleId::HE1);
+    assert!(matches!(d.action.action_type, ActionType::CardPlayed(_)), "{d:?}");
+}
+
 #[test]
 fn hc5_no_sure_lead_left_announces_the_most_valuable_of_two_pairs() {
     // P8: two own pairs need 0 attempts, and no standing card is left (0 sure leads): act now.

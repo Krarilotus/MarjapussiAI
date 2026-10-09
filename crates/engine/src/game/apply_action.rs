@@ -172,14 +172,13 @@ fn answer(t: Mutable, a: AnswerType) -> Option<GameCallback> {
         AnswerType::NoHalf(suit) => Some(GameCallback::NoHalf(suit)),
         AnswerType::YesHalf(suit) => {
             let asker_hand = CardSet::from_cards(&state.partner().cards);
-            if super::rules::answer_trump(asker_hand, a).is_none() {
+            if let Some(trump) = super::rules::answer_trump(asker_hand, a, state.trump_called.contains(&suit)) {
+                Some(new_trump(state, trump))
+            } else if (asker_hand & CardSet::halves(suit)).is_empty() {
                 Some(GameCallback::OnlyHalf(suit))
-            } else if state.trump_called.contains(&suit) {
-                //if called for second time, can't be excluded
-                state.trump = Some(suit);
-                Some(GameCallback::StillTrump(suit))
             } else {
-                Some(new_trump(state, suit))
+                // Both halves remain public evidence, but a called suit cannot become trump again.
+                Some(GameCallback::StillTrump(suit))
             }
         }
     };

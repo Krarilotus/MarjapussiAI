@@ -21,7 +21,7 @@ pub struct GameEvent {
 #[derive(Debug, Clone, Copy, Serialize)]
 pub enum GameCallback {
     NewTrump(Suit),
-    /// When asked again for half but is already trump
+    /// Both partners have a half of an already called suit; active trump does not change.
     StillTrump(Suit),
     NoHalf(Suit),
     OnlyHalf(Suit),

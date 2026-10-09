@@ -112,11 +112,11 @@ fn a_team_winner_is_not_necessarily_the_leaders_next_opportunity() {
 }
 
 #[test]
-fn questions_can_create_or_restore_the_trump_needed_for_entry() {
+fn questions_can_create_but_not_restore_the_trump_needed_for_entry() {
     let s = position(
         [
             ["r-K", "s-O", "e-6"],
-            ["e-A", "g-6", "g-7"],
+            ["e-A", "r-6", "g-7"],
             ["s-K", "e-8", "g-A"],
             ["e-K", "g-K", "g-O"],
         ],
@@ -128,11 +128,11 @@ fn questions_can_create_or_restore_the_trump_needed_for_entry() {
     assert!(trick_control(s, question).lead(2));
     let mut p = s.public();
     p.called |= 1 << Suit::Bells as u8;
-    let restored = FastState::from_public(p, s.hands()).unwrap();
-    assert!(trick_control(restored, question).lead(2));
-    let answered = restored
+    let called = FastState::from_public(p, s.hands()).unwrap();
+    assert!(!trick_control(called, question).lead(2));
+    let answered = called
         .after(question)
         .after(Move::Answer(engine::AnswerType::YesHalf(Suit::Bells)));
-    assert_eq!(answered.trump(), Some(Suit::Bells));
-    assert_eq!(answered.pair_points(0), restored.pair_points(0));
+    assert_eq!(answered.trump(), Some(Suit::Red));
+    assert_eq!(answered.pair_points(0), called.pair_points(0));
 }

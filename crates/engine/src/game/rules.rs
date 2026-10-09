@@ -41,10 +41,13 @@ pub fn question_answers(hand: CardSet, called: u8, question: QuestionType) -> im
     answers.into_iter().flatten()
 }
 
-/// Trump established by a legal answer. A positive half answer needs a half in
-/// the asker's hand as well; the pair may already have been scored.
+/// Trump established by a legal answer: only an uncalled suit can become trump.
+/// A positive half answer also needs a half in the asker's hand.
 #[inline]
-pub fn answer_trump(asker: CardSet, answer: AnswerType) -> Option<Suit> {
+pub fn answer_trump(asker: CardSet, answer: AnswerType, already_called: bool) -> Option<Suit> {
+    if already_called {
+        return None;
+    }
     match answer {
         AnswerType::YesPair(suit) => Some(suit),
         AnswerType::YesHalf(suit) if !(asker & CardSet::halves(suit)).is_empty() => Some(suit),

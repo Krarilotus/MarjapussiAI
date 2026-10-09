@@ -44,6 +44,10 @@ fn trick(game: &mut Game, lead: &str) {
 }
 
 fn after_opening(swaps: &[(&str, &str)]) -> Game {
+    after_opening_at(swaps, 0)
+}
+
+fn after_opening_at(swaps: &[(&str, &str)], opening: u8) -> Game {
     let mut hands = [Suit::Red, Suit::Bells, Suit::Acorns, Suit::Green]
         .map(|s| get_all_cards().into_iter().filter(|c| c.suit == s).collect::<Vec<_>>());
     for &(a, b) in swaps {
@@ -62,7 +66,9 @@ fn after_opening(swaps: &[(&str, &str)]) -> Game {
     let mut game = Game::new(
         "question rights".into(),
         ["S0", "S1", "S2", "S3"].map(String::from),
-        Some(hands),
+        Some(std::array::from_fn(|seat| {
+            hands[(seat + 4 - opening as usize) % 4].clone()
+        })),
     );
     for seat in 0..4 {
         game = game
@@ -73,8 +79,11 @@ fn after_opening(swaps: &[(&str, &str)]) -> Game {
             .unwrap();
     }
     assert_eq!(game.state.player_at_turn.0, 0);
+    for _ in 0..opening {
+        act(&mut game, ActionType::StopBidding);
+    }
     act(&mut game, ActionType::NewBid(120));
-    for _ in 0..3 {
+    for _ in 0..3 - opening {
         act(&mut game, ActionType::StopBidding);
     }
     let pass = game
@@ -88,8 +97,59 @@ fn after_opening(swaps: &[(&str, &str)]) -> Game {
     act(&mut game, ActionType::Pass(pass));
     act(&mut game, ActionType::Pass(pass)); // Return the same cards: restore the fixture hands.
     trick(&mut game, "r-A");
-    assert_eq!(game.state.player_at_turn.0, 0);
+    assert_eq!(game.state.player_at_turn.0, opening);
     game
+}
+
+#[test]
+fn repeated_half_answers_do_not_restore_or_rescore_a_called_trump() {
+    use marjapussi_engine::{team_points, GameCallback};
+    for opening in [0, 1] {
+        let mut game = after_opening_at(
+            &[
+                ("e-K", "r-6"),
+                ("g-K", "r-7"),
+                ("g-O", "e-6"),
+                ("e-9", "r-8"),
+                ("g-7", "r-9"),
+            ],
+            opening,
+        );
+        act(&mut game, ActionType::Question(QuestionType::YourHalf(Suit::Acorns)));
+        act(&mut game, ActionType::Answer(AnswerType::YesHalf(Suit::Acorns)));
+        assert_eq!(game.state.trump, Some(Suit::Acorns));
+        trick(&mut game, "e-9");
+        assert_eq!(game.state.player_at_turn.0, (opening + 2) % 4);
+
+        // Repeating the current trump remains legal and confirms the halves only.
+        let mut current = game.clone();
+        let points = team_points(&current.state.all_tricks, &current.all_events).pairs;
+        act(&mut current, ActionType::Question(QuestionType::YourHalf(Suit::Acorns)));
+        act(&mut current, ActionType::Answer(AnswerType::YesHalf(Suit::Acorns)));
+        assert_eq!(current.state.trump, Some(Suit::Acorns));
+        assert_eq!(
+            team_points(&current.state.all_tricks, &current.all_events).pairs,
+            points
+        );
+
+        act(&mut game, ActionType::Question(QuestionType::YourHalf(Suit::Green)));
+        act(&mut game, ActionType::Answer(AnswerType::YesHalf(Suit::Green)));
+        assert_eq!(game.state.trump, Some(Suit::Green));
+        trick(&mut game, "r-8");
+        assert_eq!(game.state.player_at_turn.0, opening);
+        let points = team_points(&game.state.all_tricks, &game.all_events).pairs;
+        let called = game.state.trump_called.clone();
+        act(&mut game, ActionType::Question(QuestionType::YourHalf(Suit::Acorns)));
+        act(&mut game, ActionType::Answer(AnswerType::YesHalf(Suit::Acorns)));
+        assert!(matches!(
+            game.all_events.last().unwrap().callback,
+            Some(GameCallback::StillTrump(Suit::Acorns))
+        ));
+        assert_eq!(game.state.trump, Some(Suit::Green));
+        assert_eq!(game.state.trump_called, called);
+        assert_eq!(team_points(&game.state.all_tricks, &game.all_events).pairs, points);
+        // `act` compares every answer and card transition against FastState.
+    }
 }
 
 #[test]
@@ -111,6 +171,24 @@ fn no_pair_answer_leaves_repeat_pair_questions_legal() {
     act(&mut game, ActionType::Question(QuestionType::Yours));
     act(&mut game, ActionType::Answer(AnswerType::NoPair));
     assert_eq!(rights(&game), [Right::Yours, Right::Own, Right::Own, Right::Own]);
+}
+
+#[test]
+fn a_positive_half_without_the_askers_half_keeps_the_existing_trump() {
+    use marjapussi_engine::{team_points, GameCallback};
+    let mut game = after_opening(&[("g-K", "e-7")]);
+    act(&mut game, ActionType::AnnounceTrump(Suit::Red));
+    trick(&mut game, "r-Z");
+    let points = team_points(&game.state.all_tricks, &game.all_events).pairs;
+    act(&mut game, ActionType::Question(QuestionType::YourHalf(Suit::Green)));
+    act(&mut game, ActionType::Answer(AnswerType::YesHalf(Suit::Green)));
+    assert!(matches!(
+        game.all_events.last().unwrap().callback,
+        Some(GameCallback::OnlyHalf(Suit::Green))
+    ));
+    assert_eq!(game.state.trump, Some(Suit::Red));
+    assert!(!game.state.trump_called.contains(&Suit::Green));
+    assert_eq!(team_points(&game.state.all_tricks, &game.all_events).pairs, points);
 }
 
 #[test]

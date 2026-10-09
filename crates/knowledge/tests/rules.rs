@@ -141,9 +141,42 @@ fn s14_yes_half_then_own_half_played_does_not_certify_the_other() {
         asker_has_half: false,
     })
     .unwrap();
+    assert_eq!(k.known_half(2, G), Some(true), "the half's identity need not be known");
     play(&mut k, 2, c(G, King));
+    assert_eq!(
+        k.known_half(2, G),
+        None,
+        "the old yes need not remain true after a play"
+    );
     assert!(!k.certain(2).contains(c(G, Ober)), "the old marjapussi-rs bug");
     assert!(k.may_hold(2).contains(c(G, Ober)));
+}
+
+#[test]
+fn repeated_positive_half_keeps_the_current_trump_and_points() {
+    for asker in 0..4 {
+        let mut k = Knowledge::public();
+        let seat = engine::partner(asker);
+        for suit in [E, G] {
+            k.apply(&SeatEvent::YesHalf {
+                seat,
+                suit,
+                asker_has_half: true,
+            })
+            .unwrap();
+        }
+        let points = k.team_points();
+        k.apply(&SeatEvent::YesHalf {
+            seat,
+            suit: E,
+            asker_has_half: true,
+        })
+        .unwrap();
+        assert_eq!(k.trump(), Some(G));
+        assert_eq!(k.team_points(), points);
+        assert_eq!(k.known_half(asker, E), Some(true));
+        assert_eq!(k.known_half(seat, E), Some(true));
+    }
 }
 
 #[test]

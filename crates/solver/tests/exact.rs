@@ -418,7 +418,7 @@ fn partner_pair_requires_the_askers_pair_right_but_not_the_respondents() {
 }
 
 #[test]
-fn split_pair_question_changes_the_last_trick_and_restores_without_rescoring() {
+fn split_pair_question_changes_the_last_trick_only_for_an_uncalled_suit() {
     use engine::{AnswerType, Card, Move, QuestionType, Suit};
     let hands = ["r-K", "s-A", "r-O", "g-A"].map(|s| CardSet::of(&s.parse::<Card>().unwrap()));
     let mut solver = Solver::with_tt_bits(8);
@@ -442,7 +442,7 @@ fn split_pair_question_changes_the_last_trick_and_restores_without_rescoring() {
         .unwrap();
         let red = state.after(Move::Question(QuestionType::YourHalf(Suit::Red)));
         let green = state.after(Move::Question(QuestionType::YourHalf(Suit::Green)));
-        let value = if already_called { 49 } else { 149 };
+        let value = if already_called { 0 } else { 149 };
         for order in [[(red, value), (green, 0)], [(green, 0), (red, value)]] {
             for (s, expected) in order {
                 assert_eq!(
@@ -459,7 +459,10 @@ fn split_pair_question_changes_the_last_trick_and_restores_without_rescoring() {
             "split pair belongs in the upper bound"
         );
         let answered = red.after(Move::Answer(AnswerType::YesHalf(Suit::Red)));
-        assert_eq!(answered.trump(), Some(Suit::Red));
+        assert_eq!(
+            answered.trump(),
+            Some(if already_called { Suit::Bells } else { Suit::Red })
+        );
         assert_eq!(answered.pair_points(0), if already_called { 0 } else { 100 });
         assert_eq!(answered.to_move(), 0);
         assert_eq!(answered.phase(), PlayPhase::Cards);

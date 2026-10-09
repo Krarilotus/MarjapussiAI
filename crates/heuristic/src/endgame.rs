@@ -56,12 +56,19 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
         },
     )
     .ok()?;
-    // A known negative answer cannot add information or activate trump. This is a
-    // policy restriction, not an engine ban on repeating a legal question.
+    // A called suit cannot become trump again; known answers without activation add no information.
+    // This root policy filter does not change the engine's legal question list.
     let mate = engine::partner(ctx.me);
     d.moves.retain(|v| match v.mv {
         Move::Question(QuestionType::Yours) => k.pairs(mate).possible != 0,
-        Move::Question(QuestionType::YourHalf(suit)) => !(k.may_hold(mate) & CardSet::halves(suit)).is_empty(),
+        Move::Question(QuestionType::YourHalf(suit)) => {
+            !k.is_called(suit)
+                && match k.known_half(mate, suit) {
+                    Some(false) => false,
+                    Some(true) => !(k.certain(ctx.me) & CardSet::halves(suit)).is_empty(),
+                    None => true,
+                }
+        }
         _ => true,
     });
     let mut best = d.best()?;

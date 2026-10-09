@@ -294,8 +294,10 @@ impl Knowledge {
                     });
                     self.exclude(next_seat(seat), live)?;
                     self.exclude(partner(next_seat(seat)), live)?;
-                    self.meld(seat, suit);
-                    self.set_trump(suit);
+                    if !self.is_called(suit) {
+                        self.meld(seat, suit);
+                        self.set_trump(suit);
+                    }
                 } else {
                     self.add_constraint(Constraint {
                         seat,

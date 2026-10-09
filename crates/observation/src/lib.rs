@@ -50,6 +50,7 @@ pub enum SeatEvent {
         seat: Seat,
     },
     /// The answerer holds a half; `asker_has_half` is the public callback about the asker.
+    /// `StillTrump` confirms that half even when this called suit cannot become trump again.
     YesHalf {
         seat: Seat,
         suit: Suit,

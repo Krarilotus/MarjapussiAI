@@ -113,6 +113,13 @@ fn check_facts(k: &knowledge::Knowledge, x: u8, game: &Game, seed: u64, cov: &mu
         );
         // K2, K3: pairs, certain and possible.
         let halves = CardSet::halves(s);
+        if let Some(known) = k.known_half(x, s) {
+            assert_eq!(
+                known,
+                !(truth(x) & halves).is_empty(),
+                "seed {seed}: half presence of seat {x} in {s:?}"
+            );
+        }
         let bit = 1u8 << s as u8;
         if k.is_called(s) || !(halves & k.played()).is_empty() {
             continue;

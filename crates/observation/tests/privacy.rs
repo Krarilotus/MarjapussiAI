@@ -10,6 +10,30 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
 #[test]
+fn a_called_half_callback_preserves_public_half_evidence() {
+    use engine::{AnswerType, GameAction, GameCallback, GameEvent, PlaceAtTable, Suit};
+    let event = GameEvent {
+        last_action: GameAction {
+            player: PlaceAtTable(3),
+            action_type: ActionType::Answer(AnswerType::YesHalf(Suit::Acorns)),
+        },
+        callback: Some(GameCallback::StillTrump(Suit::Acorns)),
+        player_at_turn: PlaceAtTable(1),
+        time: 0,
+    };
+    for seat in 0..4 {
+        assert_eq!(
+            SeatFilter::new(seat).filter(&event),
+            Some(SeatEvent::YesHalf {
+                seat: 3,
+                suit: Suit::Acorns,
+                asker_has_half: true,
+            })
+        );
+    }
+}
+
+#[test]
 fn passed_cards_are_visible_to_giver_and_receiver_only() {
     let mut passes = 0;
     for seed in 0..500u64 {
