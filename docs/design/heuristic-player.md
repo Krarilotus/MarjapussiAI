@@ -237,7 +237,7 @@ Steps are measured from the current game value `v` (the value starts at 115; the
   - Off by default at the "easy" difficulty.
 - **HS-1 (series objective):** the utility is `Δ(our total − their total) + bonus term`, where the bonus is ±300 for reaching 500 first (engine `SeriesSettings`).
   - Near the end of a series, HP1 shifts risk: it bids more aggressively if it needs points to reach 500 first, and more defensively (avoid schwarz, keep the difference low) when losing is likely [O].
-  - v1 implements this as a scalar `risk` in `Params`, computed from the series score: (games left, gap to 500, current difference).
+  - Proposed, not implemented: current HP1 ignores `SeriesScore`. The testbed supplies totals and games left, but no risk parameter is computed from them. A series policy also needs the public first-to-500 bonus owner; totals alone cannot reconstruct it.
 
 ### 3.4 Trust (anti-bluff)
 

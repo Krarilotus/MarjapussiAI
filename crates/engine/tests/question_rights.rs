@@ -12,7 +12,12 @@ fn act(game: &mut Game, action_type: ActionType) {
         action_type,
         player: PlaceAtTable(game.state.player_at_turn.0),
     };
-    *game = game.apply_action(action).expect("fixture action must be legal");
+    *game = game.apply_action(action).unwrap_or_else(|e| {
+        panic!(
+            "fixture action {action:?} must be legal in {:?}: {e:?}",
+            game.state.phase
+        )
+    });
     if let (Some(fast), Some(mv)) = (fast, marjapussi_engine::Move::from_action(&action_type)) {
         assert_eq!(Some(fast.after(mv)), marjapussi_engine::FastState::from_game(game));
     }
@@ -138,7 +143,7 @@ fn repeated_half_answers_do_not_restore_or_rescore_a_called_trump() {
         trick(&mut game, "r-8");
         assert_eq!(game.state.player_at_turn.0, opening);
         let points = team_points(&game.state.all_tricks, &game.all_events).pairs;
-        let called = game.state.trump_called.clone();
+        let called = game.state.trump_called;
         act(&mut game, ActionType::Question(QuestionType::YourHalf(Suit::Acorns)));
         act(&mut game, ActionType::Answer(AnswerType::YesHalf(Suit::Acorns)));
         assert!(matches!(
@@ -176,7 +181,7 @@ fn no_pair_answer_leaves_repeat_pair_questions_legal() {
 #[test]
 fn a_positive_half_without_the_askers_half_keeps_the_existing_trump() {
     use marjapussi_engine::{team_points, GameCallback};
-    let mut game = after_opening(&[("g-K", "e-7")]);
+    let mut game = after_opening(&[("g-K", "e-7"), ("g-6", "e-6"), ("g-7", "e-8")]);
     act(&mut game, ActionType::AnnounceTrump(Suit::Red));
     trick(&mut game, "r-Z");
     let points = team_points(&game.state.all_tricks, &game.all_events).pairs;

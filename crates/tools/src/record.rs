@@ -147,9 +147,9 @@ pub fn game_record(meta: &Meta, info: &GameFinishedInfo, notes: &[Note]) -> Valu
             passes += 1;
         }
         match &e.callback {
-            Some(GameCallback::NewTrump(s) | GameCallback::StillTrump(s)) => a["trump"] = json!(suit(*s)),
+            Some(GameCallback::NewTrump(s)) => a["trump"] = json!(suit(*s)),
             Some(GameCallback::OnlyHalf(s)) => a["only_half"] = json!(suit(*s)),
-            Some(GameCallback::NoHalf(_)) | None => {}
+            Some(GameCallback::NoHalf(_) | GameCallback::StillTrump(_)) | None => {}
         }
         if let Some(note) = notes.get(i) {
             if let Some(d) = &note.decision {
