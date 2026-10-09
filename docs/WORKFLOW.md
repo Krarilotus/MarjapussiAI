@@ -72,6 +72,19 @@ history with a hard reset, forced tag update, or force push.
 - Release: complete required suite, explicit private-data lane if available,
   paired testbed build/typecheck/component tests, privacy/history review.
 
-Bound builds (`CARGO_BUILD_JOBS=2`, own `CARGO_TARGET_DIR`) and tests
-(`--test-threads=2`). A local annotated tag is a durable Git reference, **not an
+Run one job at a time across AI and testbed (`CARGO_BUILD_JOBS=1`, stable owned
+`CARGO_TARGET_DIR`, `--test-threads=1`). Routine checks use the standard optimized
+test profile, for example `cargo test -p marjapussi-heuristic --lib -- --test-threads=1`.
+Select named integration targets when needed. Empty CLI harnesses are disabled;
+Cargo still builds normal binaries for integration tests. Keep `--release` for
+the server, timing and final qualification. Do not rerun unchanged exhaustive
+checks when their existing evidence still applies. On the shared Windows machine,
+the orchestrator caps the whole process tree at two logical CPUs, below-normal
+priority and 4 GiB committed memory; reviewers share its results.
+
+The [Cargo test profile](https://doc.rust-lang.org/cargo/reference/profiles.html#test)
+retains incremental compilation and assertions without release cross-crate LTO.
+The first use needs its own build; a speedup must be measured, not assumed.
+
+A local annotated tag is a durable Git reference, **not an
 off-machine backup**. Remote backup/publication is a separate authorised step.

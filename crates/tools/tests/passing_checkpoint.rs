@@ -15,6 +15,7 @@ fn exchange_decisions_match_the_pre_cleanup_checkpoint() {
             let mut table = Table::new(&deal(seed));
             let params = Params {
                 sample_temperature: temperature,
+                return_worlds: 0,
                 seed: 42,
                 ..Params::default()
             };

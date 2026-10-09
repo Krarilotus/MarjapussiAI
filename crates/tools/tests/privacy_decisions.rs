@@ -33,6 +33,13 @@ fn public_events(t: &Table) -> Vec<String> {
 
 #[test]
 fn hidden_cards_do_not_change_hp1_decisions() {
+    // Keep comparisons complete: wall-clock interruption is not a hidden input.
+    // Solver/worlds separately compares four-card hidden swaps without deadlines.
+    let params = Params {
+        endgame_tricks: 2,
+        endgame_worlds: 8,
+        ..Params::default()
+    };
     let mut swaps = 0;
     for seed in 0..20_000u64 {
         if swaps >= REQUIRED_SWAPS {
@@ -41,7 +48,15 @@ fn hidden_cards_do_not_change_hp1_decisions() {
         let mut rng = Rng::new(seed);
         let hands = deal(seed);
         let mut table = Table::new(&hands);
-        let mut players: Vec<HeuristicAgent> = (0..4).map(|_| HeuristicAgent::new(Params::default())).collect();
+        // Cheap legal histories suffice; the compared decisions below enable forecasts.
+        let mut players: Vec<HeuristicAgent> = (0..4)
+            .map(|_| {
+                HeuristicAgent::new(Params {
+                    return_worlds: 0,
+                    ..params.clone()
+                })
+            })
+            .collect();
         let mut actions = vec![];
         let stop = 1 + rng.below(50);
         while actions.len() < stop {
@@ -94,8 +109,18 @@ fn hidden_cards_do_not_change_hp1_decisions() {
             (seat, &legal),
             "seed {seed}: legal actions leak"
         );
-        let mine = HeuristicAgent::new(Params::default()).act(&table.view(seat), legal);
-        let theirs = HeuristicAgent::new(Params::default()).act(&other.view(seat), other_legal);
+        let mine = HeuristicAgent::new(params.clone()).act(&table.view(seat), legal);
+        let theirs = HeuristicAgent::new(params.clone()).act(&other.view(seat), other_legal);
+        for d in [&mine, &theirs] {
+            assert!(
+                d.explanation
+                    .facts
+                    .iter()
+                    .filter(|f| matches!(f.key, "complete" | "forecast_complete"))
+                    .all(|f| f.value == 1.0),
+                "seed {seed}: privacy comparison must finish"
+            );
+        }
         assert_eq!(mine, theirs, "seed {seed}: seat {seat} decides on hidden cards");
         swaps += 1;
     }

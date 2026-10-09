@@ -2,6 +2,7 @@
 //! The active belief model does not yet infer intent from observed pass choices.
 
 mod features;
+mod forecast;
 pub use features::{
     back_features, back_plan, forth_features, score, Partner, PassingWeights, BACK_FEATURES, FORTH_FEATURES,
     PASSING_WEIGHTS,
@@ -52,11 +53,13 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
             RuleId::PForth,
             |x| forth_features(hand, &partner, known, x),
         )
+        .0
     } else {
         let trump = back_plan(hand, partner.half, ctx.params.partner_half_conf);
-        choose(ctx, legal, &PASSING_WEIGHTS.back, &BACK_FEATURES, RuleId::PBack, |y| {
+        let (baseline, options) = choose(ctx, legal, &PASSING_WEIGHTS.back, &BACK_FEATURES, RuleId::PBack, |y| {
             back_features(hand, &partner, trump, y)
-        })
+        });
+        forecast::choose(ctx, options, &partner, trump, baseline)
     }
 }
 
@@ -68,28 +71,31 @@ fn choose<const N: usize>(
     names: &[&'static str; N],
     rule: RuleId,
     features: impl Fn(CardSet) -> [f64; N],
-) -> Decision {
-    let opts: Vec<(&GameAction, CardSet)> = legal
+) -> (Decision, Vec<(GameAction, CardSet, f64)>) {
+    let opts: Vec<_> = legal
         .iter()
         .filter_map(|a| match &a.action_type {
-            ActionType::Pass(cards) => Some((a, CardSet::from_cards(cards))),
+            ActionType::Pass(cards) => {
+                let given = CardSet::from_cards(cards);
+                Some((*a, given, score(weights, &features(given))))
+            }
             _ => None,
         })
         .collect();
-    let scores: Vec<f64> = opts
-        .iter()
-        .map(|&(_, cards)| score(weights, &features(cards)))
-        .collect();
     let i = if ctx.params.selection() == crate::Selection::Argmax {
         // Preserve f64 precision and the first legal option on ties.
-        (0..scores.len())
-            .max_by(|&a, &b| scores[a].total_cmp(&scores[b]).then(b.cmp(&a)))
+        (0..opts.len())
+            .max_by(|&a, &b| opts[a].2.total_cmp(&opts[b].2).then(b.cmp(&a)))
             .unwrap_or(0)
     } else {
-        ctx.select(&scores.iter().map(|&s| s as f32).collect::<Vec<_>>())
+        ctx.select(&opts.iter().map(|o| o.2 as f32).collect::<Vec<_>>())
     };
-    let selected = features(opts[i].1);
-    let mut why = vec![fact("score", scores[i])];
+    let chosen = decision(&opts[i].0, rule, explain(weights, names, features(opts[i].1)));
+    (chosen, opts)
+}
+
+fn explain<const N: usize>(weights: &[f64; N], names: &[&'static str; N], selected: [f64; N]) -> Vec<crate::Fact> {
+    let mut why = vec![fact("score", score(weights, &selected))];
     why.extend(
         names
             .iter()
@@ -97,5 +103,5 @@ fn choose<const N: usize>(
             .filter(|(_, (_, f))| *f != 0.0)
             .map(|(&name, (&weight, value))| fact(name, weight * value)),
     );
-    decision(opts[i].0, rule, why)
+    why
 }

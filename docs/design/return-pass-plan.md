@@ -1,8 +1,7 @@
 # V1: plan the return and the following play together
 
-Status: proposal for owner scenario review, 2026-10-09 (Europe/Berlin). No strategic changes
-are enabled by this document. Continue from the configuration checkpoint on
-`integration/reviewed-ai`; follow the [checkpoint workflow](../WORKFLOW.md).
+Historical proposal, 2026-10-09. The implemented bounded slice and its limits are
+in [return rollouts](return-rollouts.md); broader planning remains future work.
 
 ## The decision we want to make
 
@@ -10,7 +9,7 @@ Before returning four cards, ask: **which allocation gives our team a credible
 route to the lead, a legal opportunity to activate its pair, and enough subsequent
 tricks to fulfil the contract?** Choose the return and that route together.
 
-Today `passing::decide` chooses `back_plan` once from the full 13-card hand: the
+At the proposal baseline, `passing::decide` chose `back_plan` once from the full 13-card hand: the
 highest-value own pair, otherwise a held half with enough partner evidence. It
 then scores every return with the C42 features against that same suit. Several
 useful concepts already exist, but the candidate's resulting pair ownership,

@@ -2,6 +2,13 @@
 
 Updated: 2026-10-08. This document describes the concept catalogue and its dependencies, including proposed work. It is a design graph, not an automatically extracted Rust call graph.
 
+Local continuation, 2026-10-09: [entry conditions](entry-conditions.md) and
+[bounded return forecasts](return-rollouts.md) now consume this catalogue through
+typed Rust helpers and the shared seat-view table. The latter document gives the
+implemented dependency loop. Whole-game optimal search, calibrated score
+probabilities and raising remain outside this v1 slice; older diagrams below
+retain their historical status.
+
 The graphics and machine-readable graph below preserve the **7 October design snapshot**. Their "corrections remain local" labels are historical; the current publication status is in the table below.
 
 ![Concept-store overview: visible information becomes facts and beliefs, which feed bidding, passing and proposed game planning. Dashed connections indicate proposed planning work.](../assets/concept-store.png)

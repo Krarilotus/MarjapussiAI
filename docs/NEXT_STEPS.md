@@ -14,13 +14,13 @@ preserves play; it does not introduce pass-choice inference.
 | 0, completed | Condense pass choice and remove the unused reader (corrected F1) | One active C42 scorer; explicit giver inputs; obsolete code/config/tests removed; original choices and explanations preserved. See [passing models](PASSING.md). | `exchange-cleanup` |
 | 1a, completed | Fix history and belief-parameter reuse (F3) | Complete raw-prefix and belief-parameter comparison; fresh/reused agents agree on forks, extensions, rewinds, undo, seat/hand/kind and parameter changes. | `history-cache` |
 | 1b, completed | Validate configuration values (F4 input domains) | Nonfinite/out-of-range values and invalid joint settings rejected by the loader; direct Rust callers have explicit validation. Signed coefficients and deliberate zeros preserved. Runtime budgets remain in F7. | `config-validation` |
-| 1c, implemented; review pending | Complete the small-endgame rules and bound search | Questions, truthful answers, full per-player rights and trump changes are searched; interruption preserves only completed comparisons and cache bounds. Correctness and timings pass; independent review and strategy qualification remain. | [solver-questions](checkpoints/2026-10-09-solver-questions.md) |
-| 1d, implemented; review pending | Ground immediate entries and pair activation in human replays | Joint legal trick continuations distinguish team wins, seat entries and surviving announceable pairs. Safe own runs bound announcement delays; impossible activation no longer protects halves. | [entry-conditions](checkpoints/2026-10-09-entry-conditions.md) |
-| 2 | Qualify evaluation and weight provenance (F2/F5) | Record each fit's source, data fingerprint, feature order and command. Split by complete game/session before fitting. Freeze weights before held-out evaluation. Use predeclared fixed-size duplicate comparisons and label approximate intervals; defer unsupported anytime-valid claims. | `evaluation` |
+| 1c, implemented and reviewed | Complete the small-endgame rules and bound search | Questions, truthful answers, full per-player rights and trump changes are searched; interruption preserves only completed comparisons and cache bounds. Correctness/oracle checks and independent source review pass. Timing is a soft target on the shared machine; see the return-planning checkpoint. | [solver-questions](checkpoints/2026-10-09-solver-questions.md) |
+| 1d, implemented and reviewed | Ground immediate entries and pair activation in human replays | Joint legal trick continuations distinguish team wins, seat entries and surviving announceable pairs. Safe own runs bound announcement delays; impossible activation no longer protects halves. | [entry-conditions](checkpoints/2026-10-09-entry-conditions.md) |
+| 2, provenance recorded | Qualify evaluation and weight provenance (F2/F5) | Record each fit's source, data fingerprint, feature order and command. Split by complete game/session before fitting. Freeze weights before held-out evaluation. Use predeclared fixed-size duplicate comparisons and label approximate intervals; defer unsupported anytime-valid claims. | `evaluation` |
 | 3 | Add pass-choice inference (remaining F1 capability) | Define the modelled actor and pre-pass information; reuse the current scorer from hypothetical giver views; validate synthetic same-policy likelihoods/void predictions and privacy before testing held-out human behaviour. Bound runtime and measure calibration on separate games. | `exchange-reading` |
 | 4, partially completed | Consolidate a runnable baseline (F6) | Preview docs/data safeguards reconciled and sibling AI/testbed pair verified in the publication checkpoint. Public-fixture CI and supported toolchain policy remain. | `publication`, then `baseline-ci` |
-| 5 | Add one coordinated planning slice | Compose existing exchange, entry, trump activation and first-lead concepts in named owner scenarios. Then separately review contract estimates/raising. Avoid new abstractions without a concrete consumer. | `plan-entries`, then `plan-raising` |
-| 6 | Make play/replay responsive (F7) | Snapshot state under the store lock, compute on a bounded worker, then revision-check before saving under a short lock. Test concurrent/stale-step handling. Reuse agent state only after F3 is fixed. | `playable-v1` |
+| 5, bounded slice implemented | Compose return planning | Shared seat-local rollouts follow entries, legal trump changes, consumed halves and last-trick outcomes. Fixed 512-game qualification finds no clear strength difference. Live owner review follows; raising stays separate. | [return-planning](checkpoints/2026-10-09-return-planning.md) |
+| 6, implementation checked; live smoke pending | Make play/replay responsive (F7) | Snapshot state under the store lock, compute on a bounded worker, then revision-check before saving under a short lock. Test concurrent/stale-step handling. Reuse agent state only after F3 is fixed. | `playable-v1` |
 
 The [return-pass planning proposal](design/return-pass-plan.md) breaks the
 coordinated planning slice into six checkpoints with domain scenarios. Begin
@@ -56,10 +56,14 @@ No GPU training or new runtime graph framework is needed for the next iterations
 
 ## Next implementation task
 
-Review the question-aware solver and [entry conditions](design/entry-conditions.md)
-before promotion. Keep the four-card default, history/parameter tests and frozen
-exchange trace. Next, extend the immediate checks into concrete sequences for
-return candidates: spend each card once, apply legal trump changes, and track
-which player can activate each surviving pair. Compare conditional contract and
-last-trick outcomes on complete games before enabling new return selection.
-Evaluation provenance and full planning qualification still follow.
+Complete the paired live Debug smoke, then use concrete owner-played mistakes to
+choose the next small iteration. The [bounded return checkpoint](checkpoints/2026-10-09-return-planning.md)
+records the fixed comparison, human development sample, deadline limitations and
+resource trim. Reuse its evidence; do not rerun broad exhaustive suites without a
+changed dependency or new failure.
+
+Next candidates: improve observed return/entry mistakes, calibrate forecast shares
+on genuinely separate games, and investigate broader information-set planning.
+Before exposing arbitrary transposition-table sizes, handle the existing zero-bit
+TT edge. Raising and GPU work remain separate decisions. Every major iteration
+gets its own checkpoint; no speculative second planner or duplicated rule logic.

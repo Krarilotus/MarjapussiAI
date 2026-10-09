@@ -18,3 +18,39 @@ serde_json = "1"
 
 [lib]
 name = "tools"
+
+# These drivers have no unit tests; integration tests exercise their shared library.
+[[bin]]
+name = "arena"
+test = false
+bench = false
+
+[[bin]]
+name = "audit"
+test = false
+bench = false
+
+[[bin]]
+name = "beliefs_study"
+test = false
+bench = false
+
+[[bin]]
+name = "human_eval"
+test = false
+bench = false
+
+[[bin]]
+name = "mind_profile"
+test = false
+bench = false
+
+[[bin]]
+name = "perf"
+test = false
+bench = false
+
+[[bin]]
+name = "study"
+test = false
+bench = false

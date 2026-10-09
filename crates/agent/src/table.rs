@@ -7,6 +7,7 @@ use engine::{ActionType, Card, CardSet, Game, GameAction};
 use knowledge::Tracker;
 use observation::{start_hand, Seat, SeatEvent, SeatFilter};
 
+#[derive(Clone)]
 struct SeatState {
     filter: SeatFilter,
     tracker: Tracker,
@@ -14,6 +15,7 @@ struct SeatState {
 }
 
 /// A game plus each seat's private view, kept in step event by event.
+#[derive(Clone)]
 pub struct Table {
     pub game: Game,
     seats: Vec<SeatState>,
