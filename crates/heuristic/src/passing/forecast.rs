@@ -38,8 +38,8 @@ impl Outcome {
     }
 }
 
-/// C42's leading choices, each held half/pair allocation, and a legal opening
-/// toward a returned ace. Pure card-play routes remain represented without pairs.
+/// Represent suit length, pair ownership and each legal returned-Ace entry.
+/// C42 orders alternatives within each allocation; continuation play values them.
 fn candidates(ctx: &Ctx, mut ranked: Vec<(GameAction, CardSet, f64)>, best: GameAction) -> Vec<GameAction> {
     let hand = ctx.k.certain(ctx.me);
     // Stable ordering preserves the engine's order on equal C42 scores.
@@ -50,31 +50,39 @@ fn candidates(ctx: &Ctx, mut ranked: Vec<(GameAction, CardSet, f64)>, best: Game
             result.push(*a);
         }
     }
+    let opening = engine::play_levels(&[], None, true);
     for suit in SUITS {
-        let halves = hand & CardSet::halves(suit);
-        if halves.is_empty() {
+        let held = hand & CardSet::suit(suit);
+        if held.is_empty() {
             continue;
         }
+        // A void, a short entry suit and a long developing suit are distinct
+        // continuations, even when their current standing-card counts agree.
+        for kept in 0..=held.len() {
+            add_candidate(&mut result, &ranked, |given| (held - given).len() == kept);
+        }
+        let halves = held & CardSet::HALVES;
         for kept in 0..=halves.len() {
-            if let Some((a, _, _)) = ranked.iter().find(|(_, given, _)| (halves - *given).len() == kept) {
-                if !result.contains(a) {
-                    result.push(*a);
-                }
-            }
+            add_candidate(&mut result, &ranked, |given| (halves - given).len() == kept);
         }
-    }
-    let opening = engine::play_levels(&[], None, true);
-    if let Some((a, _, _)) = ranked.iter().find(|(_, given, _)| {
-        let allowed = opening.allowed(hand - *given);
-        (*given & CardSet::ACES)
-            .iter()
-            .any(|ace| !(allowed & CardSet::suit(engine::suit_of(ace))).is_empty())
-    }) {
-        if !result.contains(a) {
-            result.push(*a);
-        }
+        add_candidate(&mut result, &ranked, |given| {
+            !(given & held & CardSet::ACES).is_empty()
+                && !(opening.allowed(hand - given) & CardSet::suit(suit)).is_empty()
+        });
     }
     result
+}
+
+fn add_candidate(
+    result: &mut Vec<GameAction>,
+    ranked: &[(GameAction, CardSet, f64)],
+    matches: impl Fn(CardSet) -> bool,
+) {
+    if let Some((action, _, _)) = ranked.iter().find(|(_, given, _)| matches(*given)) {
+        if !result.contains(action) {
+            result.push(*action);
+        }
+    }
 }
 
 /// Undo visible transfers in a sampled current deal, then replay the real auction.

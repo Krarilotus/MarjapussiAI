@@ -89,10 +89,9 @@ Acceptance: retained, transferred and split-pair scenarios; all relevant
 `Own`/`Yours`/`Ours` rights; a pair without a credible lead route; a half with only
 uncertain completion; no announcement in the opening. Still preserve selection.
 
-Also cover a half answer that restores an already-called suit as trump: the engine
-allows that state change without awarding its pair points again. `Reach` currently
-focuses on uncalled pairs; extend that existing owner only when this scenario
-needs it. Keep trump control distinct from first-time pair scoring.
+Correction from the later once-only-trump checkpoint: an already-called suit
+cannot become trump again. A repeated half answer keeps the current trump and
+awards no further pair points. Candidate continuations must use that engine rule.
 
 ### 3. Legal entries (`plan-entries`)
 
@@ -130,7 +129,7 @@ entry is gone, an answer is negative or trump changes, choose another feasible
 route or use the existing card-play fallback. Do not assume a human partner
 will follow a private plan merely because cards were sent.
 
-Acceptance: return → opening → activation → continued play forms a legal trace;
+Acceptance: return â†’ opening â†’ activation â†’ continued play forms a legal trace;
 disruption changes the route; needed halves are preserved only while useful;
 fresh/reused agents agree after repeats, undo, forks and parameter changes.
 The other partner must derive its actions from its own view, never shared memory.

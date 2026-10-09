@@ -70,3 +70,11 @@ on genuinely separate games, and investigate broader information-set planning.
 Before exposing arbitrary transposition-table sizes, handle the existing zero-bit
 TT edge. Raising and GPU work remain separate decisions. Every major iteration
 gets its own checkpoint; no speculative second planner or duplicated rule logic.
+
+## Live feedback: next dependency work
+
+The [live audit](design/live-planning-audit.md) separates human agreement from
+playing quality and maps the dependencies for developing suit control. The
+[allocation checkpoint](checkpoints/2026-10-09-return-suit-allocations.md) broadens
+return candidates; it does not complete that planner. Next: validate coherent
+promotion/entry/trump continuations, then reuse them for bidding and play.

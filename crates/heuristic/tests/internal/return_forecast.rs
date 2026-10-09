@@ -45,6 +45,23 @@ fn expired_comparison_retains_c42_without_publishing_partial_outcomes() {
         crate::RuleId::PBack,
         |cards| back_features(ctx.k.certain(seat), &partner, trump, cards),
     );
+    let selected = candidates(&ctx, options.clone(), baseline.action);
+    assert!(selected.iter().all(|a| legal.contains(a)));
+    for (action, given, _) in &options {
+        let hand = ctx.k.certain(seat);
+        for suit in SUITS {
+            let shape = |cards: CardSet| (hand - cards) & CardSet::suit(suit);
+            assert!(
+                selected.iter().any(|a| {
+                    let ActionType::Pass(cards) = a.action_type else {
+                        return false;
+                    };
+                    shape(CardSet::from_cards(&cards)).len() == shape(*given).len()
+                }),
+                "missing retained length for {action:?} in {suit:?}"
+            );
+        }
+    }
     let actual = choose_until(&ctx, options, &partner, trump, baseline.clone(), Instant::now());
     assert_eq!(actual.action, baseline.action);
     assert_eq!(actual.rule, baseline.rule);
