@@ -1,11 +1,12 @@
 # Checkpoint: bounded return planning and lean validation
 
 - Date: 2026-10-09 (Europe/Berlin).
-- Status: verified for the bounded policy and engineering checks below; paired live smoke remains a testbed release step.
+- Status: verified for the bounded policy and engineering checks below; paired live browser/API smoke subsequently passed.
 - Tag: `checkpoint/2026-10-09-return-planning`.
 - Branch: `integration/reviewed-ai`.
 - Base: `3eda680`, `checkpoint/2026-10-09-simulation-table`.
-- Paired testbed: `feature/playable-v1`; its checkpoint records the exact AI revision.
+- Paired testbed: `3d1aba4dba0f7e99b03a09f2624872a4f59e79d4` on `feature/playable-v1`,
+  `checkpoint/2026-10-09-playable-v1`; its record documents the release build and live smoke with AI `febba17`.
 - No engine-upstream change, push or merge in this iteration.
 
 ## Result
@@ -83,7 +84,7 @@ is a practical target, not a hard real-time guarantee: preparation/tie-breaking
 and operating-system scheduling are outside the search's cooperative checks.
 Completed cache bounds remain reusable; actual observations still update beliefs.
 
-Next: paired live Debug review, then concrete mistakes from that review. Keep
+Next: owner-played live Debug review, then concrete mistakes from that review. Keep
 raising, broader information-set planning/GPU work and any new fitting separate.
 Retain the public solver's pre-existing zero-bit TT edge as a small follow-up;
 normal callers use nonzero sizes. Do not add a framework to address it.

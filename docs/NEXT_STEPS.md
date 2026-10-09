@@ -20,7 +20,7 @@ preserves play; it does not introduce pass-choice inference.
 | 3 | Add pass-choice inference (remaining F1 capability) | Define the modelled actor and pre-pass information; reuse the current scorer from hypothetical giver views; validate synthetic same-policy likelihoods/void predictions and privacy before testing held-out human behaviour. Bound runtime and measure calibration on separate games. | `exchange-reading` |
 | 4, partially completed | Consolidate a runnable baseline (F6) | Preview docs/data safeguards reconciled and sibling AI/testbed pair verified in the publication checkpoint. Public-fixture CI and supported toolchain policy remain. | `publication`, then `baseline-ci` |
 | 5, bounded slice implemented | Compose return planning | Shared seat-local rollouts follow entries, legal trump changes, consumed halves and last-trick outcomes. Fixed 512-game qualification finds no clear strength difference. Live owner review follows; raising stays separate. | [return-planning](checkpoints/2026-10-09-return-planning.md) |
-| 6, implementation checked; live smoke pending | Make play/replay responsive (F7) | Snapshot state under the store lock, compute on a bounded worker, then revision-check before saving under a short lock. Test concurrent/stale-step handling. Reuse agent state only after F3 is fixed. | `playable-v1` |
+| 6, verified for local live use | Make play/replay responsive (F7) | Bounded background work, revision-checked commits and cached agents pass concurrency/privacy checks and the paired browser/API smoke. Testbed `3d1aba4` runs AI `febba17`. | `playable-v1` |
 
 The [return-pass planning proposal](design/return-pass-plan.md) breaks the
 coordinated planning slice into six checkpoints with domain scenarios. Begin
@@ -56,7 +56,7 @@ No GPU training or new runtime graph framework is needed for the next iterations
 
 ## Next implementation task
 
-Complete the paired live Debug smoke, then use concrete owner-played mistakes to
+The paired live Debug smoke passes; use concrete owner-played mistakes to
 choose the next small iteration. The [bounded return checkpoint](checkpoints/2026-10-09-return-planning.md)
 records the fixed comparison, human development sample, deadline limitations and
 resource trim. Reuse its evidence; do not rerun broad exhaustive suites without a
