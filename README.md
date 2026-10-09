@@ -14,7 +14,7 @@ This work stands on the shoulders of the Marjapussi community's code:
 | Earlier AI work: perfect-information search and bidding heuristics | [schmiddihhh](https://github.com/schmiddihhh) | [marjapussi-ki](https://github.com/schmiddihhh/marjapussi-ki), [marjapussi-ki-py](https://github.com/schmiddihhh/marjapussi-ki-py), [marjapussi](https://github.com/schmiddihhh/marjapussi) |
 | Earlier AI work | [HerrMotz](https://github.com/HerrMotz) | [marjapussi-ki](https://github.com/HerrMotz/marjapussi-ki), [marjapussi](https://github.com/HerrMotz/marjapussi) |
 
-The engine in `crates/engine` is an included, corrected copy of [marjapussi-rs](https://github.com/Krarilotus/marjapussi-rs), not a separate build dependency; see [`NOTICE`](NOTICE). To play with the AI, use the [testbed and its setup instructions](https://github.com/Krarilotus/MarjapussiAI-testbed#run-it).
+The engine in `crates/engine` is an included, corrected copy of [marjapussi-rs](https://github.com/Krarilotus/marjapussi-rs), not a separate build dependency; see [`NOTICE`](NOTICE). To play with the AI, use the [testbed and its setup instructions](https://github.com/Krarilotus/MarjapussiAI-testbed/tree/feature/playable-v1#run-it).
 
 ## What the project is about
 Marjapussi is a 4-player, 2-against-2 trick-taking game with imperfect information:
@@ -39,9 +39,11 @@ More: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/design/`](docs/d
 
 ## Current development and concept store
 
-`main` contains the engine, observation and exact knowledge crates. The published
-`v1-preview` branch contains the continuing agent, including the reviewed pass
-cleanup and history-cache fix. The coordinated game planner remains proposed work.
+Use `integration/reviewed-ai` for the current playable v1: question-aware endgame
+search, entry/pair reasoning and bounded return planning. `v1-preview` is the older
+snapshot; `main` contains only the engine, observation and exact knowledge crates.
+The paired setup is pinned by `checkpoint/2026-10-09-portable-v1` in both AI and
+testbed repositories. See the [testbed setup](https://github.com/Krarilotus/MarjapussiAI-testbed/tree/feature/playable-v1#run-it).
 See the [overview](docs/PROJECT_OVERVIEW.md), [next steps](docs/NEXT_STEPS.md)
 and [checkpoint workflow](docs/WORKFLOW.md).
 
@@ -53,12 +55,12 @@ concepts. It includes calculations, ownership and implementation status.
 
 The graphic is the 7 October design snapshot; publication status is updated above.
 
-To build the published agent snapshot from a fresh clone:
+To check the current agent from a fresh clone:
 
 ```sh
 git fetch origin
-git switch v1-preview
-cargo test --workspace
+git switch --detach checkpoint/2026-10-09-portable-v1
+CARGO_BUILD_JOBS=1 cargo test --locked -p marjapussi-heuristic --lib -- --test-threads=1
 ```
 
 Keep private game data outside the checkout and point `MARJA_GAMES` to it.
@@ -68,17 +70,16 @@ environment files can be committed, but must contain placeholders only.
 ## How to run it
 
 ### Build and test
-```sh
-cargo test --workspace
-```
+Use the targeted check above; broader checks are listed in the checkpoint workflow.
 - **Recorded human games:** some tests and the evaluation tools use 1,579 games played on marjapussi.de. **That dataset is private** (it contains player names) and isn't part of this repository. If you have it, set `MARJA_GAMES` to the path of its `games.ndjson` (one game per line, as exported from the site). Without it, those tests skip themselves and everything else runs.
-- On a shared machine, limit the build: `CARGO_BUILD_JOBS=2 cargo test -j 2`.
+- Run builds/checks one at a time; retain the target cache. See the [resource limits](docs/WORKFLOW.md#validation-lanes) before broader validation.
 
 ## What's planned
 **v1 (now):** a playable heuristic agent that doesn't feel dumb.
 - It reads bids as uncertain evidence; interpreting pass-choice intent remains planned work.
 - It values cards by one consistent idea of the expected score.
 - It plays the last tricks with the exact solver.
+- It compares return candidates through seat-filtered continuations. This is a bounded policy forecast; the fixed 512-game comparison found no clear strength difference. [Evidence and limits](docs/checkpoints/2026-10-09-return-planning.md).
 
 **After v1:**
 - **Stronger play:** search over believable deals in the middle game (determinized and information-set search), a faster solver and learned evaluation. There's plenty of research on this from Skat, Bridge and Doppelkopf.

@@ -1,8 +1,8 @@
 # Next steps
 
 Goal: a fair, understandable agent that is enjoyable to play with, developed in
-small reviewable iterations. Continue from published `v1-preview` or its immutable
-checkpoints. Every iteration follows the [checkpoint workflow](WORKFLOW.md).
+small reviewable iterations. Continue from `integration/reviewed-ai` or the immutable
+`checkpoint/2026-10-09-portable-v1` pair. Every iteration follows the [checkpoint workflow](WORKFLOW.md).
 The order below is proposed engineering work, not approval of new strategic rules.
 
 Owner priority, 2026-10-08: condense the pass implementation first. Remove deprecated
@@ -62,6 +62,9 @@ records the fixed comparison, human development sample, deadline limitations and
 resource trim. Reuse its evidence; do not rerun broad exhaustive suites without a
 changed dependency or new failure.
 
+First diagnose changed returns on identical deals: distinguish a missing candidate,
+an inaccurate forecast and poor continuation play before adding rules or search.
+The current comparison is inconclusive, not evidence that the planner has no effect.
 Next candidates: improve observed return/entry mistakes, calibrate forecast shares
 on genuinely separate games, and investigate broader information-set planning.
 Before exposing arbitrary transposition-table sizes, handle the existing zero-bit

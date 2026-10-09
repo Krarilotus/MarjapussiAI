@@ -16,13 +16,14 @@ The real workspace is `Documents/MarjaAI`; the T3 project at
 | AI `kb/batch1` | `4782c65` | Newer local bidding/passing work; the base of this continuation branch. |
 | Testbed `main` | `0665818` | Separate Rust API and Next.js play/debug UI. Reviewed statically. |
 
-The table records the original review inputs. Continued work is published on
-`v1-preview`, integrated through `integration/reviewed-ai`. It includes the pass
-cleanup and history/parameter-cache correction. Original local checkpoints remain
-immutable; publication uses clean ancestry and separate tags. See the
-[publication record](checkpoints/2026-10-08-publication.md) for verification.
+The table records the original review inputs. Current playable v1 continues on
+`integration/reviewed-ai`, paired with testbed `feature/playable-v1`. Both repositories
+pin the portable setup with `checkpoint/2026-10-09-portable-v1`; `v1-preview` remains
+the older snapshot. Original checkpoints remain immutable. See the
+[return-planning record](checkpoints/2026-10-09-return-planning.md) for current evidence
+and the [publication record](checkpoints/2026-10-08-publication.md) for ancestry.
 
-The [testbed](https://github.com/Krarilotus/MarjapussiAI-testbed#run-it) documents
+The [testbed](https://github.com/Krarilotus/MarjapussiAI-testbed/tree/feature/playable-v1#run-it) documents
 the sibling checkout setup and tested revision pair. All nine AI crates resolve
 inside this repository; its engine is included source derived from
 [marjapussi-rs](https://github.com/Krarilotus/marjapussi-rs), not an external Cargo
@@ -65,7 +66,7 @@ Rust helpers; a diagram is not evidence that a complete planner already exists.
 - The local [question-aware endgame checkpoint](checkpoints/2026-10-09-solver-questions.md) keeps the four-card/64-world default, includes questions and answers, and adds a 45 ms search deadline. Independent source review found no blocking defect; hidden-information values remain estimates.
 - The local [entry checkpoint](checkpoints/2026-10-09-entry-conditions.md) checks winning ruffs, the actual next leader and surviving announceable pairs against human replays. Bounded return rollouts now compose these transitions. The [return-planning checkpoint](checkpoints/2026-10-09-return-planning.md) records a completed 512-game comparison with no clear strength difference; live acceptance follows.
 - Published continuation preserves the preview documentation, assets and private-data safeguards.
-- Core-only `main` still lacks agent dependencies; use `v1-preview` as documented in the testbed.
+- Core-only `main` still lacks agent dependencies; use the paired setup documented in the testbed.
 
 See the [review](REVIEW-2026-10-08.md) for concrete defects and the
 [plan](NEXT_STEPS.md) for the order of work.
