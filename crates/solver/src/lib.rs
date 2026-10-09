@@ -5,5 +5,5 @@ mod search;
 mod tt;
 mod worlds;
 
-pub use search::{Solver, DEFAULT_TT_BITS};
-pub use worlds::{evaluate, Criterion, Decision, Measure, MoveValue, Objective, SolverError};
+pub use search::{Limits, Solver, DEFAULT_TT_BITS};
+pub use worlds::{evaluate, evaluate_limited, Criterion, Decision, Measure, MoveValue, Objective, SolverError};

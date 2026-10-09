@@ -5,8 +5,8 @@ use engine::{FastState, CARDS};
 
 /// A trick-start position, the team the values are for, and the measure (points or tricks).
 /// Hands, leader, trump, called suits and trump rights decide the rest of the play;
-/// `announcements()` stands in for the open trick start, which matters only through the
-/// announcements it allows now. Every field is guarded by `tests/exact.rs`
+/// All three rights levels and the pending question/phase matter, even without an own pair.
+/// Every field is guarded by `tests/exact.rs`
 /// (`transposition_key_separates_every_public_field`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Key([u64; 4]);
@@ -19,9 +19,9 @@ impl Key {
             | (s.leader() as u64) << 1
             | (s.trump().map_or(4, |t| t as u64)) << 3
             | (s.called() as u64) << 6
-            | (s.may_announce() as u64) << 10
-            | (s.announcements() as u64) << 14
-            | (tricks as u64) << 18;
+            | (s.rights_code() as u64) << 10
+            | (s.phase().code() as u64) << 18
+            | (tricks as u64) << 21;
         Key([h[0].0, h[1].0, h[2].0, h[3].0 | meta << CARDS])
     }
 

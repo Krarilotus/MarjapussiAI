@@ -1,5 +1,5 @@
 //! The endgame (design D-c / F10): with at most `endgame_tricks` tricks left, the
-//! card (or announcement) is chosen by the exact solver over the deals I can believe in, not by
+//! play action is chosen by the bounded solver over the deals I can believe in, not by
 //! the valuation's closed forms.
 //!
 //! - **Worlds:** the deals consistent with my facts (`knowledge::DealSpace`): all of them when
@@ -12,9 +12,10 @@
 //! - **Ties:** cards the solver values exactly alike are told apart by the valuation (e.g. a
 //!   standing ace that wins either now or later is kept, as the future-trick value says).
 
-use engine::{ActionType, GameAction, Move};
+use engine::{CardSet, GameAction, Move, PlayPhase, QuestionType};
 use knowledge::Hands;
-use solver::{evaluate, Objective, Solver};
+use solver::{evaluate_limited, Limits, Objective, Solver};
+use std::time::{Duration, Instant};
 
 use crate::rules::RuleId;
 use crate::valuation::{Choice, Valuation};
@@ -24,15 +25,13 @@ use crate::{decision, fact, Ctx, Decision, Rng};
 const TT_BITS: u32 = 16;
 
 pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option<Decision> {
+    let deadline = Instant::now() + Duration::from_millis(45);
     let k = ctx.k;
     let tricks_left = k.hand_len(ctx.me) as u32;
     if tricks_left == 0 || tricks_left > ctx.params.endgame_tricks {
         return None;
     }
-    let announce_open = legal
-        .iter()
-        .any(|a| matches!(a.action_type, ActionType::AnnounceTrump(_)));
-    let table = k.public_state(ctx.me, announce_open);
+    let table = k.public_state(ctx.me, PlayPhase::from_actions(legal));
     let objective = match k.declarer() {
         Some(d) => Objective::Contract {
             playing_team: d % 2,
@@ -60,7 +59,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
     let mut slot = ctx.solver.borrow_mut();
     let solver = slot.get_or_insert_with(|| Solver::with_tt_bits(TT_BITS));
     let mut rng = Rng::new(ctx.seed);
-    let d = evaluate(
+    let mut d = evaluate_limited(
         solver,
         k,
         &table,
@@ -68,8 +67,20 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
         ctx.params.endgame_worlds as usize,
         &belief,
         &mut rng,
+        Limits {
+            deadline: Some(deadline),
+            nodes: None,
+        },
     )
     .ok()?;
+    // A known negative answer cannot add information or activate trump. This is a
+    // policy restriction, not an engine ban on repeating a legal question.
+    let mate = engine::partner(ctx.me);
+    d.moves.retain(|v| match v.mv {
+        Move::Question(QuestionType::Yours) => k.pairs(mate).possible != 0,
+        Move::Question(QuestionType::YourHalf(suit)) => !(k.may_hold(mate) & CardSet::halves(suit)).is_empty(),
+        _ => true,
+    });
     let mut best = d.best()?;
     let means = |m: Move| d.moves.iter().find(|v| v.mv == m).map(|v| v.means.clone());
     let top = means(best)?;
@@ -89,18 +100,15 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
             best = Move::Card(c);
         }
     }
-    let action = legal.iter().find(|a| match (best, a.action_type) {
-        (Move::Card(c), ActionType::CardPlayed(x)) => x.index() == c,
-        (Move::Announce(s), ActionType::AnnounceTrump(t)) => s == t,
-        _ => false,
-    })?;
+    let action = legal.iter().find(|a| Move::from_action(&a.action_type) == Some(best))?;
     let mean = top[0];
     Some(decision(
         action,
         RuleId::HE1,
         vec![
             fact("worlds", d.worlds as u32),
-            fact("exact", d.exact as u8),
+            fact("all_deals", d.all_deals as u8),
+            fact("complete", d.complete as u8),
             fact("ess", d.ess),
             fact("value", mean),
         ],

@@ -62,7 +62,7 @@ Rust helpers; a diagram is not evidence that a complete planner already exists.
 - Pass choice uses the C42 feature score. The unused HP/HK reader and scorer have been removed; the active beliefs never called that reader. Inferring intent from chosen passes remains separate capability work. See [passing models](PASSING.md).
 - Raising is deliberately disabled; coordinated entries/trump/contract planning remains incomplete.
 - Fitted human-choice weights measure imitation, not necessarily good play. Their inspected fit scripts report in-sample agreement.
-- The endgame uses at most 64 worlds by default with a four-card trigger; questions/activation can keep decisions on the heuristic path.
+- The local [question-aware endgame checkpoint](checkpoints/2026-10-09-solver-questions.md) keeps the four-card/64-world default, includes questions and answers, and adds a 45 ms search deadline. Independent review is pending; hidden-information values remain estimates.
 - Two behaviour-related tests are ignored, alongside deliberate performance tests.
 - Published continuation preserves the preview documentation, assets and private-data safeguards.
 - Core-only `main` still lacks agent dependencies; use `v1-preview` as documented in the testbed.

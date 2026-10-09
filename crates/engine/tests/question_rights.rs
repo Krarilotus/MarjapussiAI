@@ -7,11 +7,15 @@ use marjapussi_engine::{
 };
 
 fn act(game: &mut Game, action_type: ActionType) {
+    let fast = marjapussi_engine::FastState::from_game(game);
     let action = GameAction {
         action_type,
         player: PlaceAtTable(game.state.player_at_turn.0),
     };
     *game = game.apply_action(action).expect("fixture action must be legal");
+    if let (Some(fast), Some(mv)) = (fast, marjapussi_engine::Move::from_action(&action_type)) {
+        assert_eq!(Some(fast.after(mv)), marjapussi_engine::FastState::from_game(game));
+    }
 }
 
 fn allows(game: &Game, action_type: ActionType) -> bool {

@@ -40,8 +40,10 @@ fn knowledge_of(game: &Game, seat: Seat) -> Knowledge {
 
 /// A card-play decision with at most `left` tricks to go.
 fn is_decision(game: &Game, left: usize) -> bool {
-    matches!(game.state.phase, GamePhase::Trick | GamePhase::StartTrick)
-        && game.state.players[game.state.player_at_turn.0 as usize].cards.len() <= left
+    matches!(
+        game.state.phase,
+        GamePhase::Trick | GamePhase::StartTrick | GamePhase::AnsweringPair | GamePhase::AnsweringHalf(_)
+    ) && game.state.players[game.state.player_at_turn.0 as usize].cards.len() <= left
 }
 
 fn random_action(game: &Game, rng: &mut StdRng) -> GameAction {
@@ -69,7 +71,7 @@ fn evaluation_runs_at_every_late_decision_and_is_exact_when_the_deal_is_known() 
                 let points = evaluate(&mut solver, &k, &table, Objective::Points, 8, &Uniform, &mut rng)
                     .unwrap_or_else(|e| panic!("seed {seed}: {e:?} at {fast:?}"));
                 assert_eq!(points.ess, points.worlds as f64);
-                assert_eq!(points.exact, k.deals().count() <= 8);
+                assert_eq!(points.all_deals, k.deals().count() <= 8);
                 let team = me % 2;
                 let target = fast.points(team) + 25;
                 let reach = Objective::Reach { team, target };
@@ -163,7 +165,7 @@ fn small_deal_spaces_are_solved_deal_by_deal() {
                     .unwrap()
                 };
                 let d = run(1);
-                assert!(d.exact && d.worlds as u64 == count, "seed {seed}");
+                assert!(d.all_deals && d.worlds as u64 == count, "seed {seed}");
                 assert_eq!(run(2), d, "seed {seed}: an exact decision depends on the RNG");
                 // The plain average over every deal, solved one by one.
                 let mut sums = vec![0.0; d.moves.len()];
@@ -236,7 +238,7 @@ fn contract_objective_follows_hc9() {
                         let d =
                             evaluate(&mut solver, &k, &table, objective, 8, &Uniform, &mut sampler.clone()).unwrap();
                         if me % 2 == s {
-                            // Site scoring: trickless declarers are punished too (schwarz −2A).
+                            // Site scoring: trickless declarers are punished too (schwarz âˆ’2A).
                             let first: Vec<Criterion> = if fast.tricks_won(s) == 0 {
                                 vec![max(Measure::ReachTricks { team: s, target: 1 })]
                             } else {
@@ -279,7 +281,7 @@ fn contract_objective_follows_hc9() {
                             assert_eq!(d.criteria, vec![max(Measure::Points { team: n })], "seed {seed}");
                             seen[4] += 1;
                         }
-                        if d.exact && d.worlds == 1 {
+                        if d.all_deals && d.worlds == 1 {
                             for v in &d.moves {
                                 for (c, mean) in d.criteria.iter().zip(&v.means) {
                                     let exact = exact_measure(&mut solver, &fast, v.mv, c.measure);
@@ -401,4 +403,88 @@ fn hidden_cards_do_not_change_the_decision() {
         swaps += 1;
     }
     assert!(swaps >= 150, "only {swaps} valid swaps");
+}
+
+#[test]
+fn interrupted_evaluation_compares_only_completed_worlds_and_preserves_cache_bounds() {
+    use solver::{evaluate_limited, Limits, SolverError};
+    use std::time::Instant;
+    let mut rng = StdRng::seed_from_u64(41);
+    let mut game = game_from(&deal(&mut rng));
+    while !is_decision(&game, 4) {
+        game.apply_action_mut(random_action(&game, &mut rng));
+    }
+    let me = game.state.player_at_turn.0;
+    let k = knowledge_of(&game, me);
+    assert!(k.deals().count() > 8);
+    let table = FastState::from_game(&game).unwrap().public();
+    let mut full_solver = Solver::new();
+    let full = evaluate(
+        &mut full_solver,
+        &k,
+        &table,
+        Objective::Points,
+        8,
+        &Uniform,
+        &mut StdRng::seed_from_u64(42),
+    )
+    .unwrap();
+    let mut interrupted = Solver::new();
+    assert_eq!(
+        evaluate_limited(
+            &mut interrupted,
+            &k,
+            &table,
+            Objective::Points,
+            8,
+            &Uniform,
+            &mut StdRng::seed_from_u64(42),
+            Limits {
+                deadline: Some(Instant::now()),
+                nodes: None
+            }
+        ),
+        Err(SolverError::Interrupted)
+    );
+    let partial = evaluate_limited(
+        &mut interrupted,
+        &k,
+        &table,
+        Objective::Points,
+        8,
+        &Uniform,
+        &mut StdRng::seed_from_u64(42),
+        Limits {
+            deadline: None,
+            nodes: Some(full_solver.nodes() - 1),
+        },
+    )
+    .unwrap();
+    assert!(!partial.complete && !partial.all_deals);
+    assert!(partial.worlds > 0 && partial.worlds < 8);
+    let prefix = evaluate(
+        &mut Solver::new(),
+        &k,
+        &table,
+        Objective::Points,
+        partial.worlds,
+        &Uniform,
+        &mut StdRng::seed_from_u64(42),
+    )
+    .unwrap();
+    assert_eq!(
+        partial.moves, prefix.moves,
+        "no half-evaluated world may bias a candidate"
+    );
+    let resumed = evaluate(
+        &mut interrupted,
+        &k,
+        &table,
+        Objective::Points,
+        8,
+        &Uniform,
+        &mut StdRng::seed_from_u64(42),
+    )
+    .unwrap();
+    assert_eq!(resumed, full, "interruption must not cache unfinished work as exact");
 }

@@ -6,7 +6,8 @@ use engine::{game_scores, FastState, GameOutcome, Move, PublicState, SCHWARZ_FAC
 use knowledge::{Belief, Knowledge, World};
 use rand::RngCore;
 
-use crate::Solver;
+use crate::search::Budget;
+use crate::{Limits, Solver};
 
 /// A quantity of the end of play in one world, under best play by both teams.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,8 +61,11 @@ pub struct Decision {
     /// Every legal move, in `FastState::moves` order.
     pub moves: Vec<MoveValue>,
     pub worlds: usize,
-    /// Every consistent deal was solved once (no sampling).
-    pub exact: bool,
+    /// Every requested world was completed for every compared move/criterion.
+    pub complete: bool,
+    /// All consistent deals were considered, and every positive-weight continuation
+    /// completed. This is not a proof of optimal imperfect-information play.
+    pub all_deals: bool,
     /// Effective sample size of the weights, (Σw)² / Σw².
     pub ess: f64,
 }
@@ -101,6 +105,8 @@ pub enum SolverError {
     NoConsistentDeal,
     /// The belief gave every world zero weight.
     ZeroWeight,
+    /// The budget ended before one world was completed for all candidate moves.
+    Interrupted,
 }
 
 impl std::fmt::Display for SolverError {
@@ -176,20 +182,26 @@ fn criteria(objective: Objective, table: &PublicState, me: u8) -> Vec<Criterion>
 }
 
 /// The measure after move `m` in world `s`.
-fn measure(solver: &mut Solver, s: &FastState, m: Move, measure: Measure) -> f64 {
+fn measure(solver: &mut Solver, s: &FastState, m: Move, measure: Measure, budget: &Budget) -> Option<f64> {
     let child = s.after(m);
     match measure {
-        Measure::Points { team } => (child.points(team) + solver.value(&child, team)) as f64,
-        Measure::ReachPoints { team, target } => solver.reaches(&child, team, target - child.points(team)) as u8 as f64,
+        Measure::Points { team } => {
+            Some((child.points(team) + solver.solve(&child, team, false, None, budget)?) as f64)
+        }
+        Measure::ReachPoints { team, target } => {
+            let needed = target - child.points(team);
+            Some((solver.solve(&child, team, false, Some(needed), budget)? >= needed) as u8 as f64)
+        }
         Measure::ReachTricks { team, target } => {
-            solver.reaches_tricks(&child, team, target as i32 - child.tricks_won(team) as i32) as u8 as f64
+            let needed = target as i32 - child.tricks_won(team) as i32;
+            Some((solver.solve(&child, team, true, Some(needed), budget)? >= needed) as u8 as f64)
         }
     }
 }
 
 /// The deciding seat's moves judged over worlds from `knowledge`, by `objective`.
 ///
-/// If at most `worlds` deals are consistent, each is solved once (exact). Otherwise `worlds`
+/// If at most `worlds` deals are consistent, each is solved once. Otherwise `worlds`
 /// deals are sampled uniformly. Each world is weighted by `belief`, every legal move is solved
 /// exactly in it, and the weighted means per criterion are returned.
 pub fn evaluate<R: RngCore + ?Sized, B: Belief + ?Sized>(
@@ -201,6 +213,35 @@ pub fn evaluate<R: RngCore + ?Sized, B: Belief + ?Sized>(
     belief: &B,
     rng: &mut R,
 ) -> Result<Decision, SolverError> {
+    evaluate_limited(
+        solver,
+        knowledge,
+        table,
+        objective,
+        worlds,
+        belief,
+        rng,
+        Limits::default(),
+    )
+}
+
+/// Bounded evaluation. Only worlds completed for every root move enter the means;
+/// interrupted branches never count as losses or exact results.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_limited<R: RngCore + ?Sized, B: Belief + ?Sized>(
+    solver: &mut Solver,
+    knowledge: &Knowledge,
+    table: &PublicState,
+    objective: Objective,
+    worlds: usize,
+    belief: &B,
+    rng: &mut R,
+    limits: Limits,
+) -> Result<Decision, SolverError> {
+    let budget = Budget::new(limits, solver);
+    if budget.stopped(solver) {
+        return Err(SolverError::Interrupted);
+    }
     let me = knowledge.me();
     if table.to_move() != me {
         return Err(SolverError::NotToMove);
@@ -235,35 +276,55 @@ pub fn evaluate<R: RngCore + ?Sized, B: Belief + ?Sized>(
             ))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let weight: f64 = states.iter().map(|w| w.1).sum();
-    if weight <= 0.0 {
+    if states.is_empty() {
         return Err(SolverError::ZeroWeight);
     }
-    let weight_sq: f64 = states.iter().map(|w| w.1 * w.1).sum();
     // The seat to move knows its hand, so its moves are the same in every world.
     let moves: Vec<Move> = states[0].0.moves().collect();
     debug_assert!(states.iter().all(|(s, _)| s.moves().eq(moves.iter().copied())));
 
-    let means = |solver: &mut Solver, criteria: &[Criterion]| -> Vec<MoveValue> {
+    let mut criteria = criteria(objective, table, me);
+    let mut values: Vec<_> = moves
+        .iter()
+        .map(|&mv| MoveValue {
+            mv,
+            means: vec![0.0; criteria.len()],
+        })
+        .collect();
+    let (mut completed, mut weight, mut weight_sq) = (0usize, 0.0, 0.0);
+    let world_values = |solver: &mut Solver, s: &FastState, criteria: &[Criterion]| -> Option<Vec<Vec<f64>>> {
         moves
             .iter()
-            .map(|&mv| MoveValue {
-                mv,
-                means: criteria
+            .map(|&mv| {
+                criteria
                     .iter()
-                    .map(|c| {
-                        states
-                            .iter()
-                            .map(|(s, w)| w * measure(solver, s, mv, c.measure))
-                            .sum::<f64>()
-                            / weight
-                    })
-                    .collect(),
+                    .map(|c| measure(solver, s, mv, c.measure, &budget))
+                    .collect()
             })
             .collect()
     };
-    let mut criteria = criteria(objective, table, me);
-    let mut values = means(solver, &criteria);
+    for (s, w) in &states {
+        let Some(row) = world_values(solver, s, &criteria) else {
+            break;
+        };
+        for (value, means) in values.iter_mut().zip(row) {
+            for (sum, mean) in value.means.iter_mut().zip(means) {
+                *sum += w * mean;
+            }
+        }
+        completed += 1;
+        weight += w;
+        weight_sq += w * w;
+    }
+    if completed == 0 {
+        return Err(SolverError::Interrupted);
+    }
+    for value in &mut values {
+        for mean in &mut value.means {
+            *mean /= weight;
+        }
+    }
+    let mut complete = completed == states.len();
     // Declarers who cannot make the contract in any world: the loss is fixed, so they keep
     // the defenders' points down (HC-9).
     if let (Objective::Contract { playing_team, .. }, Some(i)) = (
@@ -272,22 +333,43 @@ pub fn evaluate<R: RngCore + ?Sized, B: Belief + ?Sized>(
             .iter()
             .position(|c| matches!(c.measure, Measure::ReachPoints { .. })),
     ) {
-        if values.iter().all(|v| v.means[i] == 0.0) {
-            criteria.truncate(i);
-            criteria.push(Criterion {
+        if complete && values.iter().all(|v| v.means[i] == 0.0) {
+            let mut fallback = criteria[..i].to_vec();
+            fallback.push(Criterion {
                 measure: Measure::Points {
                     team: 1 - (playing_team & 1),
                 },
                 maximize: false,
             });
-            values = means(solver, &criteria);
+            let mut sums = vec![vec![0.0; fallback.len()]; moves.len()];
+            let mut finished = true;
+            for (s, w) in &states {
+                let Some(row) = world_values(solver, s, &fallback) else {
+                    finished = false;
+                    break;
+                };
+                for (sum, means) in sums.iter_mut().zip(row) {
+                    for (sum, mean) in sum.iter_mut().zip(means) {
+                        *sum += w * mean;
+                    }
+                }
+            }
+            if finished {
+                criteria = fallback;
+                for (value, means) in values.iter_mut().zip(sums) {
+                    value.means = means.into_iter().map(|sum| sum / weight).collect();
+                }
+            } else {
+                complete = false;
+            }
         }
     }
     Ok(Decision {
         criteria,
         moves: values,
-        worlds: samples.len(),
-        exact,
+        worlds: completed,
+        complete,
+        all_deals: exact && complete,
         ess: weight * weight / weight_sq,
     })
 }
@@ -324,7 +406,8 @@ mod tests {
                 v(3, vec![0.4, 0.0]),
             ],
             worlds: 1,
-            exact: true,
+            complete: true,
+            all_deals: true,
             ess: 1.0,
         };
         assert_eq!(d.best(), Some(Move::Card(2)));

@@ -172,7 +172,7 @@ fn answer(t: Mutable, a: AnswerType) -> Option<GameCallback> {
         AnswerType::NoHalf(suit) => Some(GameCallback::NoHalf(suit)),
         AnswerType::YesHalf(suit) => {
             let asker_hand = CardSet::from_cards(&state.partner().cards);
-            if (asker_hand & CardSet::halves(suit)).is_empty() {
+            if super::rules::answer_trump(asker_hand, a).is_none() {
                 Some(GameCallback::OnlyHalf(suit))
             } else if state.trump_called.contains(&suit) {
                 //if called for second time, can't be excluded

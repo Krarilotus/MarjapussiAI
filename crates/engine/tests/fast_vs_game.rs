@@ -1,9 +1,9 @@
 //! Guard: `engine::fast` agrees with `Game` at every card-play state of random games.
 //!
 //! Random games with bidding, passing, questions, answers, announcements and undo run through
-//! `Game`. At every card-play state (phases Raising, Trick, StartTrick, Ended):
-//! - the fast state converted from the game has the same legal cards and announcements;
-//! - a fast state stepped alongside (the same card or announcement applied) equals the one
+//! `Game`. At every play state, including pending questions:
+//! - the fast state converted from the game has the same legal play actions;
+//! - a fast state stepped alongside (the same play action applied) equals the one
 //!   converted afresh: same hands, trick, leader (= trick winner), trump, called suits,
 //!   tricks and points per team;
 //! - `FastParts` round-trips through `from_parts`;
@@ -77,7 +77,16 @@ fn fast_matches_game_at_every_card_play_state() {
                 assert_eq!(fresh.announcements(), game_announce, "seed {seed}: announcements");
                 let moves: Vec<Move> = fresh.moves().collect();
                 assert_eq!(moves.len(), fresh.moves().len());
-                assert_eq!(moves.len() as u32, game_cards.len() + game_announce.count_ones());
+                let game_moves: Vec<_> = game
+                    .legal_actions()
+                    .iter()
+                    .filter_map(|a| Move::from_action(&a.action_type))
+                    .collect();
+                assert_eq!(moves.len(), game_moves.len(), "seed {seed}: all play actions");
+                assert!(
+                    game_moves.iter().all(|m| moves.contains(m)),
+                    "seed {seed}: question/answer coverage"
+                );
                 for m in moves {
                     assert_eq!(Move::from_code(m.code()), m);
                     assert!((m.code() as usize) < Move::CODES);
@@ -100,6 +109,7 @@ fn fast_matches_game_at_every_card_play_state() {
                     match m {
                         Move::Card(_) => cards += 1,
                         Move::Announce(_) => announces += 1,
+                        Move::Question(_) | Move::Answer(_) => {}
                     }
                     if game.state.all_tricks.len() > tricks_before {
                         tricks += 1;

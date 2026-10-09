@@ -78,7 +78,7 @@ fn check_facts(k: &knowledge::Knowledge, x: u8, game: &Game, seed: u64, cov: &mu
         if let Some(fast) = engine::FastState::from_game(game) {
             let public = fast.public();
             assert_eq!(
-                k.public_state(state.player_at_turn.0, public.announce_open),
+                k.public_state(state.player_at_turn.0, public.phase),
                 public,
                 "seed {seed}: public state"
             );

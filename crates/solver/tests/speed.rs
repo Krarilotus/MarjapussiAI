@@ -1,7 +1,7 @@
 //! Solve time T(k) by tricks left, and the time per decision of world-sampled evaluation.
 //! Run: `cargo test --release -p marjapussi-solver --test speed -- --ignored --nocapture --test-threads 1`
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use engine::get_all_cards;
 use engine::ActionType;
@@ -14,7 +14,7 @@ use observation::{seat_events, start_hand};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-use solver::{evaluate, Objective, Solver};
+use solver::{evaluate, evaluate_limited, Limits, Objective, Solver, SolverError};
 
 /// A trick start with `left` tricks to go, after random play (announcements taken half the time).
 fn position(rng: &mut StdRng, left: u8) -> FastState {
@@ -86,9 +86,10 @@ fn solve_time_by_tricks_left() {
 #[ignore]
 fn decision_time_by_worlds() {
     let mut solver = Solver::new();
+    eprintln!("FastState: {} bytes", std::mem::size_of::<FastState>());
     eprintln!("| k | decisions | mean moves | worlds | points: mean ms | points: max ms | reach: mean ms | contract: mean ms | contract: max ms |");
     eprintln!("|---|---|---|---|---|---|---|---|---|");
-    for k in [4usize, 5, 6] {
+    for k in [4usize, 5, 6, 7, 8, 9] {
         // Decisions of random games where the seat to move holds k cards.
         let mut decisions = vec![];
         let mut seed = 0u64;
@@ -128,7 +129,8 @@ fn decision_time_by_worlds() {
             }
         }
         let moves = decisions.iter().map(|d| d.2).sum::<usize>() as f64 / decisions.len() as f64;
-        for worlds in [50, 100, 200] {
+        // Larger hands exercise interruption only; no unbounded full-game run.
+        for worlds in [50, 100, 200].into_iter().filter(|_| k <= 6) {
             let mut rng = StdRng::seed_from_u64(worlds as u64);
             let mut times = vec![];
             for (know, table, _, _) in &decisions {
@@ -167,6 +169,58 @@ fn decision_time_by_worlds() {
                 ms(reach_ns) / n,
                 ms(contract_times.iter().sum::<u128>()) / n,
                 ms(*contract_times.iter().max().unwrap()),
+            );
+        }
+        // Same decisions, agent-sized cache and 64 worlds, including sampling in the
+        // 45 ms budget. Repeat with the same worlds to measure reusable search bounds.
+        let mut bounded = Solver::with_tt_bits(16);
+        let mut times = [vec![], vec![]];
+        let mut counts = [[0usize; 3]; 2]; // complete, partial, no completed world
+        let mut completed_worlds = [0usize; 2];
+        for (i, (know, table, _, _)) in decisions.iter().enumerate() {
+            bounded.clear();
+            let team = i % 2;
+            let objective = Objective::Contract {
+                playing_team: team as u8,
+                game_value: (table.card_points[team] + table.pair_points[team]) as i32 + 30,
+            };
+            for pass in 0..2 {
+                let mut rng = StdRng::seed_from_u64(64);
+                let start = Instant::now();
+                match evaluate_limited(
+                    &mut bounded,
+                    know,
+                    table,
+                    objective,
+                    64,
+                    &Uniform,
+                    &mut rng,
+                    Limits {
+                        deadline: Some(start + Duration::from_millis(45)),
+                        nodes: None,
+                    },
+                ) {
+                    Ok(d) => {
+                        counts[pass][usize::from(!d.complete)] += 1;
+                        completed_worlds[pass] += d.worlds;
+                    }
+                    Err(SolverError::Interrupted) => counts[pass][2] += 1,
+                    Err(e) => panic!("bounded evaluation failed: {e}"),
+                }
+                times[pass].push(start.elapsed().as_nanos());
+            }
+        }
+        for pass in 0..2 {
+            times[pass].sort_unstable();
+            let n = times[pass].len();
+            eprintln!(
+                "bounded k={k}, {}: mean {:.2} ms, p95 {:.2}, max {:.2}; complete/partial/none {:?}, mean worlds {:.1}",
+                if pass == 0 { "cold" } else { "warm" },
+                ms(times[pass].iter().sum::<u128>()) / n as f64,
+                ms(times[pass][(n * 95).div_ceil(100) - 1]),
+                ms(times[pass][n - 1]),
+                counts[pass],
+                completed_worlds[pass] as f64 / n as f64,
             );
         }
     }

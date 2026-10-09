@@ -127,7 +127,8 @@ impl Knowledge {
         (lo as u8, hi as u8)
     }
 
-    /// K1: the cards of `seat` that certainly win if it leads them now. Every higher live card
+    /// K1: the cards whose lead certainly wins for `seat`'s team now (partner may overtake).
+    /// Every higher live card
     /// of the suit is certainly with the seat's team, and (for a side suit under trump) each
     /// opponent certainly must follow the suit or certainly holds no trump. Top trumps count.
     pub fn standing(&self, seat: Seat) -> CardSet {
@@ -432,9 +433,8 @@ impl Knowledge {
     }
 
     /// K6: the public card-play state (`engine::PublicState`) with `to_move` the seat to move
-    /// now, for the solver's worlds. `announce_open`: the leader may still announce in this
-    /// trick (the caller knows it from its legal actions).
-    pub fn public_state(&self, to_move: Seat, announce_open: bool) -> PublicState {
+    /// now, for the solver's worlds. The public play phase comes from the legal actions.
+    pub fn public_state(&self, to_move: Seat, phase: engine::PlayPhase) -> PublicState {
         let trick = self.trick();
         let mut cards = [0; 4];
         cards[..trick.len()].copy_from_slice(trick);
@@ -442,13 +442,15 @@ impl Knowledge {
         PublicState {
             trick: cards,
             trick_len: trick.len() as u8,
-            leader: (to_move + 4 - trick.len() as u8) % 4,
+            leader: if matches!(phase, engine::PlayPhase::Answer(_)) {
+                engine::partner(to_move)
+            } else {
+                (to_move + 4 - trick.len() as u8) % 4
+            },
             trump: self.trump(),
             called: self.called,
-            may_announce: (0..4u8)
-                .filter(|&x| self.rights(x).may_announce())
-                .fold(0, |b, x| b | 1 << x),
-            announce_open: announce_open && trick.is_empty(),
+            rights: [0, 1, 2, 3].map(|seat| self.rights(seat)),
+            phase,
             tricks_done: self.tricks_done,
             tricks: [won(0), won(1)],
             card_points: self.card_points.map(|p| p as i16),

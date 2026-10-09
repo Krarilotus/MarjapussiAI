@@ -1,100 +1,94 @@
-# The fast card-play core (`FastState`, API for search)
+# Fast play state (`FastState`)
 
-Owner: Engine Coder. Branch `feat/engine-fast`. Speed numbers: [performance.md](performance.md).
-
-`FastState` (in the engine's private `fast` module, re-exported at the crate root) is the engine's documented low-level API for search and simulation: a `Copy`
-card-play state with cheap make and undo. It covers **card play and the leader's trump
-announcement**. Bidding, passing, questions and answers stay in `Game`; questions carry
-information and are handled at the belief level.
+`FastState` is the engine's compact rules API for search and simulation.
+It covers card play, self-announcements, questions and answers. Bidding,
+passing, raising decisions and undo orchestration remain in `Game`.
+Search and pruning belong to `solver`, not this engine module.
 
 ## Rules have one owner
-| Rule | Owner | Used by |
-|---|---|---|
-| Legal cards | `bits::play_levels(trick, trump, first_trick).allowed(hand)` | `fast`, `Game` (`legal_cards`), `cards::allowed_cards`, knowledge (`excluded_by`) |
-| Trick winner | `trick_winner(trick, trump)`, `winning_seat(leader, trick, trump)`, `takes` | `fast`, `Game` (`act_card`), knowledge |
-| Card, pair and last-trick points | tables in points (`VALUE_POINTS`, `CARD_POINTS`, `PAIR_POINTS`, `LAST_TRICK_BONUS`); rules `trick_points(trick, tricks_done)`, `trump_points(suit, already_called)` | `fast`, `Game`, `team_points`, knowledge |
-| Question rights | `PlayerTrumpPossibilities::{may_announce, may_ask_pair, after_question}` | `Game` (legal actions, apply), `fast::from_game`, knowledge, heuristic |
-| Bids | `NO_BID`, `BID_STEP`, `MAX_BID`, `bid_range` (generation), `is_bid` (O(1) check) | `Game` |
-| Running team points (cards, pairs, tricks) | `team_points` | `fast::from_game`, `GameFinishedInfo`, devtool |
-| Game and series scores | scoring (`game_scores`, `SeriesTally`) | `GameFinishedInfo::scores` |
+
+| Rule | Shared owner |
+|---|---|
+| Legal cards | `bits::play_levels(...).allowed(hand)` |
+| Trick winner | `trick_winner`, `winning_seat`, `takes` |
+| Card, pair and last-trick points | Points tables; `trick_points`, `trump_points` |
+| Question rights | `PlayerTrumpPossibilities::{may_announce, may_ask_pair, after_question}` |
+| Available uncalled pairs and truthful answers | `rules::{uncalled_pairs, question_answers}` |
+| Trump resulting from an answer | `rules::answer_trump` |
+| Running team points | `scoring::team_points` |
+| Game and series scores | `game_scores`, `SeriesTally` |
+
+Both `Game` and the compact state use the shared answer rules. A half answer
+changes trump only when the asker holds a counterpart. Previously called suits
+can be restored without awarding their pair points again.
 
 ## State
-`FastState` takes 56 bytes and is `Copy + Eq + Hash`. Seats are 0–3 clockwise; team = seat % 2.
-Cards are bit indices `suit * 9 + value` (`Card::index`, `Card::from_index`). All names below are imported from the crate root (`engine::FastState`, `engine::CardSet`, …).
 
-| Field (via accessor) | Meaning |
+The state remains 56 bytes (`Copy + Eq + Hash`). Seats are 0–3 clockwise,
+team = seat % 2. Cards use bit index `suit * 9 + value`.
+
+| Accessor | Meaning |
 |---|---|
-| `hands()` / `hand(seat)` | `[CardSet; 4]` |
-| `trick()` | cards of the current trick in play order (0–3); unused slots are zero, so equal states hash equally |
-| `leader()`, `to_move()` | the leader of the current trick and the seat to move |
-| `trump()`, `called()` | trump (`Option<Suit>`); suits already announced (bit `Suit as u8`; each suit once) |
-| `may_announce()` | seats whose trump right is still `Own` (bit = seat). Questions change it in `Game`; `fast` only reads it |
-| `tricks_done()`, `tricks_won(team)` | tricks played, tricks per team |
-| `card_points(team)` | card points including the 20 for the last trick |
-| `pair_points(team)`, `points(team)` | announced pairs; card + pair points |
-| `in_hands()`, `is_over()` | cards still held; all cards played |
-| `trick_winner()` | seat winning the current trick so far |
+| `hands()`, `hand(seat)` | Four card sets |
+| `trick()` | Current cards in order; unused storage is zero |
+| `leader()`, `to_move()` | Trick leader and actor; while answering, actor is the leader's partner |
+| `trump()`, `called()` | Current trump and suits already scored |
+| `rights(seat)`, `rights_code()` | Own / Yours / Ours per seat, packed into eight bits |
+| `phase()` | Cards, open Start, or Answer(question) |
+| `tricks_done()`, `tricks_won(team)` | Completed tricks |
+| `card_points(team)`, `pair_points(team)`, `points(team)` | Card points (including last-trick bonus), pair points and total |
+| `in_hands()`, `is_over()`, `trick_winner()` | Remaining cards, terminal state and current winner |
 
-The first trick (`tricks_done == 0`) uses the first-trick rules (ace / green lead, the led ace
-must be played).
+The first trick retains the engine's ace/Green lead restrictions. Questions and
+announcements open only after a completed trick, never before the first.
 
-## Moves
-- `legal_cards() -> CardSet`: cards the seat to move may play.
-- `announcements() -> u8`: suits the leader may announce now (bit `Suit as u8`). Allowed at a trick
-  start (`Game` phase `StartTrick`, not before the first trick), for an own King + Ober pair not
-  announced before, while the leader's right is `Own`.
-- `moves() -> Moves`: an allocation-free iterator, announcements first, then cards in index order.
-- `play(card)`, `announce(suit)`, `apply(Move)`, `after(Move) -> FastState`. Illegal moves are
-  checked only in debug builds.
+## Moves and transitions
 
-An announcement makes the suit trump, adds `PAIR_POINTS[suit]` to the leader's team and closes
-the trick start (the leader then plays a card). A completed trick credits points and the trick
-to the winner's team, and the winner leads next.
+`moves()` is allocation-free: announcements/questions/answers first, then cards.
+`legal_cards()` is empty while answering. `announcements()` lists uncalled own
+pairs only while the leader may self-announce at an open trick start.
 
-## Make and undo: copy
-```rust
-for c in s.legal_cards().iter() {
-    let mut next = s;            // 56-byte copy
-    next.play(c);
-    value = value.max(search(&next, ...));
-}
-```
-Copy-make measured equal to a make/unmake variant within noise (perft, 3–4 tricks left), so
-copy was kept and the unmake was removed (performance.md, log entry 10). A full tree walk costs
-about 14–17 ns per play.
+`apply(Move)` handles all four move kinds; `after(Move)` applies to a copy.
+`play(card)` and `announce(suit)` remain available. Moves must be legal;
+debug builds check them.
 
-## Building states
-- `FastState::new(hands, leader)`: the start of card play (first trick, no trump, all seats
-  `Own`).
-- `FastState::from_game(&Game) -> Option<FastState>`: phases `Raising`, `Trick`, `StartTrick`
-  and `Ended`. Points and tricks per team come from `scoring::team_points`.
-- `PublicState`: the public part (everything except the hands: trick, leader, trump, called
-  suits, announce rights, tricks and points per team), with `to_move()` computed by the same
-  formula as `FastState::to_move()`. `FastState::public()` reads it.
-- `FastState::from_public(PublicState, hands) -> Result<FastState, GameError::InvalidState>`:
-  a sampled world (knowledge → sampler → hands). `FastParts { hands, public }`, `parts()` and
-  `from_parts` are the same as one struct. The check covers disjoint cards, hand sizes
-  against `tricks_done` and the trick, and that the tricks add up.
-- Move codes: `Move::code()` / `Move::from_code(u8)`. Cards are `0..36` (bit index), an
-  announcement is `Move::ANNOUNCE + suit` (36–39); `Move::CODES = 40`. Use these for
-  transposition tables and move lists; no second encoding.
-- `Move::to_action(seat)` and `Move::from_action(&ActionType)` convert to and from `Game`
-  actions.
+A question advances only the asker's rights and transfers action to the partner.
+The answer returns action to the asker, closes the question opportunity and may
+change trump/score a pair. The answerer's own rights are preserved. A completed
+trick scores its cards, transfers the lead and opens the next trick's opportunity.
 
-## For the solver (notes, not built here)
-- **TT key at trick starts:** `hands()`, `leader()`, `trump()`, `called()`, `may_announce()`.
-  Points so far are path data and stay outside the key (Investigator B §2.3).
-- **Card equivalence:** `CARD_POINTS` and `Card::index` order (adjacent indices are adjacent
-  ranks within a suit).
-- **Scores:** for leaf utilities, map `points(team)` and `tricks_won(team)` through
-  `game_scores` (one owner of the objective).
+Copy-make remains the undo mechanism: keep the original state and search
+`state.after(mv)`. No allocation or separate undo log is needed.
 
-## Guards
-- `tests/fast_vs_game.rs`: 5,000 random games with bidding, passing, questions, answers,
-  announcements (biased up) and undo. At every card-play state (212,215 states, 181,852 cards,
-  2,002 announcements, 45,446 tricks) it checks:
-  - the legal cards and announcements equal `Game`'s;
-  - a state stepped alongside equals one freshly converted from `Game`;
-  - `parts()` round-trips;
-  - the final points and tricks equal `GameFinishedInfo`.
-- `tests/alloc_guard.rs`: a whole game of `fast` card play allocates nothing.
+## Construction and encoding
+
+- `new(hands, leader)`: first trick, no trump, all rights Own.
+- `from_game(&Game)`: Raising, Trick, StartTrick, AnsweringPair,
+  AnsweringHalf and Ended; other phases return None.
+- `PublicState`: all fields except hands, including full rights and question
+  phase. Its `to_move()` follows the same rules as the compact state.
+- `from_public(public, hands)` checks card disjointness, hand sizes, trick
+  counts, phase placement and the asker's post-question rights.
+- `FastParts`, `parts()` and `from_parts` provide the equivalent combined form.
+- `PlayPhase::from_actions` derives phase from the actor's legal actions.
+- `Move::code/from_code` use 58 codes: cards 0–35, announcements 36–39,
+  pair question 40, half questions 41–44, NoPair 45, YesPair 46–49,
+  NoHalf 50–53, YesHalf 54–57.
+- `Move::to_action/from_action` convert to/from full engine actions.
+
+The old own-right bit mask and announcement-open boolean were replaced by full
+rights and phase; no parallel legacy representation remains.
+
+## Guards and consumers
+
+`fast_vs_game` compares all supported legal actions and stepped states against
+full `Game` across 5,000 seeded random games, including questions, answers and
+undo. It checks state round trips and final points/tricks. Curated
+`question_rights` traces also compare both representations; `alloc_guard`
+keeps compact simulation allocation-free.
+
+The [Game Solver](solver.md) owns cache keys, bounds and safe move reductions.
+Its key includes full rights and pending question; these distinguish states
+even when no pair is currently self-announceable. Older engine performance
+experiments remain in [performance.md](performance.md); they are not new
+question-complete search measurements.

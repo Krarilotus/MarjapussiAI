@@ -50,13 +50,13 @@ pub enum ActionType {
     UndoAccept,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum QuestionType {
     Yours,
     YourHalf(Suit),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum AnswerType {
     YesPair(Suit),
     NoPair,

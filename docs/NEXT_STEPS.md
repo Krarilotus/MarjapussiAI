@@ -14,6 +14,7 @@ preserves play; it does not introduce pass-choice inference.
 | 0, completed | Condense pass choice and remove the unused reader (corrected F1) | One active C42 scorer; explicit giver inputs; obsolete code/config/tests removed; original choices and explanations preserved. See [passing models](PASSING.md). | `exchange-cleanup` |
 | 1a, completed | Fix history and belief-parameter reuse (F3) | Complete raw-prefix and belief-parameter comparison; fresh/reused agents agree on forks, extensions, rewinds, undo, seat/hand/kind and parameter changes. | `history-cache` |
 | 1b, completed | Validate configuration values (F4 input domains) | Nonfinite/out-of-range values and invalid joint settings rejected by the loader; direct Rust callers have explicit validation. Signed coefficients and deliberate zeros preserved. Runtime budgets remain in F7. | `config-validation` |
+| 1c, implemented; review pending | Complete the small-endgame rules and bound search | Questions, truthful answers, full per-player rights and trump changes are searched; interruption preserves only completed comparisons and cache bounds. Correctness and timings pass; independent review and strategy qualification remain. | [solver-questions](checkpoints/2026-10-09-solver-questions.md) |
 | 2 | Qualify evaluation and weight provenance (F2/F5) | Record each fit's source, data fingerprint, feature order and command. Split by complete game/session before fitting. Freeze weights before held-out evaluation. Use predeclared fixed-size duplicate comparisons and label approximate intervals; defer unsupported anytime-valid claims. | `evaluation` |
 | 3 | Add pass-choice inference (remaining F1 capability) | Define the modelled actor and pre-pass information; reuse the current scorer from hypothetical giver views; validate synthetic same-policy likelihoods/void predictions and privacy before testing held-out human behaviour. Bound runtime and disposition the ignored historical calibration check. | `exchange-reading` |
 | 4, partially completed | Consolidate a runnable baseline (F6) | Preview docs/data safeguards reconciled and sibling AI/testbed pair verified in the publication checkpoint. Public-fixture CI and supported toolchain policy remain. | `publication`, then `baseline-ci` |
@@ -54,6 +55,7 @@ No GPU training or new runtime graph framework is needed for the next iterations
 
 ## Next implementation task
 
-F3 and F4 input-domain fixes are checkpointed. Keep the history/parameter tests
-and frozen exchange trace as regression evidence. Qualify evaluation provenance
-and review concrete return-pass planning scenarios before changing strategy.
+Complete independent review of the question-aware solver checkpoint before
+promoting it beyond the current four-card default. Keep history/parameter tests
+and the frozen exchange trace. The connected planning concepts remain an owner
+review proposal; evaluation provenance and full planning qualification still follow.

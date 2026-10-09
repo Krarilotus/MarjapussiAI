@@ -1,4 +1,4 @@
-//! Card play (§6.0, §7). At a lead where questions are legal, `trump_plan` decides first whether
+//! Card play (§6.0, §7). Outside the endgame, at a lead where questions are legal, `trump_plan` decides whether
 //! to announce, ask, or cash a standing card (M3 P8). Then the planned leads (`leads.rs`) and
 //! HL-2 (cash standing cards first); every other card choice is the best `value_of_play` of
 //! `valuation` (C25: one owner of keep and give value), labelled by the valuation term that
@@ -28,6 +28,9 @@ fn cards_of(legal: &[GameAction]) -> Vec<(u8, &GameAction)> {
 pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     let reach = Reach::new(ctx);
     let val = Valuation::new(ctx, &reach);
+    if let Some(d) = crate::endgame::decide(ctx, legal, &val) {
+        return d;
+    }
     let can_ask = legal
         .iter()
         .any(|a| matches!(a.action_type, ActionType::Question(_) | ActionType::AnnounceTrump(_)));
@@ -37,14 +40,6 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
             Timing::Act(d) => return d,
             Timing::Cash(why) => cash = Some(why),
             Timing::Nothing => {}
-        }
-    }
-    // F10: the last tricks go to the solver over the worlds I believe in. Its moves are cards
-    // and announcements, not questions, so while a question may still activate one of our
-    // pairs (a half of mine carries activation value) the valuation decides.
-    if val.halves.is_empty() {
-        if let Some(d) = crate::endgame::decide(ctx, legal, &val) {
-            return d;
         }
     }
     let cards = cards_of(legal);
@@ -68,6 +63,9 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
 pub(crate) fn answer(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     let reach = Reach::new(ctx);
     let val = Valuation::new(ctx, &reach);
+    if let Some(d) = crate::endgame::decide(ctx, legal, &val) {
+        return d;
+    }
     let risk = |a: &GameAction| match a.action_type {
         ActionType::Answer(AnswerType::YesPair(s)) => val.at_risk[s as usize],
         _ => -1.0,

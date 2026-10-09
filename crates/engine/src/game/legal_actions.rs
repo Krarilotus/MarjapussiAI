@@ -5,7 +5,7 @@
 use crate::bits::{self, CardSet};
 use crate::game::bidding::{bid_range, is_bid};
 use crate::game::cards::{Card, Suit};
-use crate::game::gameevent::{ActionType, AnswerType, GameAction, QuestionType};
+use crate::game::gameevent::{ActionType, GameAction, QuestionType};
 use crate::game::gamestate::{GamePhase, GameState};
 use crate::game::player::HAND_SIZE;
 
@@ -214,23 +214,6 @@ fn push_answer(state: &GameState, question: QuestionType, actions: &mut Vec<Game
         action_type: ActionType::Answer(a),
         player,
     };
-    match question {
-        QuestionType::Yours => {
-            let start = actions.len();
-            for suit in hand.pair_suits() {
-                //don't allow double calling
-                if !state.trump_called.contains(&suit) {
-                    actions.push(answer(AnswerType::YesPair(suit)));
-                }
-            }
-            if actions.len() == start {
-                actions.push(answer(AnswerType::NoPair));
-            }
-        }
-        QuestionType::YourHalf(suit) => actions.push(answer(if (hand & CardSet::halves(suit)).is_empty() {
-            AnswerType::NoHalf(suit)
-        } else {
-            AnswerType::YesHalf(suit)
-        })),
-    }
+    let called = state.trump_called.iter().fold(0, |bits, suit| bits | 1 << *suit as u8);
+    actions.extend(super::rules::question_answers(hand, called, question).map(answer));
 }

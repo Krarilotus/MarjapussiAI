@@ -13,12 +13,43 @@ use engine::{
 };
 
 use crate::tt::{Key, TransTable, NO_MOVE};
+use std::time::Instant;
+
+/// Limits for a whole decision, including all candidate moves and worlds.
+/// A node cap provides deterministic bounded work; a deadline also bounds slow positions.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Limits {
+    pub deadline: Option<Instant>,
+    pub nodes: Option<u64>,
+}
+
+pub(crate) struct Budget {
+    limits: Limits,
+    start_nodes: u64,
+}
+
+impl Budget {
+    pub(crate) fn new(limits: Limits, solver: &Solver) -> Self {
+        Self {
+            limits,
+            start_nodes: solver.nodes(),
+        }
+    }
+
+    pub(crate) fn stopped(&self, solver: &Solver) -> bool {
+        self.limits
+            .nodes
+            .is_some_and(|n| solver.nodes().saturating_sub(self.start_nodes) >= n)
+            || self.limits.deadline.is_some_and(|deadline| Instant::now() >= deadline)
+    }
+}
 
 /// Default transposition table: 2^18 entries of 40 bytes (10 MB).
 pub const DEFAULT_TT_BITS: u32 = 18;
 
 /// The most `team` can still score: every card point left, the last-trick bonus, and every
-/// pair a team seat may still announce.
+/// uncalled pair whose halves remain in the team. This deliberately overestimates
+/// activation: a question can reach a partner or split pair despite lost own rights.
 #[inline]
 fn max_future(s: &FastState, team: u8) -> i32 {
     if s.is_over() {
@@ -29,10 +60,7 @@ fn max_future(s: &FastState, team: u8) -> i32 {
     for suit in SUITS {
         if s.called() >> suit as u8 & 1 == 0 {
             let pair = CardSet::halves(suit);
-            if [team, team + 2]
-                .iter()
-                .any(|&x| s.may_announce() >> x & 1 == 1 && pair.is_subset(s.hand(x)))
-            {
+            if pair.is_subset(s.hand(team) | s.hand(team + 2)) {
                 most += PAIR_POINTS[suit as usize];
             }
         }
@@ -42,8 +70,8 @@ fn max_future(s: &FastState, team: u8) -> i32 {
 
 /// The moves searched at a node, best guess first: one card per run of equivalent cards.
 struct MoveList {
-    codes: [u8; 13],
-    scores: [i32; 13],
+    codes: [u8; 18],
+    scores: [i32; 18],
     len: usize,
 }
 
@@ -57,18 +85,32 @@ impl MoveList {
     #[inline]
     fn new(s: &FastState, tt_best: u8) -> MoveList {
         let mut list = MoveList {
-            codes: [0; 13],
-            scores: [0; 13],
+            codes: [0; 18],
+            scores: [0; 18],
             len: 0,
         };
-        let announce = s.announcements();
-        for suit in 0..4u8 {
-            if announce >> suit & 1 == 1 {
-                list.push(
-                    Move::Announce(SUITS[suit as usize]).code(),
-                    10_000 + PAIR_POINTS[suit as usize],
-                );
-            }
+        for m in s.moves().filter(|m| !matches!(m, Move::Card(_))) {
+            let score = match m {
+                Move::Announce(suit) => 10_000 + PAIR_POINTS[suit as usize],
+                Move::Question(_) => {
+                    let asked = s.after(m);
+                    // With exposed hands an answer provides no information. If no answer
+                    // changes trump or scores a pair, playing directly dominates this
+                    // question: same cards and lead, with at least as many rights retained.
+                    // Keep all root questions in world evaluation; this is not an
+                    // information-set pruning rule.
+                    if !asked.moves().any(|a| {
+                        let answered = asked.after(a);
+                        answered.trump() != s.trump() || answered.called() != s.called()
+                    }) {
+                        continue;
+                    }
+                    9_000
+                }
+                Move::Answer(_) => 10_000,
+                Move::Card(_) => unreachable!(),
+            };
+            list.push(m.code(), score);
         }
         let trick = s.trick();
         let trump = s.trump();
@@ -166,17 +208,15 @@ impl Solver {
     /// The exact future points of `team` (seat % 2) from `s` under best play by both teams:
     /// `team` maximises them, the other team minimises them.
     pub fn value(&mut self, s: &FastState, team: u8) -> i32 {
-        self.set(team, false);
-        let most = self.most(s);
-        self.search(s, -1, most + 1)
+        self.solve(s, team, false, None, &Budget::new(Limits::default(), self))
+            .expect("unlimited search")
     }
 
     /// The exact number of tricks `team` still takes when it maximises its tricks and the
     /// other team minimises them.
     pub fn tricks(&mut self, s: &FastState, team: u8) -> i32 {
-        self.set(team, true);
-        let most = self.most(s);
-        self.search(s, -1, most + 1)
+        self.solve(s, team, true, None, &Budget::new(Limits::default(), self))
+            .expect("unlimited search")
     }
 
     /// Whether `team` can take at least `target` more tricks against best defence (one
@@ -185,8 +225,9 @@ impl Solver {
         if target <= 0 {
             return true;
         }
-        self.set(team, true);
-        self.search(s, target - 1, target) >= target
+        self.solve(s, team, true, Some(target), &Budget::new(Limits::default(), self))
+            .expect("unlimited search")
+            >= target
     }
 
     fn set(&mut self, team: u8, tricks: bool) {
@@ -220,8 +261,28 @@ impl Solver {
         if target <= 0 {
             return true;
         }
-        self.set(team, false);
-        self.search(s, target - 1, target) >= target
+        self.solve(s, team, false, Some(target), &Budget::new(Limits::default(), self))
+            .expect("unlimited search")
+            >= target
+    }
+
+    pub(crate) fn solve(
+        &mut self,
+        s: &FastState,
+        team: u8,
+        tricks: bool,
+        target: Option<i32>,
+        budget: &Budget,
+    ) -> Option<i32> {
+        if budget.stopped(self) {
+            return None;
+        }
+        if target.is_some_and(|t| t <= 0) {
+            return Some(0);
+        }
+        self.set(team, tricks);
+        let (alpha, beta) = target.map_or((-1, self.most(s) + 1), |target| (target - 1, target));
+        self.search(s, alpha, beta, budget)
     }
 
     /// For every legal move (in `FastState::moves` order): the points it gains at once plus
@@ -237,18 +298,28 @@ impl Solver {
     }
 
     /// Fail-soft alpha-beta on the future measure (points or tricks) of `self.team`.
-    fn search(&mut self, s: &FastState, mut alpha: i32, mut beta: i32) -> i32 {
+    fn search(&mut self, s: &FastState, mut alpha: i32, mut beta: i32, budget: &Budget) -> Option<i32> {
+        // Check a node cap exactly, and the clock once per 64 nodes. Completed child
+        // bounds remain reusable; an interrupted parent never writes an exact entry.
+        if budget
+            .limits
+            .nodes
+            .is_some_and(|n| self.nodes.saturating_sub(budget.start_nodes) >= n)
+            || self.nodes & 63 == 0 && budget.stopped(self)
+        {
+            return None;
+        }
         self.nodes += 1;
         if s.is_over() {
-            return 0;
+            return Some(0);
         }
         let team = self.team;
         let most = self.most(s);
         if most <= alpha {
-            return most;
+            return Some(most);
         }
         if beta <= 0 {
-            return 0;
+            return Some(0);
         }
         let start = s.trick().is_empty();
         let mut key = Key::default();
@@ -258,10 +329,10 @@ impl Solver {
             if let Some(e) = self.tt.probe(&key) {
                 let (lo, hi) = (e.lo as i32, e.hi as i32);
                 if lo >= beta || lo == hi {
-                    return lo;
+                    return Some(lo);
                 }
                 if hi <= alpha {
-                    return hi;
+                    return Some(hi);
                 }
                 alpha = alpha.max(lo);
                 beta = beta.min(hi);
@@ -277,7 +348,7 @@ impl Solver {
         for &code in &moves.codes[..moves.len] {
             let child = s.after(Move::from_code(code));
             let gain = self.so_far(&child) - base;
-            let v = gain + self.search(&child, alpha - gain, beta - gain);
+            let v = gain + self.search(&child, alpha - gain, beta - gain, budget)?;
             if maximizing {
                 if v > best {
                     best = v;
@@ -305,6 +376,6 @@ impl Solver {
             };
             self.tt.store(key, lo, hi, best_move);
         }
-        best
+        Some(best)
     }
 }

@@ -1,6 +1,6 @@
-//! Guard tests: the solver equals brute-force minimax on random positions (1–4 tricks left,
+//! Guard tests: the solver equals brute-force minimax on random positions (1â€“4 tricks left,
 //! trick starts and mid-trick, announcements and trump rights included), and the engine's
-//! `Game` played out by brute force (1–3 tricks left).
+//! `Game` played out by brute force (1â€“3 tricks left).
 
 use engine::get_all_cards;
 use engine::ActionType;
@@ -8,7 +8,7 @@ use engine::Game;
 use engine::GameFinishedInfo;
 use engine::GamePhase;
 use engine::{CardSet, SUITS};
-use engine::{FastState, PublicState, CARDS, TRICKS};
+use engine::{FastState, PlayPhase, PlayerTrumpPossibilities, PublicState, CARDS, TRICKS};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -50,7 +50,7 @@ fn brute_tricks(s: &FastState, team: u8) -> i32 {
 fn pair_alive(s: &FastState) -> bool {
     SUITS.iter().any(|&suit| {
         s.called() >> suit as u8 & 1 == 0
-            && (0..4).any(|x| s.may_announce() >> x & 1 == 1 && CardSet::halves(suit).is_subset(s.hand(x)))
+            && (0..4).any(|x| s.rights(x).may_announce() && CardSet::halves(suit).is_subset(s.hand(x)))
     })
 }
 
@@ -93,8 +93,19 @@ fn position(rng: &mut StdRng, left: u8, extra: u8) -> FastState {
         leader,
         trump,
         called: rng.random_range(0..16u8) & rng.random_range(0..16u8) | trump.map_or(0, |s| 1 << s as u8),
-        may_announce: rng.random_range(0..16),
-        announce_open: extra == 0 && rng.random_bool(0.7),
+        rights: std::array::from_fn(|_| {
+            [
+                PlayerTrumpPossibilities::Own,
+                PlayerTrumpPossibilities::Own,
+                PlayerTrumpPossibilities::Yours,
+                PlayerTrumpPossibilities::Ours,
+            ][rng.random_range(0..4)]
+        }),
+        phase: if extra == 0 && rng.random_bool(0.7) {
+            PlayPhase::Start
+        } else {
+            PlayPhase::Cards
+        },
         tricks_done,
         tricks: [won, tricks_done - won],
         card_points: [rng.random_range(0..60), rng.random_range(0..60)],
@@ -145,8 +156,8 @@ fn solver_equals_brute_force() {
     assert!(with_pairs >= 200, "too little announcement coverage: {with_pairs}");
 }
 
-/// Minimax over the engine's own `Game` (card plays and announcements; questions are not
-/// solver moves), scored by `GameFinishedInfo::team_points`.
+/// Minimax over all engine play actions, including every question and answer;
+/// scored by `GameFinishedInfo::team_points`.
 fn game_minimax(game: &Game, team: u8) -> i32 {
     if game.ended() {
         return GameFinishedInfo::from(game.clone()).team_points[team as usize];
@@ -154,7 +165,7 @@ fn game_minimax(game: &Game, team: u8) -> i32 {
     let legal = game.legal_actions();
     let values = legal
         .iter()
-        .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_) | ActionType::AnnounceTrump(_)))
+        .filter(|a| engine::Move::from_action(&a.action_type).is_some())
         .map(|a| game_minimax(&game.apply_action(*a).unwrap(), team));
     if game.state.player_at_turn.0 % 2 == team {
         values.max().unwrap()
@@ -266,12 +277,12 @@ fn transposition_key_separates_every_public_field() {
             };
             s = vary(&s, |p| {
                 p.leader = x;
-                p.may_announce |= 1 << x;
+                p.rights[x as usize] = PlayerTrumpPossibilities::Own;
                 p.called &= !(1 << t as u8);
                 // Called suits and rights: the start stays closed, so the root's announcements are
                 // equal in both positions and only the field itself tells them apart (the pair
                 // counts at a later trick start). The open start is the field itself.
-                p.announce_open = field == 3;
+                p.phase = if field == 3 { PlayPhase::Start } else { PlayPhase::Cards };
                 if p.trump == Some(t) {
                     p.trump = None;
                 }
@@ -282,7 +293,7 @@ fn transposition_key_separates_every_public_field() {
                 continue;
             }
             if field == 2 {
-                let b = vary(&s, |p| p.may_announce &= !(1 << x));
+                let b = vary(&s, |p| p.rights[x as usize] = PlayerTrumpPossibilities::Ours);
                 differ[2] += check_pair(&s, &b, (0, 0)) as u32;
                 continue;
             }
@@ -309,9 +320,24 @@ fn transposition_key_separates_every_public_field() {
                 let seat = (0..4u8)
                     .find(|&x| SUITS.iter().any(|&t| CardSet::halves(t).is_subset(s.hand(x))))
                     .unwrap_or(rng.random_range(0..4));
-                (vary(&s, |p| p.may_announce ^= 1 << seat), (0, 0))
+                (
+                    vary(&s, |p| {
+                        p.rights[seat as usize] =
+                            p.rights[seat as usize].after_question(engine::QuestionType::YourHalf(SUITS[0]))
+                    }),
+                    (0, 0),
+                )
             }
-            3 => (vary(&s, |p| p.announce_open = !p.announce_open), (0, 0)),
+            3 => (
+                vary(&s, |p| {
+                    p.phase = if p.phase == PlayPhase::Start {
+                        PlayPhase::Cards
+                    } else {
+                        PlayPhase::Start
+                    }
+                }),
+                (0, 0),
+            ),
             _ => (s, (0, 1)),
         };
         if check_pair(&s, &b, teams) {
@@ -336,12 +362,106 @@ fn shared_solver_is_exact_over_random_public_variants() {
             let s = vary(&base, |p| {
                 p.trump = trump;
                 p.called = rng.random_range(0..16u8) | trump.map_or(0, |t| 1 << t as u8);
-                p.may_announce = rng.random_range(0..16);
-                p.announce_open = rng.random_bool(0.5);
+                p.rights = std::array::from_fn(|_| {
+                    [
+                        PlayerTrumpPossibilities::Own,
+                        PlayerTrumpPossibilities::Own,
+                        PlayerTrumpPossibilities::Yours,
+                        PlayerTrumpPossibilities::Ours,
+                    ][rng.random_range(0..4)]
+                });
+                p.phase = if rng.random_bool(0.5) {
+                    PlayPhase::Start
+                } else {
+                    PlayPhase::Cards
+                };
             });
             let team = rng.random_range(0..2);
             assert_eq!(solver.value(&s, team), brute(&s, team), "{s:?}");
             assert_eq!(solver.tricks(&s, team), brute_tricks(&s, team), "{s:?}");
         }
+    }
+}
+
+#[test]
+fn partner_pair_requires_the_askers_pair_right_but_not_the_respondents() {
+    use engine::{Card, Suit};
+    let hands = ["e-6 g-6", "s-A s-Z", "r-K r-O", "g-A e-A"].map(|cards| {
+        cards
+            .split_whitespace()
+            .map(|s| CardSet::of(&s.parse::<Card>().unwrap()))
+            .fold(CardSet::EMPTY, |a, b| a | b)
+    });
+    let mut parts = FastState::new(hands, 0).parts();
+    parts.public.tricks_done = 7;
+    parts.public.tricks = [4, 3];
+    parts.public.phase = PlayPhase::Start;
+    parts.public.trump = Some(Suit::Bells);
+    parts.public.called = 1 << Suit::Bells as u8;
+    parts.public.rights = [PlayerTrumpPossibilities::Ours; 4];
+    parts.public.rights[0] = PlayerTrumpPossibilities::Yours;
+    let can_ask = FastState::from_parts(parts).unwrap();
+    let cannot_ask = vary(&can_ask, |p| p.rights[0] = PlayerTrumpPossibilities::Ours);
+    // Neither position permits an own announcement. Only Yours can reach the
+    // partner's whole pair, turn its cards into winners and score the 100-point pair.
+    let mut solver = Solver::with_tt_bits(8);
+    for order in [[(can_ask, 170), (cannot_ask, 0)], [(cannot_ask, 0), (can_ask, 170)]] {
+        for (s, expected) in order {
+            assert_eq!(brute(&s, 0), expected);
+            assert_eq!(
+                solver.value(&s, 0),
+                expected,
+                "all rights levels belong in the cache key"
+            );
+        }
+    }
+}
+
+#[test]
+fn split_pair_question_changes_the_last_trick_and_restores_without_rescoring() {
+    use engine::{AnswerType, Card, Move, QuestionType, Suit};
+    let hands = ["r-K", "s-A", "r-O", "g-A"].map(|s| CardSet::of(&s.parse::<Card>().unwrap()));
+    let mut solver = Solver::with_tt_bits(8);
+    for already_called in [false, true] {
+        let state = FastState::from_public(
+            PublicState {
+                trick: [0; 4],
+                trick_len: 0,
+                leader: 0,
+                trump: Some(Suit::Bells),
+                called: (1 << Suit::Bells as u8) | if already_called { 1 << Suit::Red as u8 } else { 0 },
+                rights: [PlayerTrumpPossibilities::Ours; 4],
+                phase: PlayPhase::Start,
+                tricks_done: 8,
+                tricks: [4, 4],
+                card_points: [0; 2],
+                pair_points: [0; 2],
+            },
+            hands,
+        )
+        .unwrap();
+        let red = state.after(Move::Question(QuestionType::YourHalf(Suit::Red)));
+        let green = state.after(Move::Question(QuestionType::YourHalf(Suit::Green)));
+        let value = if already_called { 49 } else { 149 };
+        for order in [[(red, value), (green, 0)], [(green, 0), (red, value)]] {
+            for (s, expected) in order {
+                assert_eq!(
+                    solver.value(&s, 0),
+                    expected,
+                    "pending question must be in the cache key"
+                );
+                assert_eq!(brute(&s, 0), expected);
+            }
+        }
+        assert_eq!(solver.value(&state, 0), value);
+        assert!(
+            solver.reaches(&state, 0, value),
+            "split pair belongs in the upper bound"
+        );
+        let answered = red.after(Move::Answer(AnswerType::YesHalf(Suit::Red)));
+        assert_eq!(answered.trump(), Some(Suit::Red));
+        assert_eq!(answered.pair_points(0), if already_called { 0 } else { 100 });
+        assert_eq!(answered.to_move(), 0);
+        assert_eq!(answered.phase(), PlayPhase::Cards);
     }
 }
