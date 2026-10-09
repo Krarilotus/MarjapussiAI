@@ -109,6 +109,16 @@ fn s12_no_pair_then_one_half_played_excludes_the_other() {
 }
 
 #[test]
+fn no_pair_answer_updates_facts_without_spending_any_players_rights() {
+    use engine::PlayerTrumpPossibilities::{Own, Yours};
+    let mut k = after_first_trick();
+    k.apply(&SeatEvent::AskPair { seat: 1 }).unwrap();
+    k.apply(&SeatEvent::NoPair { seat: 3 }).unwrap();
+    assert_eq!([0, 1, 2, 3].map(|seat| k.rights(seat)), [Own, Yours, Own, Own]);
+    assert_eq!(k.pairs(3).possible, 0);
+}
+
+#[test]
 fn s13_s15_no_half_and_only_half() {
     let mut k = after_first_trick();
     k.apply(&SeatEvent::NoHalf { seat: 3, suit: S }).unwrap();

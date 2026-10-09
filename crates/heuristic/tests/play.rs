@@ -307,8 +307,27 @@ fn p10a_holding_an_own_pair_never_asks_while_the_partner_is_unlikely_to_lead() {
 }
 
 #[test]
+fn hc13_does_not_repeat_a_known_no_pair_even_at_zero_threshold() {
+    let mut s = Scene::new(0, &["s-A", "g-8", "e-6", "e-7", "e-8", "r-6", "r-7", "g-9", "g-U"]);
+    s.auction(&[(0, None), (1, None), (2, Some(130)), (3, None)]);
+    trick(&mut s, &[(1, "s-6"), (2, "s-7"), (3, "s-8"), (0, "s-A")]);
+    s.ev(SeatEvent::AskPair { seat: 0 }).ev(SeatEvent::NoPair { seat: 2 });
+    for threshold in [0.0, heuristic::Params::default().partner_pair_min] {
+        let params = heuristic::Params {
+            partner_pair_min: threshold,
+            ..heuristic::Params::default()
+        };
+        let d = s.act_with(params, &ask_legal(&s, &[], true));
+        assert!(
+            !matches!(d.action.action_type, ActionType::Question(QuestionType::Yours)),
+            "{d:?}"
+        );
+    }
+}
+
+#[test]
 fn hc13_skips_the_half_the_partner_said_it_lacks() {
-    // My "Yours" got "no pair" (I am `Ours` now), and my Green half question got "no": of my two
+    // My "Yours" got "no pair", and my Green half question got "no" (I am `Ours` now): of my two
     // halves only the Acorns one is still worth a question.
     let mut s = pass_game(0, &["g-K", "e-K", "s-A", "g-8", "e-6", "e-7", "r-6", "r-7", "s-9"]);
     trick(&mut s, &[(1, "s-6"), (2, "s-7"), (3, "s-8"), (0, "s-A")]);

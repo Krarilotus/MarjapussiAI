@@ -13,7 +13,7 @@ information and are handled at the belief level.
 | Legal cards | `bits::play_levels(trick, trump, first_trick).allowed(hand)` | `fast`, `Game` (`legal_cards`), `cards::allowed_cards`, knowledge (`excluded_by`) |
 | Trick winner | `trick_winner(trick, trump)`, `winning_seat(leader, trick, trump)`, `takes` | `fast`, `Game` (`act_card`), knowledge |
 | Card, pair and last-trick points | tables in points (`VALUE_POINTS`, `CARD_POINTS`, `PAIR_POINTS`, `LAST_TRICK_BONUS`); rules `trick_points(trick, tricks_done)`, `trump_points(suit, already_called)` | `fast`, `Game`, `team_points`, knowledge |
-| Question rights | `PlayerTrumpPossibilities::{may_announce, may_ask_pair, after_question, after_no_pair}` | `Game` (legal actions, apply), `fast::from_game`, knowledge, heuristic |
+| Question rights | `PlayerTrumpPossibilities::{may_announce, may_ask_pair, after_question}` | `Game` (legal actions, apply), `fast::from_game`, knowledge, heuristic |
 | Bids | `NO_BID`, `BID_STEP`, `MAX_BID`, `bid_range` (generation), `is_bid` (O(1) check) | `Game` |
 | Running team points (cards, pairs, tricks) | `team_points` | `fast::from_game`, `GameFinishedInfo`, devtool |
 | Game and series scores | scoring (`game_scores`, `SeriesTally`) | `GameFinishedInfo::scores` |

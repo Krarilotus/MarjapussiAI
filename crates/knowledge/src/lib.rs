@@ -259,8 +259,6 @@ impl Knowledge {
                 self.set_trump(suit);
             }
             SeatEvent::NoPair { seat } => {
-                let asker = &mut self.rights[partner(seat) as usize];
-                *asker = asker.after_no_pair();
                 for suit in SUITS {
                     let live = CardSet::halves(suit) - self.played;
                     if !self.is_called(suit) && live.len() == 2 {

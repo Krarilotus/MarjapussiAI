@@ -14,7 +14,6 @@ fn question_rights() {
         for s in SUITS {
             assert_eq!(r.after_question(QuestionType::YourHalf(s)), Right::Ours);
         }
-        assert_eq!(r.after_no_pair(), Right::Ours);
     }
     assert_eq!(rights.map(Right::may_announce), [true, false, false]);
     assert_eq!(rights.map(Right::may_ask_pair), [true, true, false]);

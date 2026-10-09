@@ -265,7 +265,7 @@ Speed after E5: unchanged within noise (A/B vs main: ×1.86 per action incl. the
 ## E8: one owner for the public rule transitions (fix/engine-e8)
 Pure functions at the crate root (`game/rules.rs`, `bits`, `game/bidding.rs`), used by `Game` and
 `FastState`; knowledge and the agents delete their copies against them:
-`PlayerTrumpPossibilities::{may_announce, may_ask_pair, after_question, after_no_pair}`,
+`PlayerTrumpPossibilities::{may_announce, may_ask_pair, after_question}`,
 `trick_points(trick, tricks_done)`, `trump_points(suit, already_called)`,
 `winning_seat(leader, trick, trump)`, `is_bid(value, bid)`; `TRICKS` now lives next to `HAND_SIZE`.
 

@@ -26,11 +26,6 @@ impl PlayerTrumpPossibilities {
             (QuestionType::YourHalf(_), _) => PlayerTrumpPossibilities::Ours,
         }
     }
-
-    /// The asker's right after the partner answers "no pair": `Ours`.
-    pub const fn after_no_pair(self) -> Self {
-        PlayerTrumpPossibilities::Ours
-    }
 }
 
 /// Points of a finished trick (its four cards as bit indices): card points, plus

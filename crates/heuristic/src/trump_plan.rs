@@ -109,7 +109,7 @@ impl Reach {
 
     /// Whether the partner may hold a pair worth a "Yours" (P10a "may need").
     fn partner_may(&self, ctx: &Ctx) -> bool {
-        self.partner_pair >= ctx.params.partner_pair_min
+        self.partner_pair > 0.0 && self.partner_pair >= ctx.params.partner_pair_min
     }
 
     /// Live halves the partner may complete (HC-13: a known "no" is no question).

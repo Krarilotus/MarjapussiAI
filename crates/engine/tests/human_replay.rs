@@ -33,7 +33,10 @@ const SCORE_TOTALS: [i64; 2] = [34_630, 28_255];
 /// Recorded on `main` at 68c98f0 as 0x9a38_7d77_f3bc_8e2d; recomputed once on feat/engine-v2
 /// for owner decision D2: announced pairs now count in all-pass games, which changes
 /// `team_points` of one replayed game (+40). With that line reverted the old digest returns.
-const EXPECTED: u64 = 0xcb8c_f66a_3bd2_9d91;
+/// The 2026-10-09 question-rights correction admits 42 previously skipped repeated
+/// pair questions and their negative answers in 35 records. Tricks, points, scores
+/// and the two historical replay failures are unchanged. Previous: 0xcb8c_f66a_3bd2_9d91.
+const EXPECTED: u64 = 0x8718_fcb4_f218_6c9f;
 
 fn dataset() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("MARJA_GAMES") {

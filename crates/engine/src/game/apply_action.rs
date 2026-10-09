@@ -167,11 +167,7 @@ fn answer(t: Mutable, a: AnswerType) -> Option<GameCallback> {
     let state = t.state;
     *t.last_state = None;
     let callback = match a {
-        AnswerType::NoPair => {
-            let asker = state.partner_mut();
-            asker.trump = asker.trump.after_no_pair();
-            None
-        }
+        AnswerType::NoPair => None,
         AnswerType::YesPair(suit) => Some(new_trump(state, suit)),
         AnswerType::NoHalf(suit) => Some(GameCallback::NoHalf(suit)),
         AnswerType::YesHalf(suit) => {
