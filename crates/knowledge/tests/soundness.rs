@@ -155,6 +155,16 @@ fn check_facts(k: &knowledge::Knowledge, x: u8, game: &Game, seed: u64, cov: &mu
         cov.standing += 1;
         cov.standing_trump += (Some(suit) == k.trump()) as u32;
     }
+    for c in k.retaining_lead(x).iter() {
+        let suit = engine::suit_of(c);
+        assert!(k.standing(x).contains(c));
+        assert!(!(truth(mate) & CardSet::suit(suit))
+            .iter()
+            .any(|b| engine::takes(b, c, None)));
+        assert!(!k.trump().is_some_and(|t| t != suit
+            && (truth(mate) & CardSet::suit(suit)).is_empty()
+            && !(truth(mate) & CardSet::suit(t)).is_empty()));
+    }
 }
 
 /// Knowledge facts as (certain cards of others at the last trick, events checked).

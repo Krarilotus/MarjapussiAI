@@ -13,7 +13,6 @@
 //!   standing ace that wins either now or later is kept, as the future-trick value says).
 
 use engine::{CardSet, GameAction, Move, PlayPhase, QuestionType};
-use knowledge::Hands;
 use solver::{evaluate_limited, Limits, Objective, Solver};
 use std::time::{Duration, Instant};
 
@@ -39,23 +38,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
         },
         None => Objective::Points,
     };
-    let facts = k.deals().marginals();
-    let ratio: [[f64; 36]; 4] = std::array::from_fn(|y| {
-        std::array::from_fn(|c| {
-            let base = facts[y][c];
-            if y as u8 == ctx.me || base <= 0.0 {
-                1.0
-            } else {
-                ctx.mind.p_holds(y as u8, c as u8) as f64 / base
-            }
-        })
-    });
-    let belief = |hands: &Hands| -> f64 {
-        (0..4)
-            .filter(|&y| y != ctx.me as usize)
-            .map(|y| hands[y].iter().map(|c| ratio[y][c as usize]).product::<f64>())
-            .product()
-    };
+    let belief = ctx.mind.deal_weights();
     let mut slot = ctx.solver.borrow_mut();
     let solver = slot.get_or_insert_with(|| Solver::with_tt_bits(TT_BITS));
     let mut rng = Rng::new(ctx.seed);

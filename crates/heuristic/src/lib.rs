@@ -13,6 +13,7 @@ mod leads;
 mod params;
 pub mod passing;
 mod play;
+mod routes;
 mod rules;
 mod stakes;
 mod trump_plan;
@@ -83,6 +84,7 @@ pub(crate) struct Ctx<'a> {
     pub solver: &'a RefCell<Option<solver::Solver>>,
     /// Seed for `Params.sample_temperature > 0` (deterministic per seat and event count).
     pub seed: u64,
+    pub routes: RefCell<Option<routes::Routes>>,
 }
 
 impl Ctx<'_> {
@@ -261,6 +263,7 @@ impl HeuristicAgent {
             params: &self.params,
             solver: &self.solver,
             seed,
+            routes: RefCell::new(None),
         };
         let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));
         if has(|t| matches!(t, ActionType::Pass(_))) {

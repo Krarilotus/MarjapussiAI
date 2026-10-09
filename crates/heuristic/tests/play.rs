@@ -42,32 +42,9 @@ fn hc1_owner_a_gives_the_ten_before_the_king_of_a_pair() {
     assert_eq!(d.rule, RuleId::HC1);
 }
 
-/// MH (seat 2) gave VH (seat 0) the green King and `extra`, then dumped its small cards in 7
-/// tricks. At trick 8 an opponent leads e-Z; I hold g-Z and g-O; g-A is still out.
-fn owner_bc(extra: [&str; 3]) -> Scene {
-    let start: Vec<&str> = ["g-Z", "g-O", "g-K", "e-6", "e-7", "e-8"]
-        .into_iter()
-        .chain(extra)
-        .collect();
-    let mut s = Scene::new(2, &start);
-    s.auction(&[(0, Some(120)), (1, None), (2, None), (3, None)]);
-    let x: Vec<&str> = ["g-K"].into_iter().chain(extra).collect();
-    s.pass(2, 0, Some(&x));
-    s.pass(0, 2, Some(&["e-9", "e-U", "s-9", "s-U"]));
-    trick(&mut s, &[(0, "s-A"), (1, "s-Z"), (2, "s-9"), (3, "s-K")]);
-    trick(&mut s, &[(0, "r-6"), (1, "r-8"), (2, "e-6"), (3, "r-9")]);
-    trick(&mut s, &[(0, "r-7"), (1, "r-U"), (2, "e-7"), (3, "r-Z")]);
-    trick(&mut s, &[(1, "s-6"), (2, "s-U"), (3, "s-O"), (0, "s-7")]);
-    trick(&mut s, &[(1, "r-A"), (2, "e-8"), (3, "r-K"), (0, "g-7")]);
-    trick(&mut s, &[(1, "s-8"), (2, "e-9"), (3, "g-6"), (0, "g-9")]);
-    trick(&mut s, &[(1, "r-O"), (2, "e-U"), (3, "g-U"), (0, "g-8")]);
-    s.play(1, "e-Z");
-    s
-}
-
 #[test]
 fn hc1_owner_keeps_ten_and_ober_while_the_ace_is_out() {
-    // One trick earlier than owner_bc: I still hold e-U besides g-Z and g-O; I give the Unter.
+    // With three cards left: I still hold e-U besides g-Z and g-O; I give the Unter.
     let start = ["g-Z", "g-O", "g-K", "e-6", "e-7", "e-8", "r-6", "r-7", "s-7"];
     let mut s = Scene::new(2, &start);
     s.auction(&[(0, Some(120)), (1, None), (2, None), (3, None)]);
@@ -85,18 +62,6 @@ fn hc1_owner_keeps_ten_and_ober_while_the_ace_is_out() {
 }
 
 #[test]
-#[ignore = "C32, for the owner: with the n-over-k base (no fitted factors) P(partner holds e-A) is 0.25, an entry; the valuation keeps the O for the ask and gives the 10"]
-fn hc1_owner_b_without_an_entry_gives_the_ober() {
-    // The partner holds g-K and one unknown card: no sure lead for our team. The ten is the
-    // card that may still get us a trick; the O's meld counts for us only through the contract.
-    let s = owner_bc(["r-6", "r-7", "s-7"]);
-    let d = s.act(&s.card_legal());
-    assert_eq!(played(&d), Some(c("g-O")), "{d:?}");
-    // The runner-up fed the ten to the opponents: its future-trick value decided (HC-7).
-    assert_eq!(d.rule, RuleId::HC7);
-}
-
-#[test]
 fn hc1_owner_c_partner_can_take_over_so_the_ten_goes() {
     // The partner certainly holds the acorns ace (standing): it can take over and ask me.
     let s = owner_bc_with_ace();
@@ -105,7 +70,7 @@ fn hc1_owner_c_partner_can_take_over_so_the_ten_goes() {
 }
 
 fn owner_bc_with_ace() -> Scene {
-    // As owner_bc, but I passed e-A instead of s-7; the partner keeps it to the end.
+    // I passed e-A with the green King; partner keeps that entry to the end.
     let start = ["g-Z", "g-O", "g-K", "e-6", "e-7", "e-8", "r-6", "r-7", "e-A"];
     let mut s = Scene::new(2, &start);
     s.auction(&[(0, Some(120)), (1, None), (2, None), (3, None)]);
@@ -258,18 +223,72 @@ fn hc5_no_sure_lead_left_announces_the_most_valuable_of_two_pairs() {
         (d.action.action_type, d.rule),
         (ActionType::AnnounceTrump(Suit::Red), RuleId::HC5)
     );
-    assert_eq!((fact(&d, "attempts"), fact(&d, "sure_leads")), (Some(0.0), Some(0.0)));
 }
 
 #[test]
-fn hc4_cashes_a_standing_card_while_the_attempts_fit_the_sure_leads() {
+fn hc4_cashes_a_card_that_retains_its_own_next_lead() {
     // P8: my pair needs 0 attempts and I hold two aces: cash one first, announce later.
     let mut s = pass_game(0, &["r-K", "r-O", "e-A", "g-A", "s-A", "g-8", "e-6", "e-7", "s-9"]);
     trick(&mut s, &[(1, "s-6"), (2, "s-7"), (3, "s-8"), (0, "s-A")]);
     let d = s.act(&ask_legal(&s, &[Suit::Red], true));
     assert_eq!(d.rule, RuleId::HC4, "{d:?}");
     assert!([c("e-A"), c("g-A")].contains(&played(&d).unwrap()));
-    assert_eq!((fact(&d, "attempts"), fact(&d, "sure_leads")), (Some(0.0), Some(2.0)));
+    assert_eq!(fact(&d, "retains_own_lead"), Some(1.0));
+}
+
+#[test]
+fn a_forced_partner_overtake_does_not_delay_my_announcement() {
+    let mut s = Scene::new(0, &["e-A", "e-Z", "e-K", "r-K", "r-O", "s-A", "g-6", "g-7", "s-6"]);
+    s.auction(&[(0, Some(120)), (1, None), (2, None), (3, None)]);
+    s.pass(2, 0, Some(&["e-6", "r-6", "r-7", "s-7"]));
+    s.pass(0, 2, Some(&["e-A", "e-6", "r-6", "r-7"]));
+    trick(&mut s, &[(0, "s-A"), (1, "s-8"), (2, "s-9"), (3, "s-U")]);
+    let k = s.tracker.knowledge();
+    assert!(k.standing(0).contains(c("e-K")));
+    assert!(!k.retaining_lead(0).contains(c("e-K")));
+    assert_eq!(
+        s.act(&ask_legal(&s, &[Suit::Red], true)).action.action_type,
+        ActionType::AnnounceTrump(Suit::Red)
+    );
+}
+
+#[test]
+fn an_established_trump_run_leaves_time_for_uncertain_questions() {
+    let mut s = pass_game(0, &["r-A", "r-Z", "r-K", "r-O", "r-9", "r-8", "s-A", "e-6", "g-6"]);
+    trick(&mut s, &[(0, "s-A"), (1, "s-6"), (2, "s-7"), (3, "s-8")]);
+    s.ev(SeatEvent::AnnounceTrump {
+        seat: 0,
+        suit: Suit::Red,
+    });
+    trick(&mut s, &[(0, "r-A"), (1, "r-6"), (2, "r-7"), (3, "r-U")]);
+    let params = heuristic::Params {
+        partner_pair_min: 0.0,
+        ..Default::default()
+    };
+    let d = s.act_with(params, &ask_legal(&s, &[], true));
+    assert_eq!((played(&d), d.rule), (Some(c("r-Z")), RuleId::HC4));
+    assert_eq!(fact(&d, "retained_leads"), Some(5.0));
+}
+
+#[test]
+fn an_unreachable_whole_pair_does_not_block_cashing_its_suit() {
+    let mut s = pass_game(0, &["r-A", "r-Z", "r-K", "r-O", "s-A", "g-6", "e-6", "e-7", "s-9"]);
+    trick(&mut s, &[(0, "s-A"), (1, "s-6"), (2, "s-7"), (3, "s-8")]);
+    s.ev(SeatEvent::AskPair { seat: 0 });
+    s.ev(SeatEvent::NoPair { seat: 2 });
+    trick(&mut s, &[(0, "g-6"), (1, "g-7"), (2, "g-A"), (3, "g-8")]);
+    s.ev(SeatEvent::AskHalf {
+        seat: 2,
+        suit: Suit::Green,
+    });
+    s.ev(SeatEvent::NoHalf {
+        seat: 0,
+        suit: Suit::Green,
+    });
+    trick(&mut s, &[(2, "r-6"), (3, "r-7"), (0, "r-A"), (1, "r-8")]);
+    // I cannot self-announce; partner cannot ask Yours. Neither can reach my pair.
+    let d = s.act(&s.card_legal());
+    assert_eq!((played(&d), d.rule), (Some(c("r-Z")), RuleId::HL2), "{d:?}");
 }
 
 #[test]

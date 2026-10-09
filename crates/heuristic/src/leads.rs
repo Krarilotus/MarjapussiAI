@@ -26,6 +26,19 @@ fn lowest(set: CardSet) -> Option<u8> {
     set.iter().min_by_key(|&c| (CARD_POINTS[c as usize], c))
 }
 
+/// The existing standing-card order, shared by ordinary leads and announcement timing.
+pub(crate) fn cash_card(legal: CardSet, standing: CardSet) -> Option<u8> {
+    standing
+        .iter()
+        .filter(|&c| (higher(c) & standing).is_empty())
+        .max_by_key(|&c| {
+            (
+                CARD_POINTS[c as usize],
+                (legal & CardSet::suit(engine::suit_of(c))).len(),
+            )
+        })
+}
+
 /// Trumps that may still beat `c` from the opponents (tier 0).
 fn opp_trump_over(ctx: &Ctx, c: u8) -> CardSet {
     let [l, r] = opponents(ctx.me);
@@ -100,29 +113,33 @@ fn destroy_pair(ctx: &Ctx, legal: CardSet, val: &Valuation) -> Option<Lead> {
     Some((c, RuleId::HL5, vec![fact("p_opponent_pair", p)]))
 }
 
-/// HL-3 (plan suit): trump is set, the partner is certainly void in a side suit and likely
-/// holds trump: lead my lowest card there. *Why:* the next opponent must follow or overtake,
-/// and the partner trumps it (the pass-back plan HK-2: "the opponent needs to go higher when
-/// you can take the trick with trump").
+/// HL-3: lead into partner's known void only when partner can win the entry.
+/// Forced following and overruffs are resolved jointly by the engine's legal play.
 fn partner_ruffs(ctx: &Ctx, legal: CardSet, val: &Valuation) -> Option<Lead> {
     let t = ctx.k.trump()?;
     if !ctx.params.lead_plan_suit {
         return None;
     }
     let mate = partner(ctx.me);
-    let p_trump = 1.0 - ctx.mind.p_void(mate, t);
-    if p_trump < ctx.params.partner_trump_conf {
-        return None;
-    }
-    let (s, c) = SUITS
+    let (s, c, entry) = SUITS
         .into_iter()
         .filter(|&s| s != t && ctx.k.is_void(mate, s))
-        .filter_map(|s| lowest((legal & CardSet::suit(s)) - val.halves).map(|c| (s, c)))
-        .min_by_key(|&(_, c)| (CARD_POINTS[c as usize], c))?;
+        .filter_map(|s| lowest((legal & CardSet::suit(s)) - val.halves).map(|c| (s, c, ctx.entry(c))))
+        .filter(|(_, _, e)| e.lead[mate as usize] > 0.0 && e.lead[mate as usize] >= ctx.params.partner_trump_conf)
+        .max_by(|a, b| {
+            a.2.lead[mate as usize]
+                .total_cmp(&b.2.lead[mate as usize])
+                .then((CARD_POINTS[b.1 as usize], b.1).cmp(&(CARD_POINTS[a.1 as usize], a.1)))
+        })?;
     Some((
         c,
         RuleId::HL3,
-        vec![fact("suit", s as u8), fact("p_partner_trump", p_trump)],
+        vec![
+            fact("suit", s as u8),
+            fact("p_partner_entry", entry.lead[mate as usize]),
+            fact("p_both_opponents_follow", entry.both_follow),
+            fact("remaining_suit", (CardSet::suit(s) - ctx.k.played()).len()),
+        ],
     ))
 }
 

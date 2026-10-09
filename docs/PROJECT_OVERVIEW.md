@@ -38,7 +38,7 @@ dependency. `NOTICE` records its provenance.
 | `agent` | `SeatView`, actions, explanations, seat metadata | Small shared contract; does not supply the full game state to the policy. |
 | `beliefs` | Uncertain card/hand features, bidding evidence, exchange bookkeeping, lazy caches | Useful fact-constrained model; several joint probabilities remain approximations. Pass-choice intent is not currently inferred. |
 | `heuristic` | Bidding, exchange, trump/lead decisions, card valuation | Explainable prototype with local owner-informed corrections and empirically fitted choice weights. No complete coordinated game planner. |
-| `solver` | Perfect-information endgame solving and aggregation over possible deals | Sensible bounded aid. Exact solving within a deal is distinct from optimal imperfect-information play. |
+| `solver` | Known-deal play search and aggregation over possible deals | Sensible bounded aid. Exact solving within a deal is distinct from optimal imperfect-information play. |
 | `eval` | Table runner, duplicate deals, statistics, detectors | Good reusable evaluation boundary; statistical claims need tightening. |
 | `tools` | Arena, recorded-game studies, profiling and record adapters | Useful tooling; experimental scripts and provenance are spread across the outer workspace. |
 
@@ -63,7 +63,7 @@ Rust helpers; a diagram is not evidence that a complete planner already exists.
 - Raising is deliberately disabled; coordinated entries/trump/contract planning remains incomplete.
 - Fitted human-choice weights measure imitation, not necessarily good play. Their inspected fit scripts report in-sample agreement.
 - The local [question-aware endgame checkpoint](checkpoints/2026-10-09-solver-questions.md) keeps the four-card/64-world default, includes questions and answers, and adds a 45 ms search deadline. Independent review is pending; hidden-information values remain estimates.
-- Two behaviour-related tests are ignored, alongside deliberate performance tests.
+- The local [entry checkpoint](checkpoints/2026-10-09-entry-conditions.md) checks winning ruffs, the actual next leader and surviving announceable pairs against human replays. Longer game plans and strategic acceptance remain incomplete.
 - Published continuation preserves the preview documentation, assets and private-data safeguards.
 - Core-only `main` still lacks agent dependencies; use `v1-preview` as documented in the testbed.
 

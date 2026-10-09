@@ -9,6 +9,7 @@
 mod band;
 mod calibrate;
 pub mod conventions;
+mod deals;
 pub mod factors;
 mod features;
 mod mind;
@@ -19,6 +20,7 @@ mod view;
 
 pub use band::{Band, Bands};
 pub use calibrate::{scale, Calibration, Family, FAMILIES};
+pub use deals::DealWeights;
 pub use features::{Kernel, N_FEATURES, UNIFORM_STAY};
 pub use mind::{BeliefParams, Epochs, FeatureCards, Mind, PerKind, Signals};
 pub use reads::{CountDist, SeatFeatures};

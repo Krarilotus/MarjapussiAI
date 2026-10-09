@@ -5,13 +5,12 @@
 //! separates it from the runner-up.
 
 use engine::CARD_POINTS;
-use engine::{partner, suit_of, takes, CardSet};
+use engine::{partner, takes, CardSet};
 use engine::{ActionType, AnswerType, GameAction};
 
-use crate::hand::higher;
 use crate::leads;
 use crate::rules::RuleId;
-use crate::trump_plan::{self, Reach, Timing};
+use crate::trump_plan::{self, Reach};
 use crate::valuation::{Best, Choice, Term, Valuation};
 use crate::{decision, fact, Ctx, Decision, Fact};
 
@@ -26,7 +25,7 @@ fn cards_of(legal: &[GameAction]) -> Vec<(u8, &GameAction)> {
 }
 
 pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
-    let reach = Reach::new(ctx);
+    let reach = Reach::new(ctx, legal);
     let val = Valuation::new(ctx, &reach);
     if let Some(d) = crate::endgame::decide(ctx, legal, &val) {
         return d;
@@ -34,26 +33,18 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     let can_ask = legal
         .iter()
         .any(|a| matches!(a.action_type, ActionType::Question(_) | ActionType::AnnounceTrump(_)));
-    let mut cash = None;
     if can_ask {
-        match trump_plan::timing(ctx, legal, &reach, &val) {
-            Timing::Act(d) => return d,
-            Timing::Cash(why) => cash = Some(why),
-            Timing::Nothing => {}
+        if let Some(d) = trump_plan::timing(ctx, legal, &reach, &val) {
+            return d;
         }
     }
     let cards = cards_of(legal);
     let set = cards.iter().fold(CardSet::EMPTY, |a, &(c, _)| a | CardSet::single(c));
-    let (card, mut rule, mut why) = if ctx.k.trick().is_empty() {
+    let (card, rule, why) = if ctx.k.trick().is_empty() {
         lead(ctx, set, &val)
     } else {
         follow(ctx, set, &val)
     };
-    // HC-4: the standing card was cashed because the attempts still fit the sure leads (P8).
-    if let (Some(plan_why), RuleId::HL2) = (cash, rule) {
-        rule = RuleId::HC4;
-        why.extend(plan_why);
-    }
     let action = cards.iter().find(|&&(c, _)| c == card).map_or(&legal[0], |&(_, a)| a);
     decision(action, rule, why)
 }
@@ -61,7 +52,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
 /// HC-6: answer "Yours" with the pair whose meld is most at risk if not named now (its worth
 /// × P(I don't activate it later myself)); the other stays mine to announce.
 pub(crate) fn answer(ctx: &Ctx, legal: &[GameAction]) -> Decision {
-    let reach = Reach::new(ctx);
+    let reach = Reach::new(ctx, legal);
     let val = Valuation::new(ctx, &reach);
     if let Some(d) = crate::endgame::decide(ctx, legal, &val) {
         return d;
@@ -120,11 +111,7 @@ fn lead(ctx: &Ctx, legal: CardSet, val: &Valuation) -> (u8, RuleId, Vec<Fact>) {
     } else {
         CardSet::EMPTY
     };
-    if let Some(c) = stand
-        .iter()
-        .filter(|&c| (higher(c) & stand).is_empty())
-        .max_by_key(|&c| (CARD_POINTS[c as usize], (legal & CardSet::suit(suit_of(c))).len()))
-    {
+    if let Some(c) = leads::cash_card(legal, stand) {
         return (c, RuleId::HL2, vec![fact("points", CARD_POINTS[c as usize])]);
     }
     if let Some(l) = leads::after_standing(ctx, legal, val) {

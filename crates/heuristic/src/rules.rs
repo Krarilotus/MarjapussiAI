@@ -89,9 +89,9 @@ rules! {
 
     // Common-sense invariants (§6.0)
     HC1 "HC-1" Play 0 1 "[D]" "keep the halves of a reachable pair: meld × P(team holds it) × P(activation)";
-    HC2 "HC-2" Play 1 1 "[D]" "announce or ask now: the attempts needed reach my sure leads";
+    HC2 "HC-2" Play 1 1 "[D]" "announce or ask now unless enough own leads remain for the pending questions";
     HC3 "HC-3" Play 2 3 "[D]" "team activation-order plan";
-    HC4 "HC-4" Play 3 1 "[D]" "cash a standing side card first while the attempts needed stay below my sure leads";
+    HC4 "HC-4" Play 3 1 "[D]" "cash a legal side card that guarantees my own next lead";
     HC5 "HC-5" Play 4 1 "[D]" "several pairs: announce the most valuable first (v1 stand-in for the one most at risk)";
     HC6 "HC-6" Play 5 1 "[D]" "answering Yours with several pairs: name the one whose meld is most at risk (worth × P(not activated later))";
     HC7 "HC-7" Play 6 1 "[D]" "don't put an A or 10 into a trick the opponents win, unless forced (the future-trick value)";
@@ -107,7 +107,7 @@ rules! {
     // Leading (§7.1)
     HL1 "HL-1" Play 20 1 "[O]" "trick 1: schnippeln when the partner certainly holds the suit's ace";
     HL2 "HL-2" Play 21 1 "[O]" "lead a side-suit standing card that is no pair half, highest first";
-    HL3 "HL-3" Play 22 1 "[O]" "lead a side suit the partner is certainly void in, so it trumps";
+    HL3 "HL-3" Play 22 1 "[O]" "lead into partner's known void when a winning ruff entry is likely";
     HL4 "HL-4" Play 23 1 "[RV]" "lead trump only with a reason: the top trump to draw theirs";
     HL5 "HL-5" Play 24 1 "[O]" "destroy an opponent pair: lead A or 10 of its likely suit";
     HL6 "HL-6" Play 25 1 "[O]" "two cards left: keep the top trump for the last trick";

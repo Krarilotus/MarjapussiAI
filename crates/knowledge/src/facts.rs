@@ -157,6 +157,27 @@ impl Knowledge {
         out
     }
 
+    /// Leads that certainly retain this particular seat's lead. Unlike `standing`,
+    /// partner must not be able to overtake or ruff the card either.
+    pub fn retaining_lead(&self, seat: Seat) -> CardSet {
+        let mate = partner(seat);
+        self.standing(seat)
+            .iter()
+            .filter(|&c| {
+                let suit = suit_of(c);
+                let over = (self.may_hold(mate) & CardSet::suit(suit))
+                    .iter()
+                    .any(|b| takes(b, c, None));
+                let ruff = self.trump.is_some_and(|t| {
+                    t != suit
+                        && self.count_bounds(mate, suit).0 == 0
+                        && !(self.may_hold(mate) & CardSet::suit(t)).is_empty()
+                });
+                !over && !ruff
+            })
+            .fold(CardSet::EMPTY, |set, c| set | CardSet::single(c))
+    }
+
     /// K2: the seat's own pairs, certain and still meldable (uncalled, both halves live).
     pub fn pairs(&self, seat: Seat) -> Pairs {
         let mut p = Pairs::default();

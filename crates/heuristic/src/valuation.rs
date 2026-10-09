@@ -72,8 +72,8 @@ pub(crate) struct Valuation {
     /// passed it, K5): plan suits for me too, not led before the announcement, since the
     /// partner would have to follow with a half (F10, owner #25 item 7).
     pub protect: CardSet,
-    /// Per suit: what one more lead adds to that pair's activation value (an announcement or a
-    /// question it enables), as long as I still hold my half.
+    /// Per suit: value gained by activating it at the next opening, conditional
+    /// on the query establishing that the pair survives and can be activated.
     lead_gain: [f32; 4],
     /// Per suit of my own uncalled pair: the meld value lost if it is not named now (HC-6):
     /// its worth × P(it is not activated later).
@@ -133,17 +133,13 @@ impl Valuation {
         let before_last = ((n - 2.0) / (n - 1.0).max(1.0)).max(0.0);
         let leads = (hand.iter().map(|c| v.p_win[c as usize]).sum::<f32>() + reach.p_partner_lead) * before_last;
         let mate = ctx.mind.features(partner(me));
+        let mut future_lead = 0.0f32;
         for s in SUITS.into_iter().filter(|&s| !k.is_called(s)) {
-            // The believed pair is 1 where the facts decide.
-            if mate.pair[s as usize] >= 1.0 {
-                v.protect |= hand & CardSet::suit(s);
-                v.plan_cards |= hand & CardSet::suit(s);
-            }
             let mine = hand & CardSet::halves(s);
             let p_team = match mine.len() {
                 2 => 1.0,
                 1 => reach.halves.iter().find(|h| h.0 == s).map_or(0.0, |h| h.1),
-                _ => 0.0,
+                _ => mate.pair[s as usize],
             };
             if p_team <= 0.0 {
                 continue;
@@ -153,9 +149,18 @@ impl Valuation {
             for c in mine.iter() {
                 v.pair[c as usize] = worth * p_act;
             }
-            v.halves |= mine;
-            v.plan_cards |= hand & CardSet::suit(s);
-            v.lead_gain[s as usize] = worth * (reach.p_activate(ctx, s, leads + 1.0) - p_act);
+            if worth * p_act > 0.0 {
+                v.halves |= mine;
+                if !mine.is_empty() || mate.pair[s as usize] >= 1.0 {
+                    v.plan_cards |= hand & CardSet::suit(s);
+                }
+                if mate.pair[s as usize] >= 1.0 {
+                    v.protect |= hand & CardSet::suit(s);
+                }
+            }
+            // The joint query includes counterpart ownership exactly once.
+            v.lead_gain[s as usize] = meld(s) * (1.0 - p_act);
+            future_lead = future_lead.max(worth * (reach.p_activate(ctx, s, leads + 1.0) - p_act));
             if mine.len() == 2 {
                 v.at_risk[s as usize] = worth * (1.0 - p_act);
             }
@@ -166,7 +171,7 @@ impl Valuation {
         }
         // A trick won is worth its other three cards and, unless it is the last one, the lead
         // it brings (`before_last`: the share of my later tricks that are not the last).
-        let lead = before_last * v.lead_gain.iter().sum::<f32>();
+        let lead = before_last * future_lead;
         for c in hand.iter() {
             let t = (pts(c) + 3.0 * avg_card) as f64;
             let (take, give) = stakes.trick(t, t);
@@ -196,15 +201,18 @@ impl Valuation {
         v
     }
 
-    /// What winning the lead now is worth if I play `c`: the pairs it can still activate (not
-    /// the one whose half `c` is).
-    pub fn lead_value(&self, c: u8) -> f32 {
-        let own = if self.halves.contains(c) {
-            self.lead_gain[suit_of(c) as usize]
-        } else {
-            0.0
-        };
-        self.lead_gain.iter().sum::<f32>() - own
+    /// One next opening can activate at most one pair. Each suit has its own
+    /// continuation; choosing the best expected route does not add incompatible plans.
+    pub fn lead_value(&self, ctx: &Ctx, c: u8) -> f32 {
+        if self.lead_gain.iter().all(|&v| v == 0.0) {
+            return 0.0;
+        }
+        let entry = ctx.entry(c);
+        self.lead_gain
+            .iter()
+            .zip(entry.activation)
+            .map(|(&v, p)| v * p)
+            .fold(0.0, f32::max)
     }
 }
 
@@ -301,7 +309,7 @@ impl Choice {
         [
             (
                 Term::Trick,
-                p * take as f32 + (1.0 - p) * give as f32 + p * v.lead_value(c),
+                p * take as f32 + (1.0 - p) * give as f32 + v.lead_value(ctx, c),
             ),
             (Term::Future, -v.future[c as usize]),
             (Term::Pair, -v.pair[c as usize]),

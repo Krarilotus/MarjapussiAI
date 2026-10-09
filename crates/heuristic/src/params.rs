@@ -71,7 +71,7 @@ params! {
     /// HL-5: lead A or 10 into an opponent's likely pair; from this P(pair).
     lead_destroy_pair: bool = true,
     destroy_pair_conf: f32 = 0.6,
-    /// HL-3: lead a side suit the partner is certainly void in, if P(partner holds trump) ≥ conf.
+    /// HL-3: lead into partner's known void when its estimated winning entry meets conf.
     lead_plan_suit: bool = true,
     partner_trump_conf: f32 = 0.8,
     /// HL-4: lead the top trump to draw the opponents' trumps.
