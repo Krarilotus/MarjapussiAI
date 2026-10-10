@@ -18,9 +18,11 @@ use engine::{
 };
 use observation::{Seat, SeatEvent};
 
+mod claim;
 mod facts;
 mod sample;
 
+pub use claim::remaining_claim;
 pub use facts::{
     own_standing_of, standing_potential_of, Pairs, Passed, TeamPairs, BLANK_TEN_FACTOR, STOPPER_CONFIDENCE,
     STOPPER_MAX_HIGHER,

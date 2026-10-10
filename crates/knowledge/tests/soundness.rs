@@ -12,6 +12,8 @@ use rand::{Rng, SeedableRng};
 
 const GAMES: u64 = 3_000;
 
+mod claim_oracle;
+
 fn new_game(rng: &mut StdRng) -> Game {
     let mut deck = get_all_cards();
     deck.shuffle(rng);
@@ -44,6 +46,7 @@ struct Coverage {
     standing_trump: u32,
     partner_entries: u32,
     dealt_certain: u32,
+    claims: u32,
 }
 
 /// The fact queries K1–K5 (C26) against the true hands and the true dealt hands.
@@ -177,6 +180,15 @@ fn check_facts(k: &knowledge::Knowledge, x: u8, game: &Game, seed: u64, cov: &mu
     // Verify with the engine on the true deal, independently of the certificate.
     if x == k.me() && k.trick().is_empty() {
         if let Some(state) = engine::FastState::from_game(game).filter(|s| s.to_move() == x) {
+            // A fixed development prefix bounds the extra oracle work. Small
+            // ends enumerate every legal follower choice; larger ones replay
+            // four deterministic choices, without searching an AI policy.
+            if seed < 64 {
+                if let Some(plan) = knowledge::remaining_claim(k, &game.legal_actions()) {
+                    claim_oracle::check(state, &plan, state.hand(x).len() <= 3);
+                    cov.claims += 1;
+                }
+            }
             for lead in state.moves().filter_map(|m| match m {
                 engine::Move::Card(c) => Some(c),
                 _ => None,
@@ -308,4 +320,9 @@ fn knowledge_is_sound_in_random_games() {
     );
     assert!(cov.standing_trump >= 50 && cov.dealt_certain >= 50);
     assert!(cov.partner_entries >= 50);
+    assert!(cov.claims > 0, "the claim oracle must exercise accepted certificates");
+    eprintln!(
+        "{} remaining-trick certificates replayed through the engine",
+        cov.claims
+    );
 }

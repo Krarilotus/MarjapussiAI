@@ -125,6 +125,11 @@ fn hidden_cards_do_not_change_what_a_seat_knows() {
             known,
             "seed {seed}: seat {seat} knows hidden cards"
         );
+        assert_eq!(
+            knowledge::remaining_claim(&known, &game.legal_actions()),
+            knowledge::remaining_claim(&knowledge_of(&other, seat), &other.legal_actions()),
+            "seed {seed}: seat {seat} claim plan reveals hidden cards"
+        );
         swaps += 1;
     }
     assert!(swaps >= REQUIRED_SWAPS, "only {swaps} valid swaps");
