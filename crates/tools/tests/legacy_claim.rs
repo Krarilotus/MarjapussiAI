@@ -233,6 +233,20 @@ fn malformed_claims_are_rejected() {
 }
 
 #[test]
+fn claim_can_open_play_without_raising() {
+    let mut archive = fixture();
+    let opening = archive["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|a| a == "0,TRCK,g-A")
+        .unwrap();
+    archive["claim"]["from"] = json!(opening);
+    let replayed = legacy::replay(&archive, |_| {}).unwrap();
+    assert_eq!(replayed.skipped["PRMO,0 (no raise, a log marker)"], 1);
+}
+
+#[test]
 fn claim_can_start_with_a_card_after_a_manual_announcement() {
     let mut archive = fixture();
     let from = archive["claim"]["from"].as_u64().unwrap() as usize;

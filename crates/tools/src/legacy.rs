@@ -289,7 +289,10 @@ fn replay_inner(rec: &Value, mut on_step: impl FnMut(&Step)) -> Result<Replayed,
             if !claim_started {
                 if table.game.state.player_at_turn.0 != by
                     || !table.view(by).knowledge.trick().is_empty()
-                    || !matches!(table.game.state.phase, GamePhase::StartTrick | GamePhase::Trick)
+                    || !matches!(
+                        table.game.state.phase,
+                        GamePhase::Raising | GamePhase::StartTrick | GamePhase::Trick
+                    )
                 {
                     return Err("claim: must start on the claimant's empty-trick turn".into());
                 }

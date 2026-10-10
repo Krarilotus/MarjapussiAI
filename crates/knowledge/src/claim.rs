@@ -19,6 +19,7 @@ struct Proof<'a> {
     k: &'a Knowledge,
     legal: &'a [GameAction],
     hand: CardSet,
+    standing: CardSet,
     required: u8,
     bounds: [[(u8, u8); 4]; 4],
     failed: HashSet<State>,
@@ -29,9 +30,9 @@ struct Proof<'a> {
 /// The caller supplies the engine's current legal actions and gates live human
 /// ownership. This function requires an empty logical trick and an exact own
 /// hand, and accepts only card-play/start-trick actions (ignoring undo requests).
-/// It preserves every own uncalled pair announceable with the current rights,
-/// and refuses possibly reachable partner/split pairs rather than forfeiting
-/// their points. Other seats never get a declaration window in the certificate.
+/// It collects every own uncalled pair announceable with the current rights.
+/// Partner/split pairs are not part of the claim. Other seats never get a
+/// declaration window in the certificate.
 ///
 /// No opponent cards are invented. Suit lower bounds lose at most one card per
 /// completed trick; each lead of a suit exhausts one card of that suit if held.
@@ -68,13 +69,10 @@ pub fn remaining_claim(k: &Knowledge, legal: &[GameAction]) -> Option<Vec<GameAc
             _ => return None,
         }
     }
-    if cards.is_empty() || !cards.is_subset(hand) || !(hand - own_standing_of(hand | k.played())).is_empty() {
+    if cards.is_empty() || !cards.is_subset(hand) {
         return None;
     }
     let pairs = k.team_pairs(me);
-    if pairs.ours.possible != 0 || k.rights(me).may_ask_pair() && pairs.yours.possible != 0 {
-        return None;
-    }
     let called = SUITS
         .into_iter()
         .filter(|&s| k.is_called(s))
@@ -88,6 +86,7 @@ pub fn remaining_claim(k: &Knowledge, legal: &[GameAction]) -> Option<Vec<GameAc
         k,
         legal,
         hand,
+        standing: own_standing_of(hand | k.played()),
         required,
         bounds: std::array::from_fn(|seat| std::array::from_fn(|s| k.count_bounds(seat as u8, SUITS[s]))),
         failed: HashSet::new(),
@@ -152,6 +151,17 @@ impl Proof<'_> {
             if !allowed.contains(card)
                 || i == 0 && !self.legal.contains(&action)
                 || pending & (1 << suit as u8) != 0 && CardSet::HALVES.contains(card)
+            {
+                continue;
+            }
+            // A lower card is established once every other seat must have run
+            // out of this suit. Each preceding lead forced one card if held;
+            // discards can only make exhaustion earlier.
+            let drawn = (removed & CardSet::suit(suit)).len();
+            if !self.standing.contains(card)
+                && (0..4)
+                    .filter(|&seat| seat != self.k.me())
+                    .any(|seat| self.bounds[seat as usize][suit as usize].1 as u32 > drawn)
             {
                 continue;
             }

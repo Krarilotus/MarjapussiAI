@@ -130,7 +130,7 @@ fn cards_phase_can_wait_for_the_next_declaration_window() {
 }
 
 #[test]
-fn possible_partner_pairs_and_split_pairs_preserve_points() {
+fn claim_collects_own_pairs_without_requiring_partner_or_split_pairs() {
     let (mut k, state) = scene(["g-A g-Z", "r-6 r-7", "e-K e-O", "s-6 s-7"], None, true);
     // Neither pair half's owner is known, but partner can jointly hold both.
     let hidden = state.in_hands() - k.certain(0);
@@ -140,17 +140,9 @@ fn possible_partner_pairs_and_split_pairs_preserve_points() {
     }
     assert_eq!(k.team_pairs(0).yours.certain, 0);
     assert_ne!(k.team_pairs(0).yours.possible, 0);
-    assert!(remaining_claim(&k, &actions(state)).is_none());
-    k.rights[0] = PlayerTrumpPossibilities::Ours;
-    let state = FastState::from_public(k.public_state(0, PlayPhase::Start), state.hands()).unwrap();
     certified(&k, state);
-    let (mut k, state) = scene(["g-A e-K", "r-6 r-7", "e-O s-6", "s-7 s-8"], None, true);
-    k.rights[0] = PlayerTrumpPossibilities::Ours;
-    let state = FastState::from_public(k.public_state(0, PlayPhase::Start), state.hands()).unwrap();
-    assert!(
-        remaining_claim(&k, &actions(state)).is_none(),
-        "half questions survive spent rights"
-    );
+    let (k, state) = scene(["g-A e-K", "r-6 r-7", "e-O s-6", "s-7 s-8"], None, true);
+    certified(&k, state);
 }
 
 #[test]
@@ -214,6 +206,51 @@ fn rejects_wrong_actor_answers_nonplay_and_inexact_or_nonempty_hands() {
     changed.trick_len = 1;
     assert!(remaining_claim(&changed, &legal).is_none());
     assert!(remaining_claim(&Knowledge::public(), &legal).is_none());
+}
+
+#[test]
+fn top_trumps_establish_a_lower_card_only_after_every_other_hand_is_exhausted() {
+    let (mut k, state) = scene(
+        ["r-A r-Z r-6", "r-K r-O g-6", "g-7 g-8 g-9", "s-6 s-7 s-8"],
+        Some(Suit::Red),
+        true,
+    );
+    // No opponent allocation is exposed to the proof. Only the actual set of
+    // cards still in play is known, so either missing trump may be in any hand.
+    let hidden = state.in_hands() - k.certain(0);
+    for seat in 1..4 {
+        k.certain[seat] = CardSet::EMPTY;
+        k.possible[seat] = hidden;
+    }
+    certified(&k, state); // Oracle explores every legal reply, including K/O held together.
+
+    let (k, state) = scene(
+        ["r-A r-Z r-6", "r-K r-O r-U", "g-7 g-8 g-9", "s-6 s-7 s-8"],
+        Some(Suit::Red),
+        true,
+    );
+    assert!(
+        remaining_claim(&k, &actions(state)).is_none(),
+        "one higher trump survives two draws"
+    );
+}
+
+#[test]
+fn long_suit_can_be_established_after_side_winners_and_own_announcement() {
+    let (k, state) = scene(
+        [
+            "r-A s-A s-Z s-K s-O s-9 s-6 g-A g-Z",
+            "s-U s-8 s-7 e-6 e-7 e-8 g-K r-6 r-7",
+            "e-K e-Z e-A e-9 e-U g-6 g-7 r-8 r-9",
+            "e-O g-O g-U g-8 g-9 r-U r-O r-K r-Z",
+        ],
+        None,
+        false,
+    );
+    let plan = certified(&k, state);
+    assert!(plan
+        .iter()
+        .any(|a| a.action_type == ActionType::AnnounceTrump(Suit::Bells)));
 }
 
 #[test]
