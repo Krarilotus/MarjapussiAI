@@ -1,5 +1,5 @@
 //! KB batch 1 (`findings/kb/concepts.md`): one position per bidding rule (B-tell, B-over140,
-//! B-block, B-quiet), the `bluffing(y)` reading, and raising off until batch 2. Seat 0 opens.
+//! B-block, B-quiet) and the `bluffing(y)` reading. Seat 0 opens.
 
 mod common;
 
@@ -237,20 +237,6 @@ fn bluffing_an_ace_step_nobody_can_hold() {
     let mut t = Scene::new(0, &["g-A", "e-A", "s-A", "r-A", "g-6", "e-6", "s-6", "r-6", "g-7"]);
     t.auction(&[(0, None), (1, Some(125))]);
     assert!(!HeuristicAgent::new(Params::default()).mind(&t.view()).bluffing(1));
-}
-
-#[test]
-fn raising_is_off_until_batch_2() {
-    // VH (seat 0) after the exchange: it plays a card, it does not raise.
-    let start = ["r-K", "r-O", "r-A", "r-Z", "g-A", "g-6", "e-6", "s-6", "s-7"];
-    let mut s = Scene::new(0, &start);
-    s.auction(&[(0, Some(120)), (1, None), (2, None), (3, None)]);
-    s.pass(2, 0, Some(&["e-A", "s-A", "g-Z", "e-Z"]));
-    s.pass(0, 2, Some(&["g-6", "e-6", "s-6", "s-7"]));
-    let mut legal = s.bid_legal();
-    legal.remove(0);
-    legal.extend(s.card_legal());
-    assert_eq!(bid_of(&s.act(&legal)), None);
 }
 
 #[test]

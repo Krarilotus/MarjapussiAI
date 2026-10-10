@@ -157,8 +157,9 @@ Require the scenario suite, fixed-size strength evidence and an agreed measured
 latency/resource budget; the testbed's F7 worker/revision work remains necessary
 for responsiveness. These gates establish more than matching human choices.
 
-Raising remains disabled until its estimates earn a separate review. A playable
-v1 can initially make conservative bids. Full-game search, learned policies and
+Pre-play raising uses a narrow certified own-card route and one reachable own
+pair, with stateless follow-through; sampled estimates do not justify a raise.
+This slice has no series utility model. Full-game search, learned policies and
 probabilistic pass-intent reading are not prerequisites for the first coordinated
 planning slice. Once a replacement is accepted, keep a baseline checkpoint for
 comparison instead of retaining deprecated production paths.

@@ -14,6 +14,7 @@ mod params;
 pub mod passing;
 mod planning;
 mod play;
+mod raising;
 mod routes;
 mod rules;
 mod stakes;
@@ -270,15 +271,17 @@ impl HeuristicAgent {
         if has(|t| matches!(t, ActionType::Pass(_))) {
             return passing::decide(&ctx, &legal);
         }
+        if let Some(d) = raising::follow(&ctx, &legal) {
+            return d;
+        }
         if has(|t| matches!(t, ActionType::NewBid(_))) {
             if has(|t| matches!(t, ActionType::CardPlayed(_))) {
-                // Raising (HZ) is off until KB batch 2: play the first card.
                 let cards: Vec<GameAction> = legal
                     .iter()
                     .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
                     .cloned()
                     .collect();
-                return play::decide(&ctx, &cards);
+                return raising::decide(&ctx, &legal, &cards);
             }
             return bidding::decide(&ctx, &legal);
         }
