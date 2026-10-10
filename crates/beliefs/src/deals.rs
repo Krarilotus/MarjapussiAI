@@ -1,35 +1,93 @@
-//! Importance weights over fact-consistent deals, shared by short and endgame search.
+//! Joint signal likelihoods over fact-consistent deals, shared by planning and search.
 
-use knowledge::{Belief, Hands};
+use std::cell::RefCell;
 
-use crate::Mind;
+use knowledge::{Belief, Hands, Passed};
 
-/// Product of believed/factual card marginals. This is an approximate likelihood,
-/// not a joint posterior; the deal space still enforces all hard constraints.
-pub struct DealWeights([[f64; 36]; 4]);
+use crate::conventions::HandClass;
+use crate::factors::Factors;
+use crate::features::{ExchangeTerms, Kernel, Likelihood};
+use crate::{Mind, Signals};
+
+/// The feature model's dealt-hand likelihood, not a product of posterior card
+/// marginals. A pair signal constrains a combination of cards, not two independent
+/// cards. The deal space supplies the hard constraints and uniform prior.
+///
+/// Hidden exchanges retain the feature model's exchange-kernel approximation.
+/// Optional per-card signal factors multiply that joint likelihood once. Marginal
+/// calibration is a reporting transform, not an additional source of evidence.
+pub struct DealWeights {
+    likelihoods: [Likelihood; 4],
+    certain: Hands,
+    dealt: Hands,
+    played: Hands,
+    hidden_exchange: Option<[usize; 2]>,
+    kernel: Kernel,
+    exchange: RefCell<ExchangeTerms>,
+    factors: [[f32; 36]; 4],
+}
 
 impl Mind {
     pub fn deal_weights(&self) -> DealWeights {
-        let facts = self.knowledge().deals().marginals();
-        DealWeights(std::array::from_fn(|y| {
-            std::array::from_fn(|c| {
-                let base = facts[y][c];
-                if y as u8 == self.seat() || base <= 0.0 {
-                    1.0
-                } else {
-                    self.p_holds(y as u8, c as u8) as f64 / base
-                }
-            })
-        }))
+        self.signals();
+        let k = self.knowledge();
+        let likelihoods = self.cache.borrow().signals.as_ref().expect("computed above").2.clone();
+        let hidden_exchange = k.first_passer().and_then(|first| {
+            let second = engine::partner(first);
+            (k.given(first) == Passed::Hidden || k.received(first) == Passed::Hidden)
+                .then_some([first as usize, second as usize])
+        });
+        let kernel = match (self.params.signals, k.first_passer()) {
+            (Signals::Full, Some(first)) => self.params.kernel.of(self.kinds[first as usize]),
+            _ => Kernel::UNIFORM,
+        };
+        let factors = match self.params.signals {
+            Signals::Full => Factors::table(
+                &self.params.factors,
+                k,
+                self.kinds,
+                self.params.conventions.convention_floor,
+            ),
+            Signals::BaseOnly => [[1.0; 36]; 4],
+        };
+        DealWeights {
+            likelihoods,
+            certain: std::array::from_fn(|s| k.certain(s as u8)),
+            dealt: std::array::from_fn(|s| k.dealt_certain(s as u8)),
+            played: std::array::from_fn(|s| k.played_by(s as u8)),
+            hidden_exchange,
+            kernel,
+            exchange: RefCell::new(ExchangeTerms::default()),
+            factors,
+        }
     }
 }
 
 impl Belief for DealWeights {
     fn weight(&self, hands: &Hands) -> f64 {
-        hands
-            .iter()
-            .enumerate()
-            .map(|(y, h)| h.iter().map(|c| self.0[y][c as usize]).product::<f64>())
-            .product()
+        let mut weight = 1.0;
+        for (seat, hand) in hands.iter().enumerate() {
+            if !self.hidden_exchange.is_some_and(|pair| pair.contains(&seat)) {
+                if let Some(lik) = &self.likelihoods[seat] {
+                    // Known transfers and plays already map certain cards back
+                    // to their dealt owner. Only still-unknown cards are added;
+                    // the current hand class would read the wrong hand.
+                    let dealt = self.dealt[seat] | (*hand - self.certain[seat]);
+                    weight *= lik[HandClass::of(dealt).index()] as f64;
+                }
+            }
+            weight *= hand
+                .iter()
+                .map(|c| self.factors[seat][c as usize] as f64)
+                .product::<f64>();
+        }
+        if let Some(pair) = self.hidden_exchange {
+            let lik = pair.map(|s| self.likelihoods[s].as_deref());
+            if lik.iter().any(Option::is_some) {
+                let held = pair.map(|s| hands[s] | self.played[s]);
+                weight *= self.exchange.borrow_mut().likelihood(held, lik, self.kernel);
+            }
+        }
+        weight
     }
 }

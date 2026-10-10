@@ -130,6 +130,82 @@ These edges are the catalogue's batch-3 proposal, represented by dashed boxes an
 
 The graph is evaluated for one information state at a time. `entries`, trump activation and trick prospects constrain one another; candidate plans need evaluation under an assumed trump/lead sequence rather than pretending every value can be computed independently. A new observation starts the next evaluation. Similarly, pass reading must use a model for the other seat's possible view, never its actual hidden hand.
 
+### Conditional continuations and contract value
+
+The next planning slice compares legal continuations through this chain:
+
+```text
+candidate exchange
+  -> both resulting hands and each seat's visible exchange information
+  -> suit lengths, voids and surviving halves
+  -> legal trick, including forced following and overtaking
+  -> winning seat and remaining cards
+  -> legal announcement/question/answer and remaining rights
+  -> changed trump, later entries and opposing counterplay
+  -> captured card points, activated pair points and last trick
+  -> contract score
+```
+
+This is a state-transition dependency, rather than a sum of independent bonuses.
+Returning a card in suit s makes partner non-void in s until it is played. A ruff
+plan must start from that resulting hand, not from the inferred pre-return void.
+Leading low to partner's Ace and leading a side suit for partner to trump are
+different entry mechanisms. Both must check the legal actions of the opponents
+and the actual next leader. An entry that requires trump cannot also justify
+the first opportunity to establish that trump.
+
+Each continuation uses one joint holding hypothesis throughout its transitions.
+For a sequence E1, E2, ..., its probability is conditional:
+`P(E1 | I, action) * P(E2 | I, action, E1) * ...`.
+In sampled play, retain the same weighted deals and count the deals in which the
+whole sequence succeeds. Do not multiply marginal pair, void and entry reads:
+they depend on the same cards. Opposing suit exhaustion and higher trumps must
+be considered jointly, including cards consumed by earlier tricks.
+
+`beliefs::Mind::deal_weights` supplies the joint auction likelihood used by the
+feature model. The hidden-exchange model remains approximate, and pass-choice
+intent still needs a model of the giver's available information. A high-level
+signal interpretation must retain alternatives: a big-pair signal plus our Red
+half excludes partner's complete Red pair, but imperfect signalling leaves some
+non-pair mass; a small-pair/halves signal can mean either small pair or several
+halves. How much a late bid supports each interpretation requires a model of the
+speaker's affordable contract and preceding team signals, rather than a fixed
+penalty for Green at a particular bid.
+
+The shared outcome should expose a distribution of final team points and engine
+scores, with activated pair values, entry outcomes, contract success and failure
+branches available for explanations. Red control includes the reachable
+100-point announcement; the same shape in Green includes 40. Red plus Bells plus
+one captured Ace contributes 191 only on a continuation that activates both
+pairs and captures that Ace. Held pairs alone establish neither that result nor
+a guaranteed 190-point bid.
+
+`heuristic::planning` owns continuation comparison; `engine` owns every legal
+transition and terminal score; `beliefs` owns uncertainty; `knowledge` owns hard
+constraints. Return selection, announcement timing, bidding and raising should
+consume that shared result. Candidate comparisons include cashing a standing run,
+asking partner first, announcing first, alternative returns, taking the contract
+and letting the current bidder play. Bid signalling remains an available purpose
+of a bid, including between partners after the opponents pass.
+
+Guaranteed raising keeps its separate certificate. Estimated raising uses the
+forecast's success/failure distribution and actual contract scoring, not its mean
+points rounded down or the minimum of a small sample labelled guaranteed. After
+new observations, recompute affected routes and discard plans whose required
+cards, lead or rights have disappeared. Each simulated actor receives its own
+view; choosing a different root action after inspecting each hidden deal is not
+a legal imperfect-information decision.
+
+Acceptance scenarios cover a returned card cancelling a planned void, forced
+partner overtaking, opponent overruffs, a partner Ace entry before trump, two
+successive own standing cards, reciprocal pair questions, a negative answer,
+consumed halves, spent announcement rights and a later opponent trump change.
+The same plan must explain both its useful line and its failure branches. Runtime
+qualification must cover joint sampling, inference and continuation work together;
+an interrupted comparison keeps the previous choice and publishes no partial
+success claim. These are requirements for the complete planning slice; the
+current return rollout and immediate entry query implement only parts of it.
+
 ## Ownership, updates and maintenance
 
 `engine` owns rules; `observation` exposes the allowed view; `knowledge` owns exact deductions; `beliefs` owns uncertain seat/card features; `heuristic` combines them into decisions. The concept store is currently a Markdown design catalogue implemented through typed Rust helpers, not a generic graph database or a complete dependency scheduler. The separate research `kg` index searches code and documentation; it is not the runtime concept store.

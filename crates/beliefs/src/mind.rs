@@ -271,7 +271,7 @@ impl Mind {
         Ref::map(self.cache.borrow(), |c| &c.signals.as_ref().expect("computed above").1)
     }
 
-    fn signals(&self) {
+    pub(crate) fn signals(&self) {
         let key = self.epochs();
         if self.cache.borrow().signals.as_ref().map(|s| s.0) == Some(key) {
             return;

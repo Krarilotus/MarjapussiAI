@@ -315,6 +315,19 @@ pub(crate) struct ExchangeTerms {
 }
 
 impl ExchangeTerms {
+    /// Use the feature-DP likelihood for a concrete current deal. Played cards
+    /// still belong to the holder's post-exchange hand for this calculation.
+    pub(crate) fn likelihood(
+        &mut self,
+        held: [CardSet; 2],
+        lik: [Option<&[f32; N_CLASSES]>; 2],
+        kernel: Kernel,
+    ) -> f64 {
+        let key = exchange_key(counts(held[0]), counts(held[1]));
+        let id = self.term(key, lik[0], lik[1], kernel);
+        self.terms[id as usize].lik
+    }
+
     fn term(&mut self, key: u32, lm: Option<&[f32; N_CLASSES]>, lv: Option<&[f32; N_CLASSES]>, k: Kernel) -> u32 {
         if self.index.is_empty() {
             self.index = vec![u32::MAX; EXCHANGE_KEYS];

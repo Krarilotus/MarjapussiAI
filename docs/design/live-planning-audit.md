@@ -8,7 +8,10 @@ are optimal or that the AI now plays more strongly.
 Private dataset SHA-256:
 `e41a69d6f81819dc3619655c9a35ca39c906a8ebe647e3aac869bd65b8823865`.
 Only the three owner-selected players were evaluated. Of 496 matching games,
-494 replayed completely; two historical illegal card plays were excluded.
+494 replayed completely; two records fail full replay under the current rules.
+The owner reports that the historical site did not yet enforce those plays.
+Their legal auction prefixes remain useful bidding evidence; their completed
+results cannot qualify strategy under the current rules.
 The agent received only the acting seat's view, and each comparison continued
 with the actual recorded human action. Decisions from the same game are not
 independent observations. These records are development data, not a holdout.

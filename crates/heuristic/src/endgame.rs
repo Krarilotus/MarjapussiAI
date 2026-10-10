@@ -4,9 +4,9 @@
 //!
 //! - **Worlds:** the deals consistent with my facts (`knowledge::DealSpace`): all of them when
 //!   there are at most `endgame_worlds`, otherwise that many drawn uniformly.
-//! - **Weights:** each world by my beliefs relative to the facts alone,
-//!   Π over the hidden seats' cards of P_believed(y holds c) / P_facts(y holds c), so with no
-//!   belief beyond the facts every consistent deal counts the same.
+//! - **Weights:** the same joint dealt-hand bidding likelihood as the feature
+//!   model, with its hidden-exchange kernel and optional card signal factors.
+//!   With facts alone every consistent deal counts the same.
 //! - **Objective:** the contract (HC-9: declarers make it, then keep the defenders' points
 //!   down; defenders take points, avoiding schwarz), or the own points in an all-pass game.
 //! - **Ties:** cards the solver values exactly alike are told apart by the valuation (e.g. a
