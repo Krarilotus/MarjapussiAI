@@ -20,7 +20,7 @@ Each layer has one job:
 | `knowledge` | Certain deductions: possible card holders, voids, pairs, standing cards and proven remaining-trick claims. |
 | `beliefs` | Estimates where facts leave uncertainty, including evidence from bids. |
 | `agent` | The player interface and shared table that supplies each agent's own view. |
-| `heuristic` | Bidding, passing and play decisions, with named reasons and bounded return-card forecasts. |
+| `heuristic` | Bidding, passing and play decisions, with named reasons and shared continuation forecasts. |
 | `solver` | The Game Solver: searches card plays, announcements, questions, answers and legal trump changes. |
 | `eval`, `tools` | Replays, human-game analysis and comparisons on the same deals. |
 
@@ -49,13 +49,19 @@ records the deployed revision pair.
 
 The AI is playable, but there is more to improve:
 
-- Return planning forecasts a shortlist using sampled deals and the existing
-  policy. The fixed 512-game comparison found no clear strength improvement.
+- Bidding, raising, return selection and open leads compare complete continuations
+  on shared, weighted deals. Entries, surviving pairs and trump changes affect the
+  engine's final score. Eight sampled deals and a two-second comparison budget
+  bound normal planning; incomplete comparisons keep the existing choice.
 - Passes update known cards, but inferring a partner's intent from their choice
   of pass is still missing. See [passing models](docs/PASSING.md).
-- After the exchange, raising requires a guaranteed own-card sequence and one
-  reachable pair. The agent follows that sequence through play. Uncertain
-  partner routes and the 500-point series threshold need further planning.
+- After the exchange, raising can follow a proven own-card route or an estimated
+  profitable continuation. Explanations distinguish those cases. Hidden exchange
+  histories, bid affordability and the 500-point series threshold need further
+  modelling.
+- The latest fixed 64-game comparison is inconclusive on playing strength;
+  the [qualification record](docs/checkpoints/2026-10-10-joint-continuations.md)
+  reports outcomes, decision time and fallbacks.
 - Agreement with human moves measures similarity, not playing strength.
 
 The [next steps](docs/NEXT_STEPS.md) and

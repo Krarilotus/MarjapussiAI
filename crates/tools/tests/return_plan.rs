@@ -10,6 +10,7 @@ fn before_return(seed: u64) -> Table {
     let mut players: [HeuristicAgent; 4] = std::array::from_fn(|_| {
         HeuristicAgent::new(Params {
             return_worlds: 0,
+            plan_worlds: 0,
             ..Params::default()
         })
     });
@@ -33,7 +34,10 @@ fn value(d: &Decision, key: &str) -> f32 {
 fn forecast_counts_real_scoring_and_follows_its_visible_opening() {
     for seed in [0, 7, 42] {
         let mut table = before_return(seed);
-        let mut agent = HeuristicAgent::default();
+        let mut agent = HeuristicAgent::new(Params {
+            plan_worlds: 0,
+            ..Params::default()
+        });
         let (seat, legal) = table.to_act().unwrap();
         let d = agent.decide(&table.view(seat), legal);
         assert!(legal.contains(&d.action));

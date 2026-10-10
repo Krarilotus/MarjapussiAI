@@ -38,6 +38,8 @@ fn hidden_cards_do_not_change_hp1_decisions() {
     let params = Params {
         endgame_tricks: 2,
         endgame_worlds: 8,
+        plan_worlds: 2,
+        return_worlds: 2,
         ..Params::default()
     };
     let mut swaps = 0;
@@ -53,6 +55,7 @@ fn hidden_cards_do_not_change_hp1_decisions() {
             .map(|_| {
                 HeuristicAgent::new(Params {
                     return_worlds: 0,
+                    plan_worlds: 0,
                     ..params.clone()
                 })
             })

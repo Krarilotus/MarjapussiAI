@@ -50,6 +50,7 @@ macro_rules! rules {
 }
 
 rules! {
+    HP1 "HP-1" Any 0 1 "[D]" "choose the completed seat-local continuation with the best expected engine score on shared joint-belief deals";
     // Bidding (§3.1)
     // KB batch 1 (`findings/kb/concepts.md`)
     BTell "B-tell" Bidding 0 1 "[O]" "tell the first live message: with a pair, the ace first, then the pair; 3+ halves without a pair before the ace; a +10/+15 landing on 140 goes to 145";

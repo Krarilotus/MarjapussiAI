@@ -20,7 +20,7 @@ preserves play; it does not introduce pass-choice inference.
 | 2, provenance recorded | Qualify evaluation and weight provenance (F2/F5) | Record each fit's source, data fingerprint, feature order and command. Split by complete game/session before fitting. Freeze weights before held-out evaluation. Use predeclared fixed-size duplicate comparisons and label approximate intervals; defer unsupported anytime-valid claims. | `evaluation` |
 | 3 | Add pass-choice inference (remaining F1 capability) | Define the modelled actor and pre-pass information; reuse the current scorer from hypothetical giver views; validate synthetic same-policy likelihoods/void predictions and privacy before testing held-out human behaviour. Bound runtime and measure calibration on separate games. | `exchange-reading` |
 | 4, partially completed | Consolidate a runnable baseline (F6) | Preview docs/data safeguards reconciled and sibling AI/testbed pair verified in the publication checkpoint. Public-fixture CI and supported toolchain policy remain. | `publication`, then `baseline-ci` |
-| 5, bounded slice implemented | Compose return planning | Shared seat-local rollouts follow entries, legal trump changes, consumed halves and last-trick outcomes. Fixed 512-game qualification finds no clear strength difference. Live owner review follows; raising stays separate. | [return-planning](checkpoints/2026-10-09-return-planning.md) |
+| 5, bounded slice implemented | Compose continuation planning | Return selection, contract decisions and open leads share joint weighted deals and legal full-game continuations. Guaranteed raises reuse claim proofs; forecasted raises replay the proposed contract. Fixed 64-game qualification is inconclusive on strength. | [joint-continuations](checkpoints/2026-10-10-joint-continuations.md) |
 | 6, verified for local live use | Make play/replay responsive (F7) | Bounded background work, revision-checked commits and cached agents pass concurrency/privacy checks and the paired browser/API smoke. Testbed `3d1aba4` runs AI `febba17`. | `playable-v1` |
 
 The [return-pass planning proposal](design/return-pass-plan.md) breaks the
@@ -69,7 +69,7 @@ The current comparison is inconclusive, not evidence that the planner has no eff
 Next candidates: improve observed return/entry mistakes, calibrate forecast shares
 on genuinely separate games, and investigate broader information-set planning.
 Before exposing arbitrary transposition-table sizes, handle the existing zero-bit
-TT edge. Raising and GPU work remain separate decisions. Every major iteration
+TT edge. GPU work remains a separate decision. Every major iteration
 gets its own checkpoint; no speculative second planner or duplicated rule logic.
 
 ## Live feedback: next dependency work
@@ -77,8 +77,14 @@ gets its own checkpoint; no speculative second planner or duplicated rule logic.
 The [live audit](design/live-planning-audit.md) separates human agreement from
 playing quality and maps the dependencies for developing suit control. The
 [allocation checkpoint](checkpoints/2026-10-09-return-suit-allocations.md) broadens
-return candidates; it does not complete that planner. Next: validate coherent
-promotion/entry/trump continuations, then reuse them for bidding and play.
-The [continuation checkpoint](checkpoints/2026-10-09-coherent-forecasts.md) extracts
-the shared rollout and exposes kept/returned developed winners without changing
-the score model. Use that evidence to audit the continuation policy next.
+return candidates. The [joint-continuation checkpoint](checkpoints/2026-10-10-joint-continuations.md)
+shares promotion/entry/trump continuations with bidding, raising and play, using
+the joint auction likelihood rather than multiplying card marginals.
+
+Next: model hidden exchange histories and pass-choice intent, test affordable
+high-bid interpretations, and improve continuation policy on recorded failure
+branches. The approved human examples still expose cautious bids; a completed
+forecast is evidence about this policy model, not proof that passing is best.
+Calibrate on separate games before calling forecast shares reliable probabilities.
+Series-aware selection around 500 points remains a separate objective above the
+single-game score comparison.

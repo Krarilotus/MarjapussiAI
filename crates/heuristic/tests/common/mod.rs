@@ -140,7 +140,15 @@ impl Scene {
     }
 
     pub fn act(&self, legal: &[GameAction]) -> Decision {
-        self.act_with(Params::default(), legal)
+        // These isolated rule fixtures exercise the fallback policy. Full lawful
+        // continuations and their hidden-card guards are in contract_planning.
+        self.act_with(
+            Params {
+                plan_worlds: 0,
+                ..Params::default()
+            },
+            legal,
+        )
     }
 
     pub fn act_with(&self, params: Params, legal: &[GameAction]) -> Decision {

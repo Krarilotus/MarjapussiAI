@@ -1,6 +1,6 @@
-//! A narrow pre-play certificate, followed through from the seat's own history.
-//! Win an opening Ace, cash own side runs without trump, announce ONE own pair,
-//! then cash its own top trump run. Other hands contribute no estimated points.
+//! Proven pre-play floors and their follow-through from seat-visible information.
+//! Reuse the complete claim proof where possible; otherwise certify opening Aces,
+//! side runs and one own trump run. Uncertain raises belong to shared planning.
 
 use engine::{partner, points_set, ActionType, CardSet, GameAction, Suit, SUITS};
 use observation::SeatEvent;
@@ -57,7 +57,59 @@ impl Certificate {
     }
 }
 
+/// The same seat-visible proof used by the optional human claim. Recompute its
+/// remaining route; a consumed card or lost declaration right cannot persist.
+fn claim(ctx: &Ctx, legal: &[GameAction]) -> Option<(Vec<GameAction>, i32)> {
+    let plan = knowledge::remaining_claim(ctx.k, legal)?;
+    let floor = ctx.k.team_points()[ctx.me as usize % 2]
+        + engine::points_set(CardSet::ALL - ctx.k.played())
+        + engine::LAST_TRICK_BONUS
+        + plan
+            .iter()
+            .filter_map(|a| match a.action_type {
+                ActionType::AnnounceTrump(s) => Some(beliefs::conventions::pair_value(s)),
+                _ => None,
+            })
+            .sum::<i32>();
+    Some((plan, floor))
+}
+
 pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], cards: &[GameAction]) -> Decision {
+    // Reuse the same seat-visible proof as "Zum Hinlegen". It tracks suit
+    // exhaustion and every legal own announcement, so lower trumps promoted by
+    // the run and multiple reachable pairs are counted through a real sequence.
+    if ctx.k.declarer() == Some(ctx.me) && ctx.k.played().is_empty() {
+        if let Some((plan, floor)) = claim(ctx, cards) {
+            if let Some(a) = legal
+                .iter()
+                .filter(|a| matches!(a.action_type, ActionType::NewBid(v) if v <= floor))
+                .max_by_key(|a| match a.action_type {
+                    ActionType::NewBid(v) => v,
+                    _ => unreachable!(),
+                })
+            {
+                let ActionType::NewBid(target) = a.action_type else {
+                    unreachable!()
+                };
+                return decision(
+                    a,
+                    RuleId::HZ2,
+                    vec![
+                        fact("raise_floor", floor),
+                        fact("raise_target", target),
+                        fact("certified_claim", 1),
+                    ],
+                );
+            }
+            if floor >= ctx.k.value() {
+                return decision(
+                    plan.first().expect("nonempty claim"),
+                    RuleId::HZ2,
+                    vec![fact("raise_floor", floor), fact("certified_claim", 1)],
+                );
+            }
+        }
+    }
     let certificate = (ctx.k.declarer() == Some(ctx.me)
         && ctx.k.played().is_empty()
         && ctx.k.trump().is_none()
@@ -151,7 +203,17 @@ pub(crate) fn follow(ctx: &Ctx, legal: &[GameAction]) -> Option<Decision> {
     {
         return None;
     }
-    let (initial, target, after_raise) = raised_hand(ctx)?;
+    let raised = raised_hand(ctx);
+    if let Some((plan, floor)) = claim(ctx, legal) {
+        if let Some(action) = plan.first().filter(|_| floor >= ctx.k.value()) {
+            let mut why = vec![fact("certified_claim", 1), fact("raise_floor", floor)];
+            if raised.is_some() {
+                why.push(fact("certified_raise_route", 1));
+            }
+            return Some(decision(action, RuleId::HZ2, why));
+        }
+    }
+    let (initial, target, after_raise) = raised?;
     let c = Certificate::of(initial)?;
     if c.floor < target || ctx.k.value() != target {
         return None;

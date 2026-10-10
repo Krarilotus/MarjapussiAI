@@ -203,8 +203,19 @@ consumed halves, spent announcement rights and a later opponent trump change.
 The same plan must explain both its useful line and its failure branches. Runtime
 qualification must cover joint sampling, inference and continuation work together;
 an interrupted comparison keeps the previous choice and publishes no partial
-success claim. These are requirements for the complete planning slice; the
-current return rollout and immediate entry query implement only parts of it.
+success claim. The bounded implementation shares this evaluation across return
+selection, pass-versus-bid decisions, pre-play raises and open leads. Each root
+alternative uses the same resampled joint deals; recursive forecasts are disabled
+inside continuations. Actual decisions replan from their updated observations.
+Raising targets are proposed by repricing terminal engine outcomes, then verified
+by replay at the new contract. Guaranteed own-card claims use the knowledge proof.
+
+Eight rollouts are an approximation. Hidden exchange events currently prevent
+lawful reconstruction for the defenders, who retain the ordinary policy and
+endgame search. Latent exchange histories, inference from pass-choice intent,
+affordability-dependent signalling and series-aware objectives remain open.
+The [qualification record](../checkpoints/2026-10-10-joint-continuations.md) records
+the tested slice and its runtime/strength limits.
 
 ## Ownership, updates and maintenance
 

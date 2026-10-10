@@ -5,7 +5,16 @@ mod common;
 use agent::Table;
 use common::{bid_of, c, set, Scene};
 use engine::{ActionType, Card, CardSet, GameFinishedInfo, GamePhase, Suit};
-use heuristic::{Decision, HeuristicAgent, RuleId};
+use heuristic::{Decision, HeuristicAgent, Params, RuleId};
+
+// Certificates have stronger guarantees than the optional probabilistic raising
+// comparison. These oracle checks isolate that guarantee and its follow-through.
+fn certified_agent() -> HeuristicAgent {
+    HeuristicAgent::new(Params {
+        plan_worlds: 0,
+        ..Params::default()
+    })
+}
 
 const PARTIAL: [&str; 9] = ["r-A", "r-Z", "r-K", "r-O", "g-A", "g-Z", "e-A", "s-A", "e-6"];
 const ALL_NINE: [&str; 9] = ["r-A", "r-Z", "r-K", "r-O", "g-A", "g-Z", "e-A", "s-A", "s-Z"];
@@ -16,6 +25,53 @@ fn value(d: &Decision, key: &str) -> f32 {
         .find(|f| f.key == key)
         .unwrap_or_else(|| panic!("missing {key}: {d:?}"))
         .value
+}
+
+#[test]
+fn suit_exhaustion_certificate_raises_and_follows_the_complete_claim() {
+    let cards = ["r-A", "r-Z", "r-K", "r-O", "r-9", "r-6", "g-A", "g-Z", "e-A"];
+    for rotation in [0, 5, 13] {
+        let mut table = preplay(&cards, 140, rotation);
+        let (seat, legal) = table.to_act().unwrap();
+        let d = certified_agent().decide(&table.view(seat), legal);
+        assert_eq!(bid_of(&d), Some(240), "{d:?}");
+        assert_eq!(value(&d, "certified_claim"), 1.0);
+        table.apply(d.action);
+        for _ in 0..70 {
+            let Some((seat, legal)) = table.to_act() else { break };
+            let action = if seat == 0 {
+                let d = certified_agent().decide(&table.view(seat), legal);
+                assert_eq!(value(&d, "certified_claim"), 1.0);
+                d.action
+            } else {
+                legal[0]
+            };
+            table.apply(action);
+        }
+        assert!(table.game.ended());
+        let info = GameFinishedInfo::from(table.game);
+        assert_eq!(info.team_points[0], 240);
+        assert_eq!(info.outcome().team_tricks, [9, 0]);
+    }
+}
+
+#[test]
+fn a_contract_already_at_the_claim_floor_keeps_the_certified_route() {
+    let cards = ["r-A", "r-Z", "r-K", "r-O", "r-9", "r-6", "g-A", "g-Z", "e-A"];
+    let mut table = preplay(&cards, 240, 5);
+    for _ in 0..70 {
+        let Some((seat, legal)) = table.to_act() else { break };
+        let action = if seat == 0 {
+            let d = certified_agent().decide(&table.view(seat), legal);
+            assert_eq!(value(&d, "certified_claim"), 1.0, "{d:?}");
+            d.action
+        } else {
+            legal[0]
+        };
+        table.apply(action);
+    }
+    assert!(table.game.ended());
+    assert_eq!(GameFinishedInfo::from(table.game).scores(), [240, -480]);
 }
 
 fn apply(table: &mut Table, kind: ActionType) {
@@ -60,7 +116,7 @@ fn preplay(cards: &[&str; 9], contract: i32, rotation: usize) -> Table {
 fn raises_only_within_the_partial_floor_and_explains_the_bound() {
     let table = preplay(&PARTIAL, 140, 0);
     let (seat, legal) = table.to_act().unwrap();
-    let d = HeuristicAgent::default().decide(&table.view(seat), legal);
+    let d = certified_agent().decide(&table.view(seat), legal);
     assert_eq!(bid_of(&d), Some(170), "{d:?}");
     assert_eq!(d.rule, RuleId::HZ2);
     assert_eq!(value(&d, "raise_floor"), 171.0); // 71 own card points + one red pair.
@@ -69,7 +125,7 @@ fn raises_only_within_the_partial_floor_and_explains_the_bound() {
 
     let table = preplay(&PARTIAL, 175, 0);
     let (seat, legal) = table.to_act().unwrap();
-    let d = HeuristicAgent::default().decide(&table.view(seat), legal);
+    let d = certified_agent().decide(&table.view(seat), legal);
     assert!(matches!(d.action.action_type, ActionType::CardPlayed(_)), "{d:?}");
     assert_eq!(value(&d, "raise_floor"), 171.0);
 }
@@ -84,7 +140,7 @@ fn missing_own_ace_or_a_blocked_trump_run_does_not_become_a_guarantee() {
     ] {
         let table = preplay(&cards, 140, 0);
         let (seat, legal) = table.to_act().unwrap();
-        let d = HeuristicAgent::default().decide(&table.view(seat), legal);
+        let d = certified_agent().decide(&table.view(seat), legal);
         assert!(matches!(d.action.action_type, ActionType::CardPlayed(_)), "{d:?}");
         assert!(value(&d, "raise_floor") <= 140.0);
     }
@@ -97,7 +153,7 @@ fn every_legal_opening_ace_realizes_the_floor_against_other_legal_hands() {
             for rotation in [0, 5, 13] {
                 let mut table = preplay(cards, 140, rotation);
                 let (seat, legal) = table.to_act().unwrap();
-                let d = HeuristicAgent::default().decide(&table.view(seat), legal);
+                let d = certified_agent().decide(&table.view(seat), legal);
                 let floor = value(&d, "raise_floor") as i32;
                 let target = bid_of(&d).unwrap();
                 assert_eq!(target, if cards == &ALL_NINE { 240 } else { 170 });
@@ -111,7 +167,7 @@ fn every_legal_opening_ace_realizes_the_floor_against_other_legal_hands() {
                     let action = if seat == 0 {
                         // A fresh agent must reconstruct the certificate; default
                         // four-trick sampled search cannot override its cashing.
-                        let d = HeuristicAgent::default().decide(&table.view(seat), legal);
+                        let d = certified_agent().decide(&table.view(seat), legal);
                         assert!(legal.contains(&d.action), "{d:?}");
                         certified += d.why.iter().any(|f| f.key == "certified_raise_route") as usize;
                         d.action

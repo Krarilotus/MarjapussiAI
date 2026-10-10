@@ -17,6 +17,7 @@ fn fresh_and_reused_agents_play_the_same_game() {
         endgame_tricks: 2,
         endgame_worlds: 1,
         return_worlds: 1,
+        plan_worlds: 1,
         ..Params::default()
     };
     let (mut forecasts, mut endgames) = (0, 0);

@@ -63,6 +63,10 @@ params! {
     /// Shared hypothetical deals for return forecasts (0: C42 choice only).
     return_worlds: u32 = 8,
 
+    /// Shared continuation worlds for auction, raising and open-lead comparisons.
+    /// Zero retains the baseline policy.
+    plan_worlds: u32 = 8,
+
     /// HL-2: cash a side-suit standing card before the valuation leads.
     lead_cash_standing: bool = true,
     // Planned leads (M3, Judge item 5; `leads.rs`), each switchable for its A/B against the
@@ -136,6 +140,9 @@ impl Params {
         }
         if self.return_worlds > 64 {
             return Err(HeuristicError::Params("return_worlds must be in 0..=64".into()));
+        }
+        if self.plan_worlds > 64 {
+            return Err(HeuristicError::Params("plan_worlds must be in 0..=64".into()));
         }
         if self.endgame_tricks != 0 && self.endgame_worlds == 0 {
             return Err(HeuristicError::Params(

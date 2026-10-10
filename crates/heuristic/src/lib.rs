@@ -283,13 +283,17 @@ impl HeuristicAgent {
                     .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
                     .cloned()
                     .collect();
-                return raising::decide(&ctx, &legal, &cards);
+                let baseline = raising::decide(&ctx, &legal, &cards);
+                return planning::choose(&ctx, &legal, baseline);
             }
-            return bidding::decide(&ctx, &legal);
+            let baseline = bidding::decide(&ctx, &legal);
+            return planning::choose(&ctx, &legal, baseline);
         }
         if has(|t| matches!(t, ActionType::Answer(_))) {
-            return play::answer(&ctx, &legal);
+            let baseline = play::answer(&ctx, &legal);
+            return planning::choose(&ctx, &legal, baseline);
         }
-        play::decide(&ctx, &legal)
+        let baseline = play::decide(&ctx, &legal);
+        planning::choose(&ctx, &legal, baseline)
     }
 }
