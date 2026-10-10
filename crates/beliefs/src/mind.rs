@@ -293,7 +293,7 @@ impl Mind {
             };
             let mut l = [1.0f64; N_CLASSES];
             for obs in &s.bids {
-                for (x, t) in l.iter_mut().zip(bid_table(obs, trust, s.kind, p)) {
+                for (x, t) in l.iter_mut().zip(bid_table(obs, trust, p)) {
                     *x *= t as f64;
                 }
             }

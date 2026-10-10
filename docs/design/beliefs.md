@@ -70,7 +70,7 @@ All reads take `&self`; caches use interior mutability (a `Mind` is `Send`, not 
 
 ## Parameters (`BeliefParams`)
 - `signals: Full | BaseOnly`: the arena switch. `BaseOnly` reads the facts only: the exact n-over-k base for cards, the feature DP without signals (uniform exchange) for seat features.
-- `conventions`: the convention models' parameters, including **one trust θ per seat kind** (D-f: `trust_human`, `trust_agent`). HP1 seats are read through HP1's own bid policy (`read_hp1_as_hp1`), mixed with the class-independent step by θ.
+- `conventions`: the convention models' parameters, with human trust by relation (`trust_partner`, `trust_opponent`) and `trust_agent` for HP1 seats. All seat kinds use the same convention reader, mixed with the class-independent step by θ.
 - Fitted parts **per seat kind** (`PerKind { human, agent }`): the per-card factors (F4) and the exchange kernel (F7). Agent parts are fitted on independent self-play; human parts on the human games, shrunk towards "no information" (they are a check, not the target).
 - `feature_cards` (F6), `calibration` (F8, one temperature per family), `bands`.
 

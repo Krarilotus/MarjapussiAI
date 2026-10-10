@@ -1,6 +1,6 @@
 //! Every weight and threshold of HP1 in one place (spec §8). Defaults are the "normal"
 //! profile. A flat TOML file (`key = value` lines, `#` comments) overrides single keys; the
-//! convention keys (bid messages, EGP weights, readings) go to `beliefs`.
+//! convention keys (bid messages and readings) go to `beliefs`.
 
 use beliefs::BeliefParams;
 
@@ -145,7 +145,7 @@ impl Params {
         Ok(())
     }
 
-    /// The bid conventions and EGP parameters.
+    /// The bid conventions and reading parameters.
     pub fn conv(&self) -> &beliefs::conventions::Params {
         &self.beliefs.conventions
     }

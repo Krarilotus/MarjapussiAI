@@ -4,14 +4,14 @@
 //! (HB-0), and bids its target with the 140 shift (HB-140a). Humans do not always follow the
 //! rule, so the likelihood mixes the rule (confidence by context, HR-2), a literal reading
 //! without the shift, a generic step and a block component (HR-7). Acting uses `message` and
-//! `follow_target`; reading inverts `bid_likelihood` (or HP1's own policy, `hp1::bid_prob`) over
-//! the 162 hand classes (`bid_tables`). Moved from `heuristic::conventions` (D-d).
+//! `follow_target`; reading inverts `bid_likelihood` over the 162 hand classes (`bid_tables`).
+//! Moved from `heuristic::conventions` (D-d).
 
 use engine::{next_seat, partner, Suit};
 use observation::Seat;
 
 use super::classes::{class_prior, pair_value, HandClass, BIG_PAIRS, N_CLASSES, SMALL_PAIRS};
-use super::{hp1, Params, SeatKind};
+use super::Params;
 
 /// What the convention can say with one step. Passing says "nothing (more) to tell".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -230,10 +230,9 @@ pub const PAIR_LINE: i32 = 140;
 
 pub const BARRIERS: [i32; 4] = [PAIR_LINE, 180, 200, 220];
 
-/// `P(action | class, ctx)`: the generative bid model for seats that do not play HP1 (humans;
-/// P3: a Red pair mostly as +15). HP1's own encoder sends `message` at `follow_target`; HP1
-/// seats are read with `bidding::hp1_bid_prob`. `bid` is `None` for a pass; `trust` is the
-/// observer's trust θ in this speaker (§3.4).
+/// `P(action | class, ctx)`: the generative bid model for all seat kinds. HP1's encoder sends
+/// `message` at `follow_target`; the reading also allows literal steps, blocks and bluffs.
+/// `bid` is `None` for a pass; `trust` is the observer's trust θ in this speaker (§3.4).
 pub fn bid_likelihood(bid: Option<i32>, class: HandClass, ctx: &BidContext, trust: f32, params: &Params) -> f32 {
     let m = message(class, ctx, params);
     let c = confidence(m, ctx, params);
@@ -390,11 +389,10 @@ pub fn next_context(actions: &[(Seat, Option<i32>)], seat: Seat, params: &Params
 }
 
 /// Per observed bid, its likelihood for every hand class, with the floor ε relative to the most
-/// likely class: a bluff only down-weights a hand, it never rules it out (RQ-16). P3: a seat
-/// playing HP1 is read with HP1's own bid policy (`hp1::bid_prob`) if `read_hp1_as_hp1`; any
-/// other seat with the human-calibrated convention model (`bid_likelihood`).
-pub fn bid_tables(bids: &[BidObs], trust: f32, kind: SeatKind, params: &Params) -> Vec<[f32; N_CLASSES]> {
-    bids.iter().map(|obs| bid_table(obs, trust, kind, params)).collect()
+/// likely class: a bluff only down-weights a hand, it never rules it out (RQ-16).
+/// All seats use the convention model (`bid_likelihood`), with trust set by seat kind.
+pub fn bid_tables(bids: &[BidObs], trust: f32, params: &Params) -> Vec<[f32; N_CLASSES]> {
+    bids.iter().map(|obs| bid_table(obs, trust, params)).collect()
 }
 
 /// The class-independent step distribution: +5 … +20 or a pass, else a rare jump.
@@ -406,18 +404,11 @@ pub fn generic_step(bid: Option<i32>, ctx: &BidContext, params: &Params) -> f32 
     }
 }
 
-/// One observed bid's likelihood table (see `bid_tables`). An HP1 seat's policy is mixed with
-/// the class-independent step by the trust θ, like the human model (D-f), so a bid its policy
-/// does not predict (HB-9) reads as uninformative, never as impossible.
-pub fn bid_table(obs: &BidObs, trust: f32, kind: SeatKind, params: &Params) -> [f32; N_CLASSES] {
-    let generic = generic_step(obs.bid, &obs.ctx, params);
+/// One observed bid's likelihood table (see `bid_tables`).
+pub fn bid_table(obs: &BidObs, trust: f32, params: &Params) -> [f32; N_CLASSES] {
     let mut table: [f32; N_CLASSES] = std::array::from_fn(|i| {
         let class = HandClass::from_index(i);
-        if kind == SeatKind::Heuristic && params.read_hp1_as_hp1 {
-            trust * hp1::bid_prob(obs.bid, class, &obs.ctx, params) + (1.0 - trust) * generic
-        } else {
-            bid_likelihood(obs.bid, class, &obs.ctx, trust, params)
-        }
+        bid_likelihood(obs.bid, class, &obs.ctx, trust, params)
     });
     let max = table.iter().cloned().fold(0.0, f32::max);
     if max <= 0.0 {
@@ -429,15 +420,9 @@ pub fn bid_table(obs: &BidObs, trust: f32, kind: SeatKind, params: &Params) -> [
 
 /// Class posterior of a seat's dealt hand from its bids (exact over the 162 classes): the prior
 /// from per-card probabilities times the likelihood of every observed action.
-pub fn class_posterior(
-    prior_q: &[f32; 36],
-    bids: &[BidObs],
-    trust: f32,
-    kind: SeatKind,
-    params: &Params,
-) -> [f32; N_CLASSES] {
+pub fn class_posterior(prior_q: &[f32; 36], bids: &[BidObs], trust: f32, params: &Params) -> [f32; N_CLASSES] {
     let mut post = class_prior(prior_q);
-    for table in bid_tables(bids, trust, kind, params) {
+    for table in bid_tables(bids, trust, params) {
         for (w, l) in post.iter_mut().zip(table) {
             *w *= l;
         }

@@ -2,7 +2,9 @@
 //! and its estimates of the partner: no inference, action selection, or hidden state.
 
 use beliefs::conventions::{pair_value, LUSCHE};
-use engine::{points_set, suit_of, takes, CardSet, Suit, SUITS};
+use engine::{points_set, suit_of, CardSet, Suit, SUITS};
+
+use crate::hand::top;
 
 /// The giver's current estimates, not the recipient's private information.
 #[derive(Clone, Debug)]
@@ -155,8 +157,7 @@ pub fn back_features(hand: CardSet, partner: &Partner, trump: Option<Suit>, y: C
         Some(t) => {
             let held = hand & CardSet::suit(t);
             // My highest card of the plan suit: the one no other of mine beats.
-            let top = held.iter().find(|&c| held.iter().all(|b| b == c || !takes(b, c, None)));
-            ((y & held).len(), top.is_some_and(|c| kept.contains(c)))
+            ((y & held).len(), top(held).is_some_and(|c| kept.contains(c)))
         }
     };
     let aces = y & CardSet::ACES;

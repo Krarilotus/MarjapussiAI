@@ -3,7 +3,7 @@
 //! Two data sets, each split into a fit part and an independent test part:
 //! - **self-play (the main set for agent seats):** 4×HP1 on fresh deal suites, `seed4101` to fit
 //!   and `seed4102` to test (never used for any other fitting or tuning). HP1 seats are read
-//!   through HP1's own encoder with the agent-kind trust (D-f).
+//!   through the current convention reader with the agent-kind trust (D-f).
 //! - **human games (a check):** the 1,577 human games, fitted on the even games, tested on the
 //!   odd games.
 //!
@@ -48,7 +48,6 @@ const CARD_PHASES: [&str; 3] = ["lead", "follow", "trump or lead"];
 const FACTOR_PRIOR: f64 = 100.0;
 const KERNEL_PRIOR: f64 = 50.0;
 const TRUST_GRID: [f32; 5] = [0.6, 0.75, 0.9, 0.95, 0.99];
-const INFO_MARGIN_GRID: [f32; 6] = [-20.0, 0.0, 20.0, 40.0, 60.0, 80.0];
 const TEMPERATURES: [f64; 9] = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.35, 1.5, 1.75];
 
 fn timing_phase(phase: &str) -> usize {
@@ -637,14 +636,6 @@ fn fit_set(set: Set, games: &[Game], threads: usize, fit: &mut Fit, temps: Optio
         set(&mut fit.params, best.1);
         let _ = writeln!(log, "  - chosen {}", best.1);
     };
-    if kind == SeatKind::Heuristic && fit.params.conventions.read_hp1_as_hp1 {
-        grid(
-            "HB-9 EGP margin",
-            &INFO_MARGIN_GRID,
-            &|p, x| p.conventions.hp1_info_margin = x,
-            fit,
-        );
-    }
     grid(
         "trust θ",
         &TRUST_GRID,
@@ -769,16 +760,15 @@ fn report(o: &mut String, title: &str, acc: &mut Acc, names: &[&str]) {
 }
 
 fn main() {
-    let cli: Vec<String> = std::env::args().skip(1).collect();
-    let get = |name: &str| cli.iter().position(|a| a == name).and_then(|i| cli.get(i + 1)).cloned();
-    let path = get("--games").expect("--games PATH");
-    let deals: u64 = get("--deals").map_or(1000, |x| x.parse().unwrap());
-    let threads: usize = get("--threads").map_or(2, |x| x.parse().unwrap());
-    let max: usize = get("--max-games").map_or(usize::MAX, |x| x.parse().unwrap());
-    let sets = get("--sets").unwrap_or_else(|| "both".into());
+    let cli = tools::cli::Cli::parse(&["--games", "--deals", "--threads", "--max-games", "--sets"], &[]);
+    let path = cli.str("--games").expect("--games PATH");
+    let deals: u64 = cli.get("--deals", 1000);
+    let threads: usize = cli.get("--threads", 2);
+    let max: usize = cli.get("--max-games", usize::MAX);
+    let sets = cli.str("--sets").unwrap_or("both");
     let (do_self, do_human) = (sets != "human", sets != "selfplay");
     let wall = Instant::now();
-    let (records, _) = legacy::read(&path);
+    let (records, _) = legacy::read(path);
     let human: Vec<(usize, Game)> = records.iter().take(max).map(Game::Human).enumerate().collect();
     let human_fit: Vec<Game> = human.iter().filter(|(i, _)| i % 2 == 0).map(|x| x.1).collect();
     let human_test: Vec<Game> = human.iter().filter(|(i, _)| i % 2 == 1).map(|x| x.1).collect();
@@ -786,11 +776,9 @@ fn main() {
     let self_test: Vec<Game> = (0..deals).map(|i| Game::SelfPlay(4102, i)).collect();
 
     let mut fit = Fit::new();
-    // `--agent-reader human`: read HP1 seats with the human convention model (a comparison).
-    fit.params.conventions.read_hp1_as_hp1 = get("--agent-reader").as_deref() != Some("human");
     let mut temps = [1.0f64; 6];
     let mut o = String::new();
-    let _ = writeln!(o, "# beliefs_study: S9 step 2\n\nSelf-play: 4×HP1, fit on suite `seed4101`, test on `seed4102` ({deals} deals each; HP1 seats read through HP1's own encoder). Human games: fit on the even, test on the odd games (a check).\n\n## Fits\n\n### Self-play (agent seats)\n");
+    let _ = writeln!(o, "# beliefs_study: S9 step 2\n\nSelf-play: 4×HP1, fit on suite `seed4101`, test on `seed4102` ({deals} deals each; current convention reader with agent-kind trust). Human games: fit on the even, test on the odd games (a check).\n\n## Fits\n\n### Self-play (agent seats)\n");
     if do_self {
         o += &fit_set(Set::SelfPlay, &self_fit, threads, &mut fit, Some(&mut temps));
     }

@@ -1,5 +1,5 @@
 //! Card order within a suit as bit operations on `CardSet`, from the engine's trick order
-//! (`engine::takes`). Hand classes, pair values and the EGP model are the conventions'
+//! (`engine::takes`). Hand classes and pair values are the conventions'
 //! (`beliefs::conventions`).
 
 use engine::{suit_of, takes, CardSet};

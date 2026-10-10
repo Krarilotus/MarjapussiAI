@@ -54,15 +54,33 @@ fn joint_bid_masses_are_validated_after_all_overrides() {
 }
 
 #[test]
-fn signed_coefficients_and_deliberate_zero_settings_remain_supported() {
-    let text = "bid_overreach = -20\ntake_margin = -10\nhp1_info_margin = -5\n\
-                egp_ace = -2\negp_second_pair_share = -0.5\negp_void = 0\n\
-                tell_window = 0\nendgame_tricks = 0\nendgame_worlds = 0\n\
+fn deliberate_zero_settings_remain_supported() {
+    let text = "tell_window = 0\nendgame_tricks = 0\nendgame_worlds = 0\n\
                 sample_temperature = 0\nseed = 18446744073709551615";
     let p = Params::from_toml(text).unwrap();
-    assert_eq!(p.conv().bid_overreach, -20.0);
-    assert_eq!(p.conv().egp_second_pair_share, -0.5);
     assert_eq!(Params::from_toml(&p.to_toml()).unwrap(), p);
+}
+
+#[test]
+fn obsolete_bid_model_settings_are_rejected_as_unknown() {
+    for (key, value) in [
+        ("read_hp1_as_hp1", "false"),
+        ("bid_overreach", "0"),
+        ("take_margin", "10"),
+        ("hp1_info_margin", "0"),
+        ("egp_base", "60"),
+        ("egp_ace", "7"),
+        ("egp_ten", "3"),
+        ("egp_partner_ace", "10"),
+        ("egp_half", "0"),
+        ("egp_long", "0"),
+        ("egp_void", "0"),
+        ("egp_meld", "1"),
+        ("egp_second_pair_share", "0.5"),
+    ] {
+        let err = Params::from_toml(&format!("{key} = {value}")).unwrap_err();
+        assert_eq!(err.to_string(), format!("params: unknown key {key}"));
+    }
 }
 
 #[test]

@@ -1,10 +1,9 @@
 //! Bid conventions: messages and targets, likelihoods over the 162 hand classes,
-//! and the optional historical HP1 bid/EGP model. Pass choice belongs to `heuristic`;
-//! the active `Mind` does not infer intent from the choice of exchanged cards.
+//! shared by all seat kinds. Pass choice belongs to `heuristic`; the active `Mind`
+//! does not infer intent from the choice of exchanged cards.
 
 mod bids;
 mod classes;
-pub mod hp1;
 mod params;
 
 pub use agent::SeatKind;

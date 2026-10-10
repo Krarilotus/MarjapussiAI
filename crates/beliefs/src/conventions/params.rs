@@ -59,17 +59,6 @@ params! {
     tell_window: u32 = 4,
     /// HB-0: an ace alone is not told at 140 or more unless the team showed a pair.
     ace_at_140_needs_pair: bool = true,
-    /// HB-7: never bid above EGP + this (HP1's gate; read for HP1 seats). C32: the design's
-    /// hand-set 0 (§3.1 HB-7, M1), not the −20 chosen by duplicate strength (J17).
-    bid_overreach: f32 = 0.0,
-    /// HB-8: take the game by +5 when EGP ≥ next bid + this, with nothing left to tell. C32:
-    /// the hand-set 10 of M1, not the 30 set with the human EGP fit.
-    take_margin: f32 = 10.0,
-    /// HB-9, read for HP1 seats: HP1 still sends a message up to 140 that HB-7 would stop
-    /// while winning the game by accident stays unlikely, i.e. while its EGP is within this many
-    /// points of the target (its risk test needs the seat's own beliefs, so the margin is
-    /// fitted on independent self-play: `beliefs_study`, suite `seed4101`).
-    hp1_info_margin: f32 = 0.0,
 
     // The bid reading (HR-2 … HR-7)
     conf_general: f32 = 0.8,
@@ -81,10 +70,6 @@ params! {
     /// C32: 0, humans read by the owner's convention like HP1 seats; the 0.73 measured on the
     /// human games is a human-game adjustment the owner does not want (2026-10-06).
     human_red_as_big: f32 = 0.0,
-    /// P3, D-f: read seats that play HP1 with HP1's own bid policy (false: the human model).
-    /// KB batch 1: false. Every seat is read with our convention ([O] Q1b), which HP1 now
-    /// bids by itself (B-tell, B-block, B-quiet); `hp1::bid_prob` models the removed EGP gates.
-    read_hp1_as_hp1: bool = false,
     /// Share of the non-conforming mass that still reads the step literally (no 140 shift).
     literal_share: f32 = 0.5,
     /// Likelihood floor ε of every bid convention reading: a belief never
@@ -107,20 +92,6 @@ params! {
     /// HR-7: P(a barrier bid is a block) right after the other team showed a big pair, else.
     block_prior: f32 = 0.3,
     block_base: f32 = 0.02,
-
-    // Expected game points (§2), the estimate HP1 bids on (read here for HP1 seats, P3). C32:
-    // the design's hand-set formula of M1, 60 + 7 per ace + 3 per ten + 10 × P(partner ace),
-    // plus the best team pair and half the second; no fitted weights (the halves, longest-suit
-    // and void terms came only with the fits and are 0).
-    egp_base: f32 = 60.0,
-    egp_ace: f32 = 7.0,
-    egp_ten: f32 = 3.0,
-    egp_partner_ace: f32 = 10.0,
-    egp_half: f32 = 0.0,
-    egp_long: f32 = 0.0,
-    egp_void: f32 = 0.0,
-    egp_meld: f32 = 1.0,
-    egp_second_pair_share: f32 = 0.5,
 }
 
 impl Params {
@@ -154,25 +125,6 @@ impl Params {
         for (name, block) in [("block_prior", self.block_prior), ("block_base", self.block_base)] {
             if block + self.claim_140_prior > 1.0 {
                 return Err(format!("{name} + claim_140_prior must not exceed 1"));
-            }
-        }
-        // These are coefficients and point margins, not probability masses.
-        for (name, value) in [
-            ("bid_overreach", self.bid_overreach),
-            ("take_margin", self.take_margin),
-            ("hp1_info_margin", self.hp1_info_margin),
-            ("egp_base", self.egp_base),
-            ("egp_ace", self.egp_ace),
-            ("egp_ten", self.egp_ten),
-            ("egp_partner_ace", self.egp_partner_ace),
-            ("egp_half", self.egp_half),
-            ("egp_long", self.egp_long),
-            ("egp_void", self.egp_void),
-            ("egp_meld", self.egp_meld),
-            ("egp_second_pair_share", self.egp_second_pair_share),
-        ] {
-            if !value.is_finite() {
-                return Err(format!("{name} must be finite"));
             }
         }
         Ok(())

@@ -24,7 +24,7 @@ mod bidding;
 
 use std::collections::BTreeMap;
 
-use engine::{suit_of, takes, ActionType, Card, CardSet, GameFinishedInfo, Suit, SUITS};
+use engine::{suit_of, ActionType, Card, CardSet, GameFinishedInfo, Suit, SUITS};
 use observation::Seat;
 use tools::cli::Cli;
 use tools::legacy::{read, replay};
@@ -214,18 +214,6 @@ fn transcript(games: &[Option<Game>], id: usize) {
     }
 }
 
-/// Cards of `hand` that stand from the hand alone: every higher card of their suit is in it.
-fn standing(hand: CardSet) -> u32 {
-    hand.iter()
-        .filter(|&c| {
-            CardSet::suit(suit_of(c))
-                .iter()
-                .filter(|&b| takes(b, c, None))
-                .all(|b| hand.contains(b))
-        })
-        .count() as u32
-}
-
 fn suit_named(name: &str) -> Suit {
     match name {
         "red" => Suit::Red,
@@ -297,7 +285,7 @@ fn find(games: &[Option<Game>], cli: &Cli) {
                 && count_ok("--tens", (h & CardSet::TENS).len())
                 && count_ok("--halves", (h & CardSet::HALVES).len())
                 && count_ok("--pairs", h.pair_suits().count() as u32)
-                && count_ok("--standing", standing(h))
+                && count_ok("--standing", knowledge::own_standing_of(h).len())
                 && count_ok("--long", lens.iter().copied().max().unwrap_or(0))
                 && count_ok("--blank", lens.iter().filter(|&&l| l == 0).count() as u32)
                 && (!cli.flag("--ace-ten")
