@@ -138,7 +138,12 @@ enum Game<'a> {
 /// record does not replay.
 fn play(game: Game, mut visit: impl FnMut(&Table, Seat, &'static str)) -> bool {
     match game {
-        Game::Human(rec) => legacy::replay(rec, |step| visit(step.table, step.seat, step.phase)).is_ok(),
+        Game::Human(rec) => legacy::replay(rec, |step| {
+            if step.claimed_by.is_none() {
+                visit(step.table, step.seat, step.phase);
+            }
+        })
+        .is_ok(),
         Game::SelfPlay(seed, i) => {
             let suite = DealSuite {
                 name: format!("seed{seed}"),

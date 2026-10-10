@@ -18,6 +18,7 @@ fn an_agent_game_record_holds_every_action_with_its_rule() {
         let mut notes = vec![];
         let (info, log) = play_game_with(&deal(seed), &mut players, |table, seat, d| {
             notes.push(Note {
+                claimed_by: None,
                 decision: Some(d.clone()),
                 hp1: None,
                 beliefs: Some(beliefs_json(observers[seat as usize].mind(&table.view(seat)))),

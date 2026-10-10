@@ -28,6 +28,8 @@ pub struct Meta {
 /// What a record says about one decision besides the action itself.
 #[derive(Default)]
 pub struct Note {
+    /// Automatic completion of a remaining-trick claim, attributed to the claimant.
+    pub claimed_by: Option<u8>,
     /// The decider's own rule and facts (agent games).
     pub decision: Option<Decision>,
     /// What HP1 would have done from the same seat view (human games).
@@ -152,6 +154,9 @@ pub fn game_record(meta: &Meta, info: &GameFinishedInfo, notes: &[Note]) -> Valu
             Some(GameCallback::NoHalf(_) | GameCallback::StillTrump(_)) | None => {}
         }
         if let Some(note) = notes.get(i) {
+            if let Some(by) = note.claimed_by {
+                a["claimed_by"] = json!(by);
+            }
             if let Some(d) = &note.decision {
                 a["rule"] = json!(d.explanation.label);
                 a["why"] = decision_json(d, after_exchange)["why"].clone();

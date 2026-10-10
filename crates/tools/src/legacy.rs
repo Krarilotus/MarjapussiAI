@@ -1,5 +1,5 @@
-//! Replays the legacy human games (`games.ndjson`) through the engine, one callback per human
-//! decision. Actions are parsed by the engine's legacy parser (`engine::parse`); this
+//! Replays the legacy human games (`games.ndjson`) through the engine, one callback per applied
+//! action, including automatic claim completions. Actions use the engine's legacy parser; this
 //! module owns only the replay policy for log quirks, and counts every event it skips. The
 //! records hold real player names: they are read only to look up the cards and never leave
 //! this module.
@@ -16,13 +16,15 @@ use serde_json::Value;
 
 use eval::Table;
 
-/// One human decision, before it is applied.
+/// One applied action, before it is applied.
 pub struct Step<'a> {
     pub table: &'a Table,
     pub seat: Seat,
     pub legal: &'a [GameAction],
     pub human: &'a GameAction,
     pub phase: &'static str,
+    /// Automatic completion of a claim by this seat, rather than a human decision.
+    pub claimed_by: Option<Seat>,
 }
 
 /// What a record says about the game itself (no names).
@@ -179,23 +181,62 @@ fn is_pass_line(raw: &str) -> bool {
 
 /// The record's log lines as actions (`engine::parse`); the four lines of a pass are one
 /// action.
-fn parse_lines(rec: &Value) -> Result<Vec<GameAction>, String> {
+struct LoggedAction {
+    action: GameAction,
+    claimed_by: Option<Seat>,
+}
+
+struct Claim {
+    by: Seat,
+    from: usize,
+}
+
+fn claim(rec: &Value, raw_len: usize) -> Result<Option<Claim>, String> {
+    let Some(value) = rec.get("claim") else { return Ok(None) };
+    let by = value["by"].as_u64().filter(|&by| by < 4).ok_or("claim: invalid by")? as Seat;
+    let from = value["from"]
+        .as_u64()
+        .and_then(|from| usize::try_from(from).ok())
+        .filter(|&from| from < raw_len)
+        .ok_or("claim: invalid from")?;
+    Ok(Some(Claim { by, from }))
+}
+
+fn parse_lines(rec: &Value) -> Result<Vec<LoggedAction>, String> {
     let mut out = vec![];
     let mut pass_group: Vec<String> = vec![];
-    for raw in rec["actions"]
-        .as_array()
-        .ok_or("actions")?
-        .iter()
-        .filter_map(|v| v.as_str())
-    {
+    let raw_actions = rec["actions"].as_array().ok_or("actions")?;
+    let claim = claim(rec, raw_actions.len())?;
+    for (index, value) in raw_actions.iter().enumerate() {
+        let raw = match value.as_str() {
+            Some(raw) => raw,
+            None if claim.is_some() => return Err("claim: non-string action".into()),
+            None => continue,
+        };
+        let claimed_by = claim.as_ref().filter(|c| index >= c.from).map(|c| c.by);
+        if claimed_by.is_some() && (!pass_group.is_empty() || is_pass_line(raw)) {
+            return Err("claim: boundary or suffix contains a pass".into());
+        }
         if is_pass_line(raw) {
             pass_group.push(raw.to_string());
             if pass_group.len() == 4 {
-                out.push(parse_pass(std::mem::take(&mut pass_group)));
+                out.push(LoggedAction {
+                    action: parse_pass(std::mem::take(&mut pass_group)),
+                    claimed_by: None,
+                });
             }
             continue;
         }
-        out.push(parse_action(raw.to_string()).map_err(|e| format!("parse: {e}"))?);
+        let action = parse_action(raw.to_string()).map_err(|e| format!("parse: {e}"))?;
+        if let Some(by) = claimed_by {
+            if action.player.0 >= 4
+                || !matches!(action.action_type, ActionType::CardPlayed(_))
+                    && !(matches!(action.action_type, ActionType::AnnounceTrump(_)) && action.player.0 == by)
+            {
+                return Err("claim: suffix must contain only cards and claimant announcements".into());
+            }
+        }
+        out.push(LoggedAction { action, claimed_by });
     }
     Ok(out)
 }
@@ -218,11 +259,20 @@ fn reread_question(action: &GameAction, answer: Option<&ActionType>, legal: &[Ga
 }
 
 /// Replays one record with the engine's legacy parser (`engine::parse`); calls `on_step`
-/// at every human decision (also forced ones) before it is applied. The legacy log mixes
+/// at every applied action (also forced/automatic ones) before it is applied. The legacy log mixes
 /// question kinds: a question the engine does not allow is read as the kind its answer implies,
 /// else dropped with its answer; an answer or a bidding pass the engine does not allow is
 /// dropped. Every such event is counted in `Replayed::skipped`.
-pub fn replay(rec: &Value, mut on_step: impl FnMut(&Step)) -> Result<Replayed, String> {
+pub fn replay(rec: &Value, on_step: impl FnMut(&Step)) -> Result<Replayed, String> {
+    // Claimed archives must validate completely before analytical callbacks can
+    // mutate statistics. Reuse the exact replay, including ordinary prefix quirks.
+    if rec.get("claim").is_some() {
+        replay_inner(rec, |_| {})?;
+    }
+    replay_inner(rec, on_step)
+}
+
+fn replay_inner(rec: &Value, mut on_step: impl FnMut(&Step)) -> Result<Replayed, String> {
     let meta = meta(rec)?;
     let actions = parse_lines(rec)?;
     let mut table = Table::new(&meta.hands);
@@ -231,8 +281,21 @@ pub fn replay(rec: &Value, mut on_step: impl FnMut(&Step)) -> Result<Replayed, S
     let mut dropped_questions: BTreeMap<&'static str, u32> = BTreeMap::new();
     let mut skip = |kind: &'static str| *skipped.entry(kind).or_default() += 1;
     let mut skip_answer = false;
-    for (i, action) in actions.iter().enumerate() {
-        let next = actions.get(i + 1).map(|a| &a.action_type);
+    let mut claim_started = false;
+    for (i, logged) in actions.iter().enumerate() {
+        let action = &logged.action;
+        let next = actions.get(i + 1).map(|a| &a.action.action_type);
+        if let Some(by) = logged.claimed_by {
+            if !claim_started {
+                if table.game.state.player_at_turn.0 != by
+                    || !table.view(by).knowledge.trick().is_empty()
+                    || !matches!(table.game.state.phase, GamePhase::StartTrick | GamePhase::Trick)
+                {
+                    return Err("claim: must start on the claimant's empty-trick turn".into());
+                }
+                claim_started = true;
+            }
+        }
         let is_answer = matches!(action.action_type, ActionType::Answer(_));
         if std::mem::take(&mut skip_answer) && is_answer {
             skip("answer to a dropped question");
@@ -244,6 +307,9 @@ pub fn replay(rec: &Value, mut on_step: impl FnMut(&Step)) -> Result<Replayed, S
         }
         let (turn, legal) = table.to_act().ok_or("game over early")?;
         let legal_has = |a: &GameAction| legal.iter().any(|l| same(l, a));
+        if logged.claimed_by.is_some() && (!legal_has(action) || action.player.0 != turn) {
+            return Err("claim: illegal automatic action".into());
+        }
         let is_question = matches!(
             action.action_type,
             ActionType::Question(_) | ActionType::AnnounceTrump(_)
@@ -283,8 +349,22 @@ pub fn replay(rec: &Value, mut on_step: impl FnMut(&Step)) -> Result<Replayed, S
             legal,
             human: &human,
             phase,
+            claimed_by: logged.claimed_by,
         });
+        let tricks_before = table.game.state.all_tricks.len();
         table.apply(human);
+        if let Some(by) = logged.claimed_by {
+            if table.game.state.all_tricks.len() > tricks_before
+                && table
+                    .game
+                    .state
+                    .all_tricks
+                    .last()
+                    .is_some_and(|trick| trick.winner.0 != by)
+            {
+                return Err("claim: remaining trick not won by claimant".into());
+            }
+        }
     }
     if table.game.ended() {
         Ok(Replayed {

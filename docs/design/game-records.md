@@ -50,6 +50,7 @@ Every action has `seat` and `type`, plus fields by type:
 | `answer_no_half` | `suit` | holds no half of `suit` |
 
 Optional fields on any action:
+- `claimed_by` (seat 0–3): automatic card/announcement completing that seat's remaining-trick claim; retained in playback but excluded from human-choice assessment. Legacy archives may instead have top-level `claim: {"by": <seat>, "from": <zero-based raw actions index>}`: every raw action from `from` through the end is automatic. The boundary precedes a card or claimant announcement, never a grouped pass; replay validates legal actions, an empty-trick claimant turn at the boundary, and claimant wins for every remaining trick. Conversion keeps one note per applied engine action, so grouped passes and skipped legacy markers do not shift provenance or annotations.
 - `trump` (suit): this action made `suit` trump (announcement, pair answer, or a half answer that completed a pair).
 - `only_half` (suit): a half answer that did not complete a pair.
 - `rule`, `why` (agent games): the HP1 rule ID that produced the action (`crates/heuristic/src/rules.rs`) and its facts, e.g. `{"egp": 131.2, "step": 5}`.

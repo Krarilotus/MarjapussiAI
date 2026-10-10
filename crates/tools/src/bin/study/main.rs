@@ -31,7 +31,7 @@ use tools::legacy::{read, replay};
 
 const SEATS: [&str; 4] = ["N", "E", "S", "W"];
 
-/// One human decision, before it was applied.
+/// One action, before it was applied; automatic completions remain in transcripts.
 struct Act {
     step: usize,
     seat: Seat,
@@ -44,6 +44,7 @@ struct Act {
     pos: u8,
     /// The partner's previous bidding action: `Some(None)` passed, `Some(Some(v))` bid v.
     partner: Option<Option<i32>>,
+    claimed_by: Option<Seat>,
 }
 
 /// One replayed game.
@@ -93,6 +94,7 @@ fn load(path: &str) -> Vec<Option<Game>> {
                         _ => 0,
                     },
                     partner,
+                    claimed_by: s.claimed_by,
                 });
             })
             .ok()?;
@@ -247,7 +249,7 @@ fn find(games: &[Option<Game>], cli: &Cli) {
             continue;
         }
         let mut any = false;
-        for a in &g.acts {
+        for a in g.acts.iter().filter(|a| a.claimed_by.is_none()) {
             let phase_ok = cli.str("--phase").is_none_or(|p| {
                 p.replace('-', " ").starts_with(a.phase) || (p == "trump" && a.phase == "trump or lead")
             });

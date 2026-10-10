@@ -112,6 +112,7 @@ fn record(
         legal,
         human,
         phase,
+        ..
     } = *step;
     if legal.len() < 2 {
         return None;
@@ -164,9 +165,19 @@ fn replay(
     let with_beliefs = out.as_ref().is_some_and(|o| o.beliefs);
     let mut notes = vec![];
     let replayed = legacy::replay(rec, |step| {
+        if step.claimed_by.is_some() {
+            // Preserve one note per applied action without assessing automatic
+            // cards/announcements as human choices or calibration samples.
+            notes.push(Note {
+                claimed_by: step.claimed_by,
+                ..Note::default()
+            });
+            return;
+        }
         let beliefs = with_beliefs.then(|| beliefs_json(players[step.seat as usize].mind(&step.table.view(step.seat))));
         let hp1 = record(report, step, &mut players, &mut variants, &mut rng);
         notes.push(Note {
+            claimed_by: None,
             decision: None,
             hp1: hp1.map(Into::into),
             beliefs,

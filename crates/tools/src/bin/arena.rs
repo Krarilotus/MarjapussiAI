@@ -122,6 +122,7 @@ fn selfplay(a: &Args) {
                     .records_beliefs
                     .then(|| beliefs_json(observers[seat as usize].mind(&table.view(seat))));
                 notes.push(Note {
+                    claimed_by: None,
                     decision: Some(d.clone()),
                     hp1: None,
                     beliefs,
