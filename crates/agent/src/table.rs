@@ -3,7 +3,8 @@
 //! receives `SeatView`, never the simulated deal.
 
 use crate::{SeatKind, SeatView, SeriesScore};
-use engine::{ActionType, Card, CardSet, Game, GameAction};
+use engine::{ActionType, AnswerType, Card, CardSet, Clock, Game, GameAction, PlaceAtTable, QuestionType};
+use knowledge::Hands;
 use knowledge::Tracker;
 use observation::{start_hand, Seat, SeatEvent, SeatFilter};
 
@@ -28,6 +29,79 @@ pub struct Table {
 }
 
 impl Table {
+    /// Reconstruct a hypothetical table from one seat's canonical history and
+    /// remaining hands. Hidden transfers need a separate history hypothesis and
+    /// are rejected here. Every transition is replayed through engine legality;
+    /// the reconstructed deciding view must equal the supplied view exactly.
+    pub fn from_view(view: &SeatView<'_>, mut hands: Hands) -> Option<Self> {
+        let mut seen = CardSet::EMPTY;
+        for (seat, hand) in hands.iter().enumerate() {
+            if hand.len() != view.knowledge.hand_len(seat as u8) as u32 || !(seen & *hand).is_empty() {
+                return None;
+            }
+            seen |= *hand;
+        }
+        if seen != CardSet::ALL - view.knowledge.played()
+            || hands[view.seat as usize] != view.knowledge.certain(view.seat)
+        {
+            return None;
+        }
+        for event in view.events.iter().rev() {
+            match *event {
+                SeatEvent::CardPlayed { seat, card } => hands[seat as usize] |= CardSet::single(card),
+                SeatEvent::Pass { from, to, cards } => {
+                    let cards = cards?;
+                    if !cards.is_subset(hands[to as usize]) {
+                        return None;
+                    }
+                    hands[to as usize] -= cards;
+                    hands[from as usize] |= cards;
+                }
+                SeatEvent::Undone => return None,
+                _ => {}
+            }
+        }
+        if hands.iter().any(|hand| hand.len() != engine::HAND_SIZE as u32) {
+            return None;
+        }
+        let mut table = Self::new(&hands.map(|h| h.cards()));
+        table.game.clock = Clock::Off;
+        table.series = view.series;
+        table.kinds = view.kinds;
+        for event in view.events {
+            let (seat, action_type) = match *event {
+                SeatEvent::Bid { seat, value } => (seat, ActionType::NewBid(value)),
+                SeatEvent::StopBidding { seat } => (seat, ActionType::StopBidding),
+                SeatEvent::Pass {
+                    from,
+                    cards: Some(cards),
+                    ..
+                } => (from, ActionType::Pass(cards.cards().try_into().ok()?)),
+                SeatEvent::CardPlayed { seat, card } => (seat, ActionType::CardPlayed(Card::from_index(card))),
+                SeatEvent::AnnounceTrump { seat, suit } => (seat, ActionType::AnnounceTrump(suit)),
+                SeatEvent::AskPair { seat } => (seat, ActionType::Question(QuestionType::Yours)),
+                SeatEvent::AskHalf { seat, suit } => (seat, ActionType::Question(QuestionType::YourHalf(suit))),
+                SeatEvent::YesPair { seat, suit } => (seat, ActionType::Answer(AnswerType::YesPair(suit))),
+                SeatEvent::NoPair { seat } => (seat, ActionType::Answer(AnswerType::NoPair)),
+                SeatEvent::YesHalf { seat, suit, .. } => (seat, ActionType::Answer(AnswerType::YesHalf(suit))),
+                SeatEvent::NoHalf { seat, suit } => (seat, ActionType::Answer(AnswerType::NoHalf(suit))),
+                _ => return None,
+            };
+            let action = *table.to_act()?.1.iter().find(|a| {
+                a.player == PlaceAtTable(seat)
+                    && match (a.action_type, action_type) {
+                        (ActionType::Pass(a), ActionType::Pass(b)) => {
+                            CardSet::from_cards(&a) == CardSet::from_cards(&b)
+                        }
+                        (a, b) => a == b,
+                    }
+            })?;
+            table.apply(action);
+        }
+        let reconstructed = table.view(view.seat);
+        (reconstructed.events == view.events && reconstructed.knowledge == view.knowledge).then_some(table)
+    }
+
     pub fn new(hands: &[Vec<Card>; 4]) -> Table {
         let mut game = Game::new(
             "table".into(),

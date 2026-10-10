@@ -35,6 +35,7 @@ fn expired_comparison_retains_c42_without_publishing_partial_outcomes() {
         solver: &RefCell::new(None),
         seed: 7,
         routes: RefCell::new(None),
+        series: view.series,
     };
     let partner = Partner::of(mind);
     let trump = super::super::back_plan(ctx.k.certain(seat), partner.half, params.partner_half_conf);

@@ -87,6 +87,7 @@ pub(crate) struct Ctx<'a> {
     /// Seed for `Params.sample_temperature > 0` (deterministic per seat and event count).
     pub seed: u64,
     pub routes: RefCell<Option<routes::Routes>>,
+    pub series: SeriesScore,
 }
 
 impl Ctx<'_> {
@@ -266,6 +267,7 @@ impl HeuristicAgent {
             solver: &self.solver,
             seed,
             routes: RefCell::new(None),
+            series: view.series,
         };
         let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));
         if has(|t| matches!(t, ActionType::Pass(_))) {

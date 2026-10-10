@@ -3,10 +3,9 @@
 
 use std::time::{Duration, Instant};
 
-use agent::Table;
-use engine::{ActionType, CardSet, Clock, GameAction, PlaceAtTable, Suit, SUITS};
+use agent::{SeatView, Table};
+use engine::{ActionType, CardSet, GameAction, Suit, SUITS};
 use knowledge::Hands;
-use observation::SeatEvent;
 
 use super::{back_features, Partner, BACK_FEATURES, PASSING_WEIGHTS};
 use crate::planning::{rollout, Outcome};
@@ -63,53 +62,17 @@ fn add_candidate(
 
 /// Undo visible transfers in a sampled current deal, then replay the real auction.
 /// Never substitute hypothetical cards into the deciding player's observations.
-fn before_return(ctx: &Ctx, mut hands: Hands) -> Option<Table> {
-    for event in ctx.mind.events().iter().rev() {
-        if let SeatEvent::Pass { from, to, cards } = event {
-            let cards = (*cards)?;
-            if !cards.is_subset(hands[*to as usize]) {
-                return None;
-            }
-            hands[*to as usize] -= cards;
-            hands[*from as usize] |= cards;
-        }
-    }
-    if hands.iter().any(|h| h.len() != engine::HAND_SIZE as u32) {
-        return None;
-    }
-    let mut table = Table::new(&hands.map(|h| h.cards()));
-    table.game.clock = Clock::Off;
-    table.kinds = ctx.mind.kinds();
-    for event in ctx.mind.events() {
-        let (seat, action_type) = match *event {
-            SeatEvent::Bid { seat, value } => (seat, ActionType::NewBid(value)),
-            SeatEvent::StopBidding { seat } => (seat, ActionType::StopBidding),
-            SeatEvent::Pass {
-                from,
-                cards: Some(cards),
-                ..
-            } => (from, ActionType::Pass(cards.cards().try_into().ok()?)),
-            _ => return None,
-        };
-        let requested = GameAction {
-            player: PlaceAtTable(seat),
-            action_type,
-        };
-        let action = *table.to_act()?.1.iter().find(|a| {
-            a.player == requested.player
-                && match (a.action_type, requested.action_type) {
-                    (ActionType::Pass(a), ActionType::Pass(b)) => CardSet::from_cards(&a) == CardSet::from_cards(&b),
-                    (a, b) => a == b,
-                }
-        })?;
-        table.apply(action);
-    }
-    // A sampled reconstruction must reproduce the entire acting seat's view.
-    let view = table.view(ctx.me);
-    if view.events != ctx.mind.events() || view.knowledge != ctx.k {
-        return None;
-    }
-    Some(table)
+fn before_return(ctx: &Ctx, hands: Hands) -> Option<Table> {
+    Table::from_view(
+        &SeatView {
+            seat: ctx.me,
+            knowledge: ctx.k,
+            events: ctx.mind.events(),
+            series: ctx.series,
+            kinds: ctx.mind.kinds(),
+        },
+        hands,
+    )
 }
 
 pub(super) fn choose(
