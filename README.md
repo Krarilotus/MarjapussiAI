@@ -53,8 +53,9 @@ The AI is playable, but there is more to improve:
   policy. The fixed 512-game comparison found no clear strength improvement.
 - Passes update known cards, but inferring a partner's intent from their choice
   of pass is still missing. See [passing models](docs/PASSING.md).
-- Raising after the exchange is disabled. Series scores reach the agent, but
-  the current policy does not yet plan around the 500-point threshold.
+- After the exchange, raising requires a guaranteed own-card sequence and one
+  reachable pair. The agent follows that sequence through play. Uncertain
+  partner routes and the 500-point series threshold need further planning.
 - Agreement with human moves measures similarity, not playing strength.
 
 The [next steps](docs/NEXT_STEPS.md) and

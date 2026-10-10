@@ -167,9 +167,7 @@ pub(crate) fn follow(ctx: &Ctx, legal: &[GameAction]) -> Option<Decision> {
                         return None;
                     }
                     opening = Some(card);
-                } else if !announced && !c.side.contains(card) {
-                    return None;
-                } else if announced && !c.trumps.contains(card) {
+                } else if !(if announced { c.trumps } else { c.side }).contains(card) {
                     return None;
                 }
                 own_played |= CardSet::single(card);

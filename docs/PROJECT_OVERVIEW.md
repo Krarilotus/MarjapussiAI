@@ -38,7 +38,7 @@ dependency. `NOTICE` records its provenance.
 | `knowledge` | Certain/possible cards, constraints, exact deal counts and samples | Appropriate separation of deductions from conventions; soundness and hidden-card-swap tests exist. |
 | `agent` | `SeatView`, shared `Table` simulation, actions, explanations, seat metadata | One owner for filtered observations; policies receive only their own view. |
 | `beliefs` | Uncertain card/hand features, bidding evidence, exchange bookkeeping, lazy caches | Useful fact-constrained model; several joint probabilities remain approximations. Pass-choice intent is not currently inferred. |
-| `heuristic` | Bidding, exchange, entries, trump/lead decisions, return forecasts | Bounded continuations reuse existing concepts and engine transitions; raising remains disabled. |
+| `heuristic` | Bidding, exchange, entries, trump/lead decisions, return forecasts | Bounded continuations reuse existing concepts and engine transitions; pre-play raises require a guaranteed own-card route and follow-through. |
 | `solver` | Known-deal play search and aggregation over possible deals | Sensible bounded aid. Exact solving within a deal is distinct from optimal imperfect-information play. |
 | `eval` | Duplicate deals, statistics, detectors; re-exports shared Table | Fixed-size comparisons; human agreement stays separate from playing strength. |
 | `tools` | Arena, recorded-game studies, profiling and record adapters | Useful tooling; experimental scripts and provenance are spread across the outer workspace. |
@@ -62,7 +62,7 @@ Rust helpers; a diagram is not evidence that a complete planner already exists.
 ## Current limits
 
 - C42 selects the first pass and orders return candidates. Bounded return forecasts compare their completed outcomes, falling back to C42 when unfinished. The unused HP/HK reader and scorer have been removed; the active beliefs never called that reader. Inferring intent from chosen passes remains separate capability work. See [passing models](PASSING.md).
-- Raising is deliberately disabled. Return planning is a policy forecast over a shortlist and sampled deals, not a full-game optimal solver.
+- Raising covers one guaranteed own-card route with a reachable pair. Return planning remains a policy forecast over a shortlist and sampled deals, not a full-game optimal solver.
 - Fitted human-choice weights measure imitation, not necessarily good play. [Provenance](EVALUATION.md) records their in-sample limitations; no new weights were fitted.
 - The local [question-aware endgame checkpoint](checkpoints/2026-10-09-solver-questions.md) keeps the four-card/64-world default, includes questions and answers, and adds a 45 ms search deadline. Independent source review found no blocking defect; hidden-information values remain estimates.
 - The local [entry checkpoint](checkpoints/2026-10-09-entry-conditions.md) checks winning ruffs, the actual next leader and surviving announceable pairs against human replays. Bounded return rollouts now compose these transitions. The [return-planning checkpoint](checkpoints/2026-10-09-return-planning.md) records a completed 512-game comparison with no clear strength difference; live acceptance follows.
