@@ -17,7 +17,7 @@ Each layer has one job:
 |---|---|
 | `engine` | Game rules, legal actions, scoring and fast simulation. Included source derived from [marjapussi-rs](https://github.com/Krarilotus/marjapussi-rs); no separate engine checkout is needed. |
 | `observation` | The public events and private cards each seat is allowed to see. |
-| `knowledge` | Certain deductions: possible card holders, voids, pairs and standing cards. |
+| `knowledge` | Certain deductions: possible card holders, voids, pairs, standing cards and proven remaining-trick claims. |
 | `beliefs` | Estimates where facts leave uncertainty, including evidence from bids. |
 | `agent` | The player interface and shared table that supplies each agent's own view. |
 | `heuristic` | Bidding, passing and play decisions, with named reasons and bounded return-card forecasts. |

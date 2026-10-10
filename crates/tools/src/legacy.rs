@@ -230,8 +230,8 @@ fn parse_lines(rec: &Value) -> Result<Vec<LoggedAction>, String> {
         let action = parse_action(raw.to_string()).map_err(|e| format!("parse: {e}"))?;
         if let Some(by) = claimed_by {
             if action.player.0 >= 4
-                || !matches!(action.action_type, ActionType::CardPlayed(_))
-                    && !(matches!(action.action_type, ActionType::AnnounceTrump(_)) && action.player.0 == by)
+                || !(matches!(action.action_type, ActionType::CardPlayed(_))
+                    || matches!(action.action_type, ActionType::AnnounceTrump(_)) && action.player.0 == by)
             {
                 return Err("claim: suffix must contain only cards and claimant announcements".into());
             }
