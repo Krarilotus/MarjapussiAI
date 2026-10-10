@@ -1,56 +1,62 @@
-# Architecture
+# AI architecture
 
-Updated 2026-10-08 from the concept catalogue and the checked-out workspaces.
-Each crate owns one kind of information and exposes it through its `lib.rs`
-façade. Dependencies point toward the rules and the seat's visible information.
+This describes the current `fix/live-planning-review` branch. The
+[testbed](https://github.com/Krarilotus/MarjapussiAI-testbed/tree/feature/takeback-claim)
+owns the website, networking and persistence. All nine crates below live in
+this AI repository; dependencies point toward the rules and visible information.
 
-| Layer | Owner | Role | Availability |
-|---|---|---|---|
-| Rules | `engine` | Legal actions, ranks, pair values, scoring and fast bitset play | Published on `main`. |
-| Visible information | `observation` | Own hand, public events and private exchanges visible to that seat | Published on `main`. |
-| Exact knowledge | `knowledge` | Possible/certain holdings, voids, standing cards, pairs and sound deductions | Core on `main`; extra hand features in preview/local work. |
-| Uncertain information | `beliefs` | Fact-constrained card/seat distributions and convention readings | Continuing `v1-preview`; pass-choice interpretation remains planned. |
-| Decisions | `agent`, `heuristic`, `solver` | Agent interface, concept-based strategy and exact endgame search | Continuing `v1-preview`, including bidding/pass corrections and safe history reuse. |
-| Evaluation | `eval`, `tools` | Duplicate-deal comparisons, recorded-game checks and decision explanations | Published snapshot on `v1-preview`; additional studies local. |
-| Coordinated planning | Proposed concepts within the decision layer | Entries, trump activation, game estimate, raising and replanning | Batch-3 proposal; no complete implemented planner. |
-| Learned policy | Future policy work | Self-play learning above facts and beliefs | Future work. |
+| Owner | What belongs here |
+|---|---|
+| `engine` | Legal actions, transitions, scoring and the compact play state used by search. |
+| `observation` | Public events and private exchanges filtered for one seat. |
+| `knowledge` | Certain holdings, constraints, voids and exact possible-deal calculations. |
+| `beliefs` | Probabilities consistent with those facts, bid evidence and lazy belief queries. |
+| `agent` | `Agent`, `SeatView` and the shared `Table` that delivers filtered observations. |
+| `heuristic` | Combining concepts into bids, exchanges and plays; bounded return forecasts. |
+| `solver` | Search inside known deals and comparisons across plausible hidden deals. |
+| `eval` | Duplicate-deal comparisons and evaluation helpers; re-exports the shared table. |
+| `tools` | Command-line studies, arena runs, replay adapters and profiling. |
 
-The development/debugging UI is a separate application built against a sibling
-AI checkout; it is not part of this crate workspace.
+## From a move to a decision
 
-## Concept dependencies
+1. The engine applies a legal action. The table produces the events visible to
+   each seat; an agent is never given the real hidden hands as evidence.
+2. `Knowledge` updates exact constraints. `Mind` in `beliefs` combines them with
+   uncertain signals, preserving facts at probability zero or one.
+3. The heuristic reads the concepts it needs: for example, possible entries,
+   reachable pairs, suit control and the points still needed. It can compare
+   return-card candidates through seat-filtered continuations.
+4. Near the end, the Game Solver can compare legal moves over deals consistent
+   with the seat's knowledge. The agent returns a move and its explanation;
+   the caller applies it through the engine.
 
-The [concept-store document](design/concept-store.md) provides the current graph,
-its calculations, proposal/implementation labels and revision references.
+The [concept catalogue](design/concept-store.md) maps these dependencies.
+Its diagram is a historical design snapshot; some concepts remain proposals.
+The implementation uses typed Rust helpers, not a generic Bayesian-network
+executor or a runtime graph database.
 
-![Visible information feeds knowledge and beliefs, then bidding, passing and proposed planning decisions.](assets/concept-store.png)
+## State and reuse
 
-Historical 7 October design graphic; the table above gives current publication status.
+Each heuristic agent retains its own `Mind`. Facts and signal changes invalidate
+only the associated lazy caches; unchanged queries reuse their results. The
+agent accepts an incremental history only when the seat, starting hand, seat
+kinds, belief settings and recorded prefix still match. Otherwise it rebuilds.
 
-The catalogue is a design source implemented through typed Rust helpers. It
-does not imply a generic runtime graph store. Rules remain in `engine`, exact
-deductions in `knowledge`, uncertain readings in `beliefs`, and the combination
-of those concepts into actions in `heuristic`.
+The solver retains completed search bounds in a bounded transposition table.
+The heuristic agent continues to update its Mind from visible events; reusing
+solver bounds does not freeze its beliefs. Agent lifetime and cache eviction
+are the caller's responsibility. The public testbed keeps agents
+in its application-owned Rust service, independently of browser connections.
 
-## Invariants
+## Correctness boundaries
 
-1. **Seat-limited input:** decisions use only that seat's visible information.
-   Other players' actual hidden hands are reserved for simulation and evaluation,
-   never agent evidence. Consistent hidden-hand swaps check this boundary.
-2. **Facts stay exact:** conventions adjust uncertain beliefs, but cannot
-   contradict certain holdings or truthful public answers.
-3. **One owner per rule:** legality and scoring come from `engine`; other crates
-   call that owner rather than copying game rules.
-4. **Understandable decisions:** named concepts carry inputs and reasons.
-   Choice-model coefficients are labelled empirical rather than game-rule facts;
-   proposals are distinguished from implemented, approved behaviour.
-5. **Bounded work:** incremental updates and lazy queries should reuse unchanged
-   information. Performance changes require measurements and correctness checks;
-   the diagram is not evidence that every proposed cache exists.
+- Rules and scoring have one owner: `engine`. Search and planning call it.
+- Conventions are uncertain evidence; they cannot overturn certain facts.
+- Solving a known deal exactly does not solve hidden-information strategy
+  exactly. Future hypothetical choices may depend on cards a player cannot see.
+- Bounded return forecasts are policy simulations, not proven game plans.
+- Passing intent, post-exchange raising and series-aware strategy remain
+  separate work. No playing-strength gain follows from architecture alone.
 
-## Next design work
-
-Complete and review concept-level pass reading, connect exchange choices to a
-coordinated plan, and evaluate decisions with the owner. Whole-game search and
-learned policies follow later; the exact endgame solver is a separate bounded
-tool. See the concept-store status table before treating a design as shipped.
+See [solver limits](design/solver.md), [passing](PASSING.md),
+[evaluation provenance](EVALUATION.md) and [next steps](NEXT_STEPS.md).

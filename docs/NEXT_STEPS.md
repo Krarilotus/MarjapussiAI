@@ -1,8 +1,9 @@
 # Next steps
 
 Goal: a fair, understandable agent that is enjoyable to play with, developed in
-small reviewable iterations. Continue from `integration/reviewed-ai` or the immutable
-`checkpoint/2026-10-09-portable-v1` pair. Every iteration follows the [checkpoint workflow](WORKFLOW.md).
+small reviewable iterations. Continue from `fix/live-planning-review`. The portable-v1 tag
+remains an older reproducible baseline. Every iteration follows the
+[checkpoint workflow](WORKFLOW.md).
 The order below is proposed engineering work, not approval of new strategic rules.
 
 Owner priority, 2026-10-08: condense the pass implementation first. Remove deprecated
@@ -50,8 +51,8 @@ should grow from concrete failure modes, not tests that restate implementation.
 ## Keep later work separate
 
 Midgame information-set search, neural policies, PPO/GRPO, difficulty styles, and
-site integration follow the baseline/planning review. Choose an algorithm from
-measured benefit and constraints; this review does not establish GRPO as preferable.
+upstream-site integration remain later work. The separate public testbed is live.
+Choose an algorithm from measured benefit and constraints; this review does not establish GRPO as preferable.
 No GPU training or new runtime graph framework is needed for the next iterations.
 
 ## Next implementation task

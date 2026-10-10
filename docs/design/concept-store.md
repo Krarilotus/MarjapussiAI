@@ -9,7 +9,7 @@ implemented dependency loop. Whole-game optimal search, calibrated score
 probabilities and raising remain outside this v1 slice; older diagrams below
 retain their historical status.
 
-The graphics and machine-readable graph below preserve the **7 October design snapshot**. Their "corrections remain local" labels are historical; the current publication status is in the table below.
+The graphics and machine-readable graph below preserve the **7 October design snapshot**. Their "corrections remain local" labels are historical; the current branch map is in the table below.
 
 ![Concept-store overview: visible information becomes facts and beliefs, which feed bidding, passing and proposed game planning. Dashed connections indicate proposed planning work.](../assets/concept-store.png)
 
@@ -22,8 +22,9 @@ Read arrows as **“provides an input to”**. L0 contains visible information a
 | Version | Available work |
 |---|---|
 | `main` | Published rules engine, seat observations and exact knowledge. The other layers below describe the wider design, not crates present on this branch. |
-| `v1-preview` | Continuing heuristic agent, beliefs, solver and evaluation tools, including the `kb/batch1` corrections, condensed C42 pass model and history-cache fix. See [checkpoints](../checkpoints/2026-10-08-publication.md). Additional `feat/study-full` evaluation experiments remain local. |
-| Proposed game plan | Batch 3: entries, announcement order, coordinated trump and ace splits, estimated secured points, raises and replanning. These dependencies are proposals; the full planner is not implemented. |
+| `fix/live-planning-review` | Current heuristic, beliefs, question-aware solver and bounded return forecasts. Paired with testbed `feature/takeback-claim`; see the [architecture](../ARCHITECTURE.md). |
+| `v1-preview`, `integration/reviewed-ai` | Earlier agent snapshots. The [publication record](../checkpoints/2026-10-08-publication.md) documents their ancestry. |
+| Remaining planning | Bounded entry and return reasoning exists. Coordinated full-game planning, calibrated score forecasts and raising remain incomplete; proposed dependencies below are not shipped guarantees. |
 
 The source is the working catalogue `findings/kb/concepts.md`, with passing clarifications in `findings/kb/03-passing.md`. Both live in the separate local research workspace. This repository carries a portable summary without recorded games, player identities or private workspace links. Later dated corrections in the catalogue supersede earlier drafts. Implementation status was checked against the local Rust source at the revisions above; this documentation update changes no agent behaviour.
 

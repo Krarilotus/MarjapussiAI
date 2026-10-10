@@ -147,7 +147,7 @@ For each suit `s` not yet called with both halves live (`KO(s) ∩ Pl = ∅`):
 - **certain:** `KO(s) ⊆ C(x)`;
 - **possible (meldable):** `KO(s) ⊆ M(x)` and no constraint of x caps `|H_x ∩ KO(s)|` below 2 (e.g. a "no pair" answer).
 
-Cards only: whether x still has the **right** to announce is a public fact (K6 `rights`), combined by the caller. A called pair is not meldable again (a half answer can only re-call it as trump, "StillTrump", without points). **Mask:** `KO(s)`.
+Cards only: whether x still has the **right** to announce is a public fact (K6 `rights`), combined by the caller. A called pair cannot score again or become trump again. A repeated half answer can still reveal information. **Mask:** `KO(s)`.
 
 ### K3 `team_pairs(x)`: the pairs of x's team, by holder
 MY (x holds both), YOUR (the partner holds both), OUR (one half each, in either assignment), each **certain** (from `C`) and **possible** (from `M`, with K2's constraint check for MY and YOUR). Same suit conditions as K2. **Mask:** `KO(s)`.

@@ -2,10 +2,23 @@
 
 Search Coder, 2026-10-06, queue S9 (phase I2). Binding decisions: `findings/design/reasoning-system-v2.md` §8 F1–F12. Evidence: `findings/reasoning-measurements.md` (S8/S8a/S8c).
 
+## Current implementation
+
+On `fix/live-planning-review`, bids provide uncertain evidence and exchanges
+update visible-card constraints and bookkeeping. Pass choice belongs to
+`heuristic`; interpreting intent from a chosen pass is not implemented.
+The default parameters use neutral card factors, a uniform hidden-exchange
+kernel and no fitted calibration. Optional fitted mechanisms below describe
+available design/experiments, not the active defaults. See [passing](../PASSING.md)
+and [evaluation provenance](../EVALUATION.md).
+
+The remaining sections retain the 6 October design and its staged measurements.
+For current ownership and cache lifetime, see [architecture](../ARCHITECTURE.md).
+
 ## What it owns
 - **The believed forms** of every concept: card probabilities, voids and suit counts, standing and future wins, team pairs and meldability, seat features, nested views.
 - **The read-out bands.**
-- **The convention models** (`beliefs::conventions`, D-d, one owner): the encoders a seat acts with (bid messages and targets, HP1's bid policy and its EGP, the pass scores) and their readings (bid likelihoods over the 162 hand classes, the pass likelihood), with their parameters (`conventions::Params`). HP1 acts with the encoders; `heuristic` drops its copies when it switches to `Mind` (C28).
+- **The convention models** (`beliefs::conventions`): shared bid messages, targets and likelihoods, with their parameters. Pass scoring lives in `heuristic`; no pass-choice likelihood is active.
 - **The signal record** (`beliefs::record`): the auction, passes, melds and questions per seat, for convention reading.
 
 What it does not own:

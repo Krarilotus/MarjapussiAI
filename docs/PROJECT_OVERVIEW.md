@@ -16,14 +16,14 @@ The real workspace is `Documents/MarjaAI`; the T3 project at
 | AI `kb/batch1` | `4782c65` | Newer local bidding/passing work; the base of this continuation branch. |
 | Testbed `main` | `0665818` | Separate Rust API and Next.js play/debug UI. Reviewed statically. |
 
-The table records the original review inputs. Current playable v1 continues on
-`integration/reviewed-ai`, paired with testbed `feature/playable-v1`. Both repositories
-pin the portable setup with `checkpoint/2026-10-09-portable-v1`; `v1-preview` remains
-the older snapshot. Original checkpoints remain immutable. See the
+The table records the original review inputs, not the current release. Continue
+on `fix/live-planning-review`, paired with testbed `feature/takeback-claim`. The
+portable-v1 checkpoint and `integration/reviewed-ai` are earlier baselines.
+Original checkpoints remain immutable. See the
 [return-planning record](checkpoints/2026-10-09-return-planning.md) for current evidence
 and the [publication record](checkpoints/2026-10-08-publication.md) for ancestry.
 
-The [testbed](https://github.com/Krarilotus/MarjapussiAI-testbed/tree/feature/playable-v1#run-it) documents
+The [testbed](https://github.com/Krarilotus/MarjapussiAI-testbed/tree/feature/takeback-claim#run-locally) documents
 the sibling checkout setup and tested revision pair. All nine AI crates resolve
 inside this repository; its engine is included source derived from
 [marjapussi-rs](https://github.com/Krarilotus/marjapussi-rs), not an external Cargo
@@ -43,8 +43,9 @@ dependency. `NOTICE` records its provenance.
 | `eval` | Duplicate deals, statistics, detectors; re-exports shared Table | Fixed-size comparisons; human agreement stays separate from playing strength. |
 | `tools` | Arena, recorded-game studies, profiling and record adapters | Useful tooling; experimental scripts and provenance are spread across the outer workspace. |
 
-The separate testbed owns HTTP/SQLite and the UI. It reuses the engine and agent
-contracts rather than owning another copy of the game rules.
+The separate testbed owns the UIs, sessions and persistence: the local Debug
+HTTP API and the public Python Socket.IO app call the same Rust game service,
+through HTTP and PyO3 respectively. It reuses these engine and agent contracts.
 
 ## What makes sense
 

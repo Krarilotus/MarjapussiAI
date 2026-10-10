@@ -13,7 +13,8 @@ This is the question-complete implementation of 2026-10-09. See the
   Actual hidden hands are not an input to world evaluation.
 - The engine supplies card plays, self-announcements, questions and every
   truthful answer choice. Questions change only the asker's rights. Answers can
-  change trump, including restoring a called suit without scoring it twice.
+  establish trump only in a previously unannounced suit. A called suit cannot
+  become trump again.
 
 Exact search inside each exposed deal is not an exact hidden-information
 strategy: future choices can differ using cards the real player cannot see.
@@ -95,8 +96,8 @@ after every action; a cache hit does not freeze the player's information.
 The current guard suite compares compact transitions with `Game` across 5,000
 random games, search with plain exhaustive minimax across 2,300 small positions,
 and 150 endings with minimax over full `Game`. Other cases check cache-key
-separation, split-pair trump changes/restoration, hidden-card swaps, enumeration,
-and interruption followed by reuse of the same cache.
+separation, split-pair trump changes, the once-only announcement rule, hidden-card
+swaps, enumeration, and interruption followed by reuse of the same cache.
 
 Release measurements on the shared Ryzen 7800X3D PC: 20 fixed random-game
 decisions per hand size, uniform deal weights, open contracts, 64 worlds,

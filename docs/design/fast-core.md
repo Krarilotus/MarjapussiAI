@@ -19,8 +19,8 @@ Search and pruning belong to `solver`, not this engine module.
 | Game and series scores | `game_scores`, `SeriesTally` |
 
 Both `Game` and the compact state use the shared answer rules. A half answer
-changes trump only when the asker holds a counterpart. Previously called suits
-can be restored without awarding their pair points again.
+changes trump only when the asker holds a counterpart and the suit has not
+already been announced. A previously called suit cannot become trump again.
 
 ## State
 
