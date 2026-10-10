@@ -1,4 +1,4 @@
-//! Announcement timing: retain a specific own lead, or use the opportunity now.
+//! Announcement timing: preserve a concrete lead and activation route, or act now.
 //! Reach is the existing approximate longer-horizon activation model.
 
 use engine::Suit;
@@ -185,6 +185,32 @@ pub(crate) fn timing(ctx: &Ctx, legal: &[GameAction], reach: &Reach, val: &Valua
                     fact("retained_leads", count),
                     fact("attempts", attempts),
                 ],
+            ));
+        }
+    }
+    // A partner's own announcement can replace my question after a safe entry.
+    // Preserve partner's pairs and avoid protected own pair suits. Certify one
+    // specific winner, not separate sampled claims about winning the trick and
+    // keeping an announcement available.
+    let mate = partner(ctx.me);
+    if ctx.params.lead_cash_standing
+        && planned.action.action_type == ActionType::Question(QuestionType::Yours)
+        && ctx.k.rights(mate).may_announce()
+        && ctx.k.hand_len(mate) > 1
+    {
+        let entry = (cards - val.plan_cards)
+            .iter()
+            .filter_map(|c| {
+                let winners = ctx.k.partner_entry_winners(ctx.me, c) - CardSet::HALVES;
+                crate::leads::cash_card(winners, winners).map(|winner| (c, winner))
+            })
+            .min_by_key(|&(c, _)| (engine::CARD_POINTS[c as usize], c));
+        if let Some((c, winner)) = entry {
+            let a = find(legal, ActionType::CardPlayed(engine::Card::from_index(c)))?;
+            return Some(decision(
+                a,
+                RuleId::HC4,
+                vec![fact("partner_entry", winner), fact("partner_can_announce", 1)],
             ));
         }
     }

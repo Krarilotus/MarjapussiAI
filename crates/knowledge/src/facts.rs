@@ -196,6 +196,39 @@ impl Knowledge {
             .fold(CardSet::EMPTY, |set, c| set | CardSet::single(c))
     }
 
+    /// Known partner cards that can legally win after `seat` leads `card`,
+    /// whatever either opponent plays. The same winner works in every possible
+    /// hand; this is a sufficient fact, not a sampled trick-win probability.
+    /// The caller supplies a legal lead into an empty trick.
+    pub fn partner_entry_winners(&self, seat: Seat, card: u8) -> CardSet {
+        if !self.trick().is_empty() {
+            return CardSet::EMPTY;
+        }
+        let mate = partner(seat);
+        let [left, right] = opponents(seat);
+        let first = engine::is_first_trick(self.hand_len(seat) as usize);
+        let possible = self.may_hold(mate);
+        let right_known = self.certain(right);
+        self.standing(mate)
+            .iter()
+            .filter(|&winner| {
+                self.may_hold(left).iter().all(|l| {
+                    let trick = [card, l];
+                    let high = trick[engine::trick_winner(&trick, self.trump)];
+                    if !takes(winner, high, self.trump)
+                        || !(engine::play_levels(&trick, self.trump, first).excluded_by(winner) & possible).is_empty()
+                    {
+                        return false;
+                    }
+                    let levels = engine::play_levels(&[card, l, winner], self.trump, first);
+                    self.may_hold(right)
+                        .iter()
+                        .all(|r| !takes(r, winner, self.trump) || !(levels.excluded_by(r) & right_known).is_empty())
+                })
+            })
+            .fold(CardSet::EMPTY, |set, c| set | CardSet::single(c))
+    }
+
     /// K2: the seat's own pairs, certain and still meldable (uncalled, both halves live).
     pub fn pairs(&self, seat: Seat) -> Pairs {
         let mut p = Pairs::default();

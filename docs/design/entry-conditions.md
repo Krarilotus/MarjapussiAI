@@ -53,6 +53,11 @@ synthetic positions and counterexamples, not copied player records.
    run: without trump, retained own winners; under trump, the retained trump
    run plus at most one side winner, played first. Later side rounds can become
    ruffable. Cap opportunities before the final trick and reassess after play.
+   Before asking for partner's pair, also consider a lead to a specific known
+   partner winner. It must be legally playable and unbeatable against every
+   possible opponent reply, preserve partner's pair halves, and leave partner
+   an own-announcement right and another card. This certifies an available
+   entry; partner still chooses their play and subsequent announcement.
 3. Pair protection disappears when the counterpart/rights/remaining opportunity
    calculation gives zero activation value. Partner-held pairs also need a usable
    announcement or question route. Soft probabilities remain estimates.

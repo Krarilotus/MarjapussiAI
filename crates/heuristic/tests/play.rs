@@ -355,6 +355,69 @@ fn a_forced_partner_overtake_does_not_delay_my_announcement() {
     );
 }
 
+fn returned_entry(me: u8) -> Scene {
+    let seat = |offset| (me + offset) % 4;
+    let mut s = Scene::new(me, &["e-A", "e-8", "r-A", "r-6", "r-7", "r-8", "g-6", "g-7", "s-O"]);
+    s.auction(&[
+        (me, Some(120)),
+        (seat(1), None),
+        (seat(2), Some(130)),
+        (seat(3), None),
+        (me, Some(140)),
+        (seat(2), None),
+    ]);
+    s.pass(seat(2), me, Some(&["r-Z", "r-O", "e-Z", "e-O"]));
+    s.pass(me, seat(2), Some(&["s-O", "e-A", "e-Z", "e-O"]));
+    trick(
+        &mut s,
+        &[(me, "r-A"), (seat(1), "r-U"), (seat(2), "g-U"), (seat(3), "r-9")],
+    );
+    s
+}
+
+#[test]
+fn a_known_partner_entry_preserves_its_own_announcement_before_creating_trump() {
+    for me in 0..4 {
+        let s = returned_entry(me);
+        let d = s.act(&ask_legal(&s, &[], true));
+        assert_eq!((played(&d), d.rule), (Some(c("e-8")), RuleId::HC4), "{d:?}");
+        assert_eq!(fact(&d, "partner_entry"), Some(c("e-A") as f32));
+    }
+}
+
+#[test]
+fn a_partner_entry_does_not_replace_a_question_when_own_announcing_rights_are_spent() {
+    let mut s = returned_entry(0);
+    // An earlier partner question spends its self-announcement right, but I can
+    // still ask for its pair. Winning a trick does not restore that right.
+    s.ev(SeatEvent::AskPair { seat: 2 });
+    s.ev(SeatEvent::NoPair { seat: 0 });
+    let d = s.act(&ask_legal(&s, &[], true));
+    assert_eq!(d.action.action_type, ActionType::Question(QuestionType::Yours), "{d:?}");
+}
+
+#[test]
+fn an_entry_is_not_certified_through_a_possible_ruff_or_a_consumed_winner() {
+    let mut s = returned_entry(0);
+    assert!(s
+        .tracker
+        .knowledge()
+        .partner_entry_winners(0, c("e-8"))
+        .contains(c("e-A")));
+    s.ev(SeatEvent::AnnounceTrump {
+        seat: 2,
+        suit: Suit::Bells,
+    });
+    assert!(s.tracker.knowledge().partner_entry_winners(0, c("e-8")).is_empty());
+    let mut s = returned_entry(0);
+    trick(&mut s, &[(0, "e-8"), (1, "e-6"), (2, "e-A"), (3, "e-7")]);
+    assert!(!s
+        .tracker
+        .knowledge()
+        .partner_entry_winners(0, c("r-Z"))
+        .contains(c("e-A")));
+}
+
 #[test]
 fn an_established_trump_run_leaves_time_for_uncertain_questions() {
     let mut s = pass_game(0, &["r-A", "r-Z", "r-K", "r-O", "r-9", "r-8", "s-A", "e-6", "g-6"]);

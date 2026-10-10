@@ -91,7 +91,7 @@ rules! {
     HC1 "HC-1" Play 0 1 "[D]" "keep the halves of a reachable pair: meld × P(team holds it) × P(activation)";
     HC2 "HC-2" Play 1 1 "[D]" "announce or ask now unless enough own leads remain for the pending questions";
     HC3 "HC-3" Play 2 3 "[D]" "team activation-order plan";
-    HC4 "HC-4" Play 3 1 "[D]" "cash a legal side card that guarantees my own next lead";
+    HC4 "HC-4" Play 3 1 "[D]" "take a certified own or partner lead while preserving the announcement route";
     HC5 "HC-5" Play 4 1 "[D]" "several pairs: announce the most valuable first (v1 stand-in for the one most at risk)";
     HC6 "HC-6" Play 5 1 "[D]" "answering Yours with several pairs: name the one whose meld is most at risk (worth × P(not activated later))";
     HC7 "HC-7" Play 6 1 "[D]" "don't put an A or 10 into a trick the opponents win, unless forced (the future-trick value)";

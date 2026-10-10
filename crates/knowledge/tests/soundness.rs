@@ -42,6 +42,7 @@ struct Coverage {
     hidden_pass: u32,
     standing: u32,
     standing_trump: u32,
+    partner_entries: u32,
     dealt_certain: u32,
 }
 
@@ -172,6 +173,30 @@ fn check_facts(k: &knowledge::Knowledge, x: u8, game: &Game, seed: u64, cov: &mu
             && (truth(mate) & CardSet::suit(suit)).is_empty()
             && !(truth(mate) & CardSet::suit(t)).is_empty()));
     }
+    // A reported entry uses one fixed partner card against every legal defence.
+    // Verify with the engine on the true deal, independently of the certificate.
+    if x == k.me() && k.trick().is_empty() {
+        if let Some(state) = engine::FastState::from_game(game).filter(|s| s.to_move() == x) {
+            for lead in state.moves().filter_map(|m| match m {
+                engine::Move::Card(c) => Some(c),
+                _ => None,
+            }) {
+                for winner in k.partner_entry_winners(x, lead).iter() {
+                    let led = state.after(engine::Move::Card(lead));
+                    for left in led.moves() {
+                        let reply = led.after(left);
+                        let entry = engine::Move::Card(winner);
+                        assert!(reply.moves().any(|m| m == entry), "seed {seed}: illegal partner entry");
+                        let winning = reply.after(entry);
+                        for right in winning.moves() {
+                            assert_eq!(winning.after(right).leader(), mate, "seed {seed}: beaten partner entry");
+                        }
+                    }
+                    cov.partner_entries += 1;
+                }
+            }
+        }
+    }
 }
 
 /// Knowledge facts as (certain cards of others at the last trick, events checked).
@@ -278,8 +303,9 @@ fn knowledge_is_sound_in_random_games() {
         assert!(n >= 50, "too little coverage of {name}: {n}");
     }
     eprintln!(
-        "facts: {} standing cards checked ({} trumps), {} dealt cards known beyond the current hands",
-        cov.standing, cov.standing_trump, cov.dealt_certain
+        "facts: {} standing cards checked ({} trumps), {} dealt cards known beyond the current hands, {} partner entries",
+        cov.standing, cov.standing_trump, cov.dealt_certain, cov.partner_entries
     );
     assert!(cov.standing_trump >= 50 && cov.dealt_certain >= 50);
+    assert!(cov.partner_entries >= 50);
 }
