@@ -42,7 +42,7 @@ def main():
     parser.add_argument("--worked-example", type=Path,
                         help="Optional private worked-example narrative; remains outside the repository")
     parser.add_argument("--runtime-graph", type=Path,
-                        help="Graph exported by the executable value evaluator")
+                        help="Graph exported by reasoning_graph: evaluator fixture or captured runtime decision")
     args = parser.parse_args()
     docs = Path(__file__).resolve().parents[1]
     output = args.output.resolve()
@@ -63,9 +63,22 @@ def main():
         (output / target).write_text(text, encoding="utf-8", newline="\n")
         contents[target] = text
     model = json.loads(contents["reasoning-graph.json"])
+    runtime_note = "No runtime capture is included."
     if args.runtime_graph:
         runtime = json.loads(args.runtime_graph.read_text(encoding="utf-8"))
+        if runtime.get("schema") != model["schema"]:
+            raise ValueError("Runtime graph schema does not match the review graph")
         model["views"].extend(runtime["views"])
+        if runtime.get("evidence_kind") == "captured_runtime_projection":
+            runtime_note = (
+                "The captured view projects supplied runtime evidence; evaluator dependencies, "
+                "authored-definition references and continuation provenance are distinguished. "
+                "Capture identity and limits are in its inspector; the run manifest supplies policy provenance."
+            )
+        elif runtime.get("evidence_kind") == "synthetic_capture_fixture":
+            runtime_note = "The captured-schema view is a synthetic structural fixture, not policy execution evidence."
+        else:
+            runtime_note = "The implemented value view evaluates an illustrative terminal fixture, not live policy execution."
         (output / "reasoning-graph.json").write_text(
             json.dumps(model, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     validate_graph(model)
@@ -93,10 +106,10 @@ def main():
         "@@MODEL@@": json.dumps(model, ensure_ascii=False).replace("</", "<\\/"),
         "@@SCRIPT@@": (docs / "assets" / "reasoning-review.js").read_text(encoding="utf-8"),
         "@@VALIDATION@@": (
-            "Review-only · source 8ea7a6a · 11 October 2026. "
+            f"Review-only · proposal source {html.escape(model.get('source_revision', 'unrecorded'))} · 11 October 2026. "
             "The worked example distinguishes retained replay evidence from illustrative beliefs. "
-            "The implemented value view is exported from runtime evaluation on a synthetic fixture. "
-            "The trick-continuation graph remains a proposal; no deployment or playing-strength result is claimed."
+            f"{runtime_note} "
+            "The Proposed view remains a design proposal; no deployment or playing-strength result is claimed."
         ),
     }
     for token, replacement in fields.items():

@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::io::Write as _;
 
 use eval::{deal, Table};
 use heuristic::HeuristicAgent;
@@ -27,12 +28,22 @@ fn main() {
             "--params",
             "--profile-out",
             "--timings-out",
+            "--decisions-out",
         ],
         &[],
     );
     let (games, repeat) = (cli.get("--games", 2_000u64), cli.get("--repeat", 3usize));
     let out = cli.str("--out").unwrap_or_default().to_string();
     let params = cli.params("--params");
+    let mut decisions = cli.str("--decisions-out").map(|path| {
+        std::io::BufWriter::new(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .expect("create a new decisions output"),
+        )
+    });
     // Per phase, the best (lowest) mean over the repeats, and p99/max of that run.
     let mut best: BTreeMap<&'static str, (f64, f64, f64, usize)> = BTreeMap::new();
     #[cfg(feature = "profile")]
@@ -58,6 +69,26 @@ fn main() {
                 let d = players[seat as usize].decide(&view, legal);
                 let ns = t0.elapsed().as_nanos() as u64;
                 times.entry(phase).or_default().push(ns);
+                if let Some(writer) = decisions.as_mut() {
+                    let raising = table.game.state.phase == engine::GamePhase::Raising;
+                    let assessment = tools::selfplay::decision_assessment_json(
+                        players[seat as usize].last_assessment(),
+                        players[seat as usize].last_sequence(),
+                        raising,
+                    );
+                    serde_json::to_writer(
+                        &mut *writer,
+                        &serde_json::json!({
+                            "repeat": r, "game_seed": seed, "decision": decision_index,
+                            "seat": seat, "event_count": view.events.len(),
+                            "phase": phase, "nanoseconds": ns,
+                            "action": tools::record::action_json(&d.action, raising),
+                            "assessment": assessment,
+                        }),
+                    )
+                    .expect("write decision evidence");
+                    writeln!(writer).expect("write decision separator");
+                }
                 if cli.str("--timings-out").is_some() {
                     let assessment = players[seat as usize].last_assessment();
                     let sequence = players[seat as usize].last_sequence();
@@ -71,9 +102,14 @@ fn main() {
                             "mode": format!("{:?}", s.mode), "failure": s.failure.map(|e| format!("{e:?}")),
                             "transitions": s.work.transitions, "represented_transitions": s.work.represented_transitions,
                             "comparisons": s.work.comparisons, "represented_comparisons": s.work.represented_comparisons,
+                            "actual_solver_nodes": s.work.actual_solver_nodes,
+                            "represented_solver_nodes": s.work.represented_solver_nodes,
                             "completed_candidates": s.work.completed_candidates,
                             "response_calls": s.work.response_calls, "response_hits": s.work.response_hits,
                             "suffix_hits": s.work.suffix_hits, "retained_bytes": s.work.retained_bytes,
+                            "total_candidates": s.total_candidates,
+                            "deferred_limit": s.deferred_limit.map(|limit| format!("{limit:?}")),
+                            "deferred_limit_detail": s.deferred_limit.map(tools::selfplay::deferred_limit_json),
                         })),
                         "assessment": assessment.map(|a| serde_json::json!({
                             "evaluated_nodes": a.values.evaluated_nodes,
@@ -148,6 +184,9 @@ fn main() {
                 std::fs::write(&out, &log).expect("write --out");
             }
         }
+    }
+    if let Some(writer) = decisions.as_mut() {
+        writer.flush().expect("flush decision evidence");
     }
     println!("{games} games of 4×HP1, best of {repeat} runs (PC shared with other projects)");
     println!("| phase | decisions | mean µs | p99 µs | max µs |");

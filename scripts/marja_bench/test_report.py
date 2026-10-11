@@ -209,6 +209,49 @@ class ReportTest(unittest.TestCase):
         self.assertIsNone(paired["completion_rate"])
         self.assertEqual(paired["recorded_decisions"], 1)
 
+    def test_solver_effort_keeps_hits_failures_zeros_and_missing_counters_distinct(self):
+        row = game(0)
+        base = row["decisions"][0]
+        large = 2**63 + 1  # Keep u64 counters exact; never round through float.
+        decisions = []
+        for mode, work in (
+                ("formation", {"actual_solver_nodes": large, "represented_solver_nodes": large,
+                               "comparisons": 1, "represented_comparisons": 2}),
+                ("prepared", {"actual_solver_nodes": 0, "represented_solver_nodes": large + 7,
+                              "response_hits": 1}),
+                ("deferred", {"actual_solver_nodes": 3, "represented_solver_nodes": 3}),
+                ("deferred", {}),
+                ("deferred", {"actual_solver_nodes": True, "represented_solver_nodes": -1})):
+            d = copy.deepcopy(base)
+            d["assessment"] = {"value_assessment_present": False, "extensions": {"sequence": {
+                "mode": mode, "work": work, "failure": {"kind": "budget"} if mode == "deferred" else None}}}
+            decisions.append(d)
+        row["decisions"] = decisions + row["decisions"][1:]
+        original = copy.deepcopy(row)
+        compact = compact_game(row)
+        # Persisted compact inputs from before this API do not contain new keys.
+        legacy = copy.deepcopy(compact["decisions"][3])
+        for key in ("actual_solver_nodes", "represented_solver_nodes", "represented_comparisons"):
+            del legacy["sequence"]["work"][key]
+        compact["decisions"].append(legacy)
+        row["decisions"].append(legacy)
+        manifest = {"policies": ["a", "b", "c", "d"], "games": 1, "workers": 1}
+        report = summarize([compact], manifest)
+        self.assertEqual(report, summarize([row], manifest))
+        sequence = report["slots"][0]["sequences"]
+        actual, represented = sequence["actual_work"]["solver_nodes"], sequence["represented_work"]["solver_nodes"]
+        self.assertEqual(actual, {"recorded_decisions": 3, "missing_decisions": 3,
+                                 "invalid_decisions": 1, "total": large + 3})
+        self.assertEqual(represented["total"], 2 * large + 10)
+        self.assertEqual(represented["recorded_decisions"], 3)
+        self.assertEqual(represented["invalid_decisions"], 1)
+        self.assertEqual(sequence["represented_work"]["comparisons"]["total"], 2)
+        self.assertEqual(report["slots"][0]["assessments"]["completed_assessments"], 0)
+        self.assertEqual(compact["decisions"][1]["sequence"]["work"]["actual_solver_nodes"], 0)
+        self.assertIn("Actual canonical solver nodes", markdown(report))
+        self.assertIn("not wall time, total CPU", markdown(report))
+        self.assertEqual(original["decisions"], row["decisions"][:-1], "compaction must not mutate raw evidence")
+
     def test_rotations_preserve_team_and_individual_attribution(self):
         rows = [game(i, raised=True) for i in range(8)]
         report = summarize(rows, {"policies": ["a", "b", "c", "d"], "games": 8, "workers": 2})

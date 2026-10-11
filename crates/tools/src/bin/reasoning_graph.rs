@@ -2,6 +2,7 @@
 //! Default: one candidate with two weighted synthetic terminals (compact recipe).
 //! --compare: include a second synthetic candidate and its complete dependencies.
 //! Neither mode executes a policy or claims a live decision/continuation.
+//! --capture PATH [--index GAME --step STEP] projects an existing runtime capture.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
@@ -11,6 +12,9 @@ use heuristic::value_concepts::{
     Assessment, CohortMethod, EvaluatedNode, NodeId, NodeValue, Operator, Provenance, ResultMeaning, ValueStore,
 };
 use serde_json::{json, Value};
+
+#[path = "reasoning_graph/capture.rs"]
+mod capture;
 
 fn node_id(reference: NodeId) -> String {
     format!("value-runtime-{}", reference.0)
@@ -219,13 +223,7 @@ fn terminal(team: Option<u8>, points: [i32; 2]) -> GameOutcome {
     }
 }
 
-fn run() -> Result<(), String> {
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    let compare = match args.as_slice() {
-        [] => false,
-        [flag] if flag == "--compare" => true,
-        _ => return Err("usage: reasoning_graph [--compare] (stdout JSON only)".into()),
-    };
+fn synthetic_graph(compare: bool) -> Result<Value, String> {
     let first = [
         (terminal(Some(0), [130, 10]), 0.25),
         (terminal(Some(1), [100, 40]), 0.75),
@@ -259,7 +257,7 @@ fn run() -> Result<(), String> {
     let reachable = assessment_closure(&assessment);
     let export =
         |node: &EvaluatedNode| exported_node(node, uses.get(&node.reference).map(Vec::as_slice).unwrap_or(&[]));
-    let graph = json!({
+    Ok(json!({
         "schema": 1, "source_revision": "runtime definitions",
         "status": "Actual executable ValueStore trace; illustrative fixture, not a live policy trace",
         "views": [{
@@ -281,7 +279,21 @@ fn run() -> Result<(), String> {
                 "selected": assessment.selected, "alternative": assessment.alternative,
             }
         }]
-    });
+    }))
+}
+
+fn run() -> Result<(), String> {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let graph =
+        match args.as_slice() {
+            [] => synthetic_graph(false)?,
+            [flag] if flag == "--compare" => synthetic_graph(true)?,
+            [flag, rest @ ..] if flag == "--capture" => capture::from_args(rest)?,
+            _ => return Err(
+                "usage: reasoning_graph [--compare] | --capture PATH [--index GAME] [--step STEP] (stdout JSON only)"
+                    .into(),
+            ),
+        };
     let mut stdout = io::BufWriter::new(io::stdout().lock());
     serde_json::to_writer(&mut stdout, &graph).map_err(|error| format!("JSON output: {error}"))?;
     writeln!(stdout)

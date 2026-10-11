@@ -1,5 +1,7 @@
 //! Four fixed policy slots, whole-deal worker shards, and one complete NDJSON game at a time.
 
+pub mod recording;
+
 use std::{
     cell::RefCell,
     collections::VecDeque,
@@ -29,6 +31,29 @@ use crate::{
 };
 
 pub const SCHEMA: &str = "marjapussi.selfplay/1";
+
+/// Canonical response-solver counters do not measure the policy's total CPU work.
+pub const SEQUENCE_SOLVER_EFFORT_MEANING: &str = "Canonical response-solver search nodes: actual_solver_nodes counts attempted callbacks including failures; represented_solver_nodes also charges completed memo hits. These are algorithm-specific effort, not wall time, total CPU, complete policy work or value-graph node counts.";
+
+/// Structured recorded stopping reason; this does not reconstruct the full Limits.
+pub fn deferred_limit_json(limit: heuristic::sequence_evaluation::DeferredLimit) -> Value {
+    use heuristic::sequence_evaluation::DeferredLimit;
+    match limit {
+        DeferredLimit::Deadline => json!({"kind": "deadline"}),
+        DeferredLimit::RepresentedTransitions { required, remaining } =>
+            json!({"kind": "represented_transitions", "required": required, "remaining": remaining}),
+        DeferredLimit::RepresentedComparisons { required, remaining } =>
+            json!({"kind": "represented_comparisons", "required": required, "remaining": remaining}),
+        DeferredLimit::RepresentedSolverNodes { required, remaining } =>
+            json!({"kind": "represented_solver_nodes", "required": required, "remaining": remaining}),
+        DeferredLimit::SolverAccountingOverflow => json!({"kind": "solver_accounting_overflow"}),
+        DeferredLimit::LeafUnavailable { actor } => json!({"kind": "leaf_unavailable", "actor": actor}),
+        DeferredLimit::FiniteContinuation { max_steps } =>
+            json!({"kind": "finite_continuation", "max_steps": max_steps}),
+        DeferredLimit::Reconsideration { remaining } => json!({"kind": "reconsideration", "remaining": remaining}),
+        DeferredLimit::AuthoredGate => json!({"kind": "authored_gate"}),
+    }
+}
 
 /// A registered policy. The factory receives a deal/slot-derived stream seed and physical
 /// seat. It is called afresh for every game; true-hand diagnostics never reach the factory.
@@ -237,6 +262,7 @@ fn actions_json(actions: &Actions) -> Value {
     match actions {
         Actions::Exact(kind) => json!({"operator": "exact_action_type",
             "action_type": kind}),
+        Actions::Raises => json!({"operator": "all_legal_raises"}),
         Actions::Cards(cards) => json!({"operator": "legal_cards", "cards": cards_json(*cards)}),
         Actions::Standing(cards) => json!({"operator": "known_team_winning_legal_cards",
             "cards": cards_json(*cards), "limit": "does not prove this seat keeps the lead"}),
@@ -264,6 +290,8 @@ fn guard_json(guard: &Guard) -> Value {
             "given": query.given.iter().map(literal).collect::<Vec<_>>()})
     };
     match guard {
+        Guard::PlayReady => json!({"operator": "play_ready",
+            "meaning": "observer has an actual legal card, question, announcement or answer action"}),
         Guard::OwnLead => json!({"operator": "own_lead"}),
         Guard::Leader(seat) => json!({"operator": "leader", "seat": seat}),
         Guard::Trump(suit) => json!({"operator": "trump", "suit": suit.code().to_string()}),
@@ -325,7 +353,20 @@ impl<'a> SequenceJson<'a> {
                 },
                 "source_program_stages": stages.iter().map(|s| s.0).collect::<Vec<_>>(),
                 "limit": "source stage indices are not remapped suffix node IDs"}),
+            ReadMeaning::Response { next } => json!({"kind": "response_transition",
+                "next_nodeId": match read.suffix.nodes.get(read.suffix.start.0) {
+                    Some(Node::Response { next }) => Some(format!("{}/{}", program["id"].as_str().unwrap(), next.0)),
+                    _ => None,
+                },
+                "next_source_stage": next.0,
+                "limit": "source stage index is not a remapped suffix node ID; one modeled response, not a terminal tail"}),
+            ReadMeaning::Deferred => json!({"kind": "deferred",
+                "meaning": "authored bound exhausted; no response tail or completed value implied"}),
             ReadMeaning::ResponseLeaf => json!({"kind": "response_leaf"}),
+            ReadMeaning::Reconsider { remaining, retained } => json!({
+                "kind": "reconsider", "remaining": remaining,
+                "retained_source_stage": retained.0,
+            }),
         };
         json!({"information": information, "program": program, "nodeId": program["nodeId"], "reading": reading})
     }
@@ -341,7 +382,12 @@ impl<'a> SequenceJson<'a> {
                         "predicate": guard_json(predicate), "yes": id(yes.0), "no": id(no.0), "unknown": id(unknown.0)}),
                     Node::Choice(alternatives) => json!({"operator": "value_comparison",
                         "alternatives": alternatives.iter().map(|s| id(s.0)).collect::<Vec<_>>()}),
+                    Node::Response { next } => json!({"operator": "response_transition", "next": id(next.0)}),
+                    Node::Deferred => json!({"operator": "deferred"}),
                     Node::Tail => json!({"operator": "response_leaf"}),
+                    Node::Reconsider { remaining, retained } => json!({
+                        "operator": "reconsider", "remaining": remaining, "retained": id(retained.0),
+                    }),
                 };
                 json!({"nodeId": id(stage), "definition": definition})
             }).collect();
@@ -434,8 +480,12 @@ pub fn sequence_json(trace: &SequenceTrace, value_assessment: Option<&PlanningAs
         "choices": choices, "terminals": terminals,
         "work": {"transitions": work.transitions, "represented_transitions": work.represented_transitions,
             "comparisons": work.comparisons, "represented_comparisons": work.represented_comparisons, "response_calls": work.response_calls,
+            "actual_solver_nodes": work.actual_solver_nodes, "represented_solver_nodes": work.represented_solver_nodes,
             "response_hits": work.response_hits, "suffix_hits": work.suffix_hits,
-            "retained_bytes": work.retained_bytes, "completed_candidates": work.completed_candidates},
+            "retained_bytes": work.retained_bytes, "completed_candidates": work.completed_candidates,
+            "total_candidates": trace.total_candidates,
+            "deferred_limit": trace.deferred_limit.map(|limit| format!("{limit:?}")),
+            "deferred_limit_detail": trace.deferred_limit.map(deferred_limit_json)},
         "failure": trace.failure.map(|reason| json!({"kind": match reason {
             heuristic::sequence_concepts::SequenceError::InvalidProgram => "invalid_program",
             heuristic::sequence_concepts::SequenceError::HistoryChanged => "history_changed",
@@ -451,20 +501,34 @@ pub fn sequence_json(trace: &SequenceTrace, value_assessment: Option<&PlanningAs
         "limits": "only recorded observer projections and evaluated choices; absence is not proof; no live posterior recomputation"})
 }
 
-fn captured_json(capture: &CapturedDecision, raising: bool) -> Option<Value> {
-    let mut assessment = capture.assessment.as_ref().map(|a| assessment_json(a, raising));
-    if let Some(sequence) = &capture.sequence {
+/// One serialization path for benchmark, replay and performance diagnostics.
+/// Both inputs must be the results of the same already-completed policy call.
+pub fn decision_assessment_json(
+    value: Option<&PlanningAssessment>,
+    sequence: Option<&SequenceTrace>,
+    raising: bool,
+) -> Option<Value> {
+    let mut assessment = value.map(|a| assessment_json(a, raising));
+    if let Some(sequence) = sequence {
         let envelope = assessment.get_or_insert_with(|| {
             json!({
                 "schema": "marjapussi.planning-assessment/1", "value_assessment_present": false, "extensions": {},
             })
         });
-        let mut serialized = sequence_json(sequence, capture.assessment.as_ref());
-        serialized["identity"] = json!({"seat": capture.seat, "event_count": capture.event_count,
-            "action": action_json(&capture.action, raising)});
-        envelope["extensions"]["sequence"] = serialized;
+        envelope["extensions"]["sequence"] = sequence_json(sequence, value);
     }
     assessment
+}
+
+fn captured_json(capture: &CapturedDecision, raising: bool) -> Option<Value> {
+    let mut result = decision_assessment_json(capture.assessment.as_ref(), capture.sequence.as_ref(), raising)?;
+    if capture.sequence.is_some() {
+        result["extensions"]["sequence"]["identity"] = json!({
+            "seat": capture.seat, "event_count": capture.event_count,
+            "action": action_json(&capture.action, raising),
+        });
+    }
+    Some(result)
 }
 
 fn hp1(name: &str, params: Params, recorder: Option<AssessmentRecorder>) -> Policy {
@@ -1192,6 +1256,8 @@ mod tests {
             terminals: Default::default(),
             work: Default::default(),
             failure: None,
+            deferred_limit: None,
+            total_candidates: None,
         };
         let sequence = sequence_json(&sequence, Some(&assessment));
         assert_eq!(sequence["value_nodeId"], row["nodeId"]);
@@ -1303,8 +1369,58 @@ mod tests {
             terminals: Default::default(),
             work: Default::default(),
             failure: None,
+            deferred_limit: None,
+            total_candidates: None,
         };
         (table, trace, action)
+    }
+
+    #[test]
+    fn response_read_uses_remapped_suffix_ref_and_keeps_exhaustion_distinct() {
+        use heuristic::sequence_concepts::{Program, Stage};
+        let (_, trace, _) = sequence_fixture();
+        let program = Program {
+            name: "serializer-only-response-gate", version: 1, start: Stage(4),
+            nodes: vec![
+                Node::Tail, Node::Deferred,
+                Node::Choice(vec![Stage(0), Stage(1)]), // Unreachable source node, removed from suffix.
+                Node::Guard { predicate: Guard::PlayReady, yes: Stage(0), no: Stage(1), unknown: Stage(1) },
+                Node::Response { next: Stage(3) },
+            ],
+        };
+        let read = Consumed {
+            information: trace.information, suffix: program.suffix(program.start).unwrap(),
+            reading: ReadMeaning::Response { next: Stage(3) },
+        };
+        let mut refs = SequenceJson::default();
+        let consumed = refs.consumed(&read);
+        let programs = refs.programs_json();
+        let nodes = programs[0]["nodes"].as_array().unwrap();
+        let response = nodes.iter().find(|n| n["definition"]["operator"] == "response_transition").unwrap();
+        let guard = nodes.iter().find(|n| n["definition"]["operator"] == "guard").unwrap();
+        assert_eq!(consumed["nodeId"], response["nodeId"]);
+        assert_eq!(consumed["reading"]["next_nodeId"], guard["nodeId"]);
+        assert_eq!(consumed["reading"]["next_source_stage"], 3);
+        assert_eq!(guard["nodeId"], "sequence/program/0/2");
+        assert_eq!(guard["definition"]["predicate"]["operator"], "play_ready");
+        assert_eq!(response["definition"]["next"], guard["nodeId"]);
+        assert_eq!(nodes.iter().filter(|n| n["definition"]["operator"] == "deferred").count(), 1);
+        assert_eq!(nodes.iter().filter(|n| n["definition"]["operator"] == "response_leaf").count(), 1);
+        let exhausted = Consumed {
+            information: read.information.clone(),
+            suffix: program.suffix(Stage(1)).unwrap(), reading: ReadMeaning::Deferred,
+        };
+        assert_eq!(refs.consumed(&exhausted)["reading"]["kind"], "deferred");
+    }
+
+    #[test]
+    fn exact_preplay_bindings_preserve_stop_and_all_four_pass_cards() {
+        let cards = [0, 8, 17, 35].map(engine::Card::from_index);
+        let pass = actions_json(&Actions::Exact(engine::ActionType::Pass(cards)));
+        assert_eq!(pass["operator"], "exact_action_type");
+        assert_eq!(pass["action_type"]["Pass"], json!(cards));
+        assert_eq!(pass["action_type"]["Pass"].as_array().unwrap().len(), 4);
+        assert_eq!(actions_json(&Actions::Exact(engine::ActionType::StopBidding))["action_type"], "StopBidding");
     }
 
     #[test]
@@ -1365,6 +1481,32 @@ mod tests {
     }
 
     #[test]
+    fn solver_effort_serialization_retains_u64_and_typed_deferral_without_cpu_claims() {
+        use heuristic::sequence_evaluation::DeferredLimit;
+        let (_, mut trace, _) = sequence_fixture();
+        trace.work.actual_solver_nodes = 3;
+        trace.work.represented_solver_nodes = u64::MAX;
+        trace.work.represented_comparisons = 5;
+        trace.mode = PlanMode::Deferred;
+        trace.deferred_limit = Some(DeferredLimit::RepresentedSolverNodes { required: u64::MAX, remaining: 7 });
+        let row = sequence_json(&trace, None);
+        assert_eq!(row["work"]["actual_solver_nodes"].as_u64(), Some(3));
+        assert_eq!(row["work"]["represented_solver_nodes"].as_u64(), Some(u64::MAX));
+        assert_eq!(row["work"]["represented_comparisons"], 5);
+        assert_eq!(row["work"]["deferred_limit_detail"]["required"].as_u64(), Some(u64::MAX));
+        assert_eq!(row["work"]["deferred_limit_detail"]["remaining"], 7);
+        assert!(row["work"].get("solver_node_limit").is_none(), "configured Limits are not in SequenceTrace");
+        assert!(row["terminals"].as_array().unwrap().is_empty());
+        assert_eq!(deferred_limit_json(DeferredLimit::SolverAccountingOverflow)["kind"], "solver_accounting_overflow");
+        assert_eq!(deferred_limit_json(DeferredLimit::AuthoredGate)["kind"], "authored_gate");
+        trace.work.actual_solver_nodes = 0;
+        trace.deferred_limit = None;
+        let row = sequence_json(&trace, None);
+        assert_eq!(row["work"]["actual_solver_nodes"], 0);
+        assert!(row["work"]["deferred_limit_detail"].is_null());
+    }
+
+    #[test]
     fn terminal_serialization_keeps_engine_tricks_points_resources_and_work_without_replanning() {
         use heuristic::sequence_evaluation::{Terminal, TrickOutcome};
         let (mut table, mut trace, action) = sequence_fixture();
@@ -1412,6 +1554,7 @@ mod tests {
             consumed: Vec::new(),
             interrupted: false,
             first: None,
+            first_program: None,
         }]);
         trace.work.transitions = 36;
         trace.work.represented_transitions = 72;

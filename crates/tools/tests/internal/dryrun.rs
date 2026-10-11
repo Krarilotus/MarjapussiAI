@@ -219,7 +219,7 @@ fn old_focal_action_and_partnership_are_separate_and_notes_align() {
     let policies = registry();
     for replacement in ["action", "seat", "partnership"] {
         let o = options(&["--mode", "continue", "--replacement", replacement]);
-        let result = continuation(&f, 0, 2, &policies, &o).unwrap();
+        let result = continuation(&f, 0, 2, &policies, &o, None).unwrap();
         assert_eq!(result["candidate_seat"], 0);
         assert_eq!(result["candidate_team"], 0);
         let decisions = result["decisions"].as_array().unwrap();
@@ -266,7 +266,7 @@ fn teacher_is_fresh_seed_zero_and_all_steps_include_unchanged_choices() {
         }),
     };
     for step in [0, 1] {
-        let result = teacher(&f, step, &policy).unwrap();
+        let result = teacher(&f, step, &policy, None).unwrap();
         assert!(result["first_divergence"].is_null());
         assert!(result["outcome"].is_null());
     }
@@ -291,7 +291,7 @@ fn full_mode_replaces_explicit_recorded_old_team_and_ignores_prefix_filters() {
     ]);
     assert_eq!(o.steps_for(&f).unwrap(), [0]);
     assert_eq!(target_seat(&f, 0, &o), 0);
-    let result = continuation(&f, 0, 2, &registry(), &o).unwrap();
+    let result = continuation(&f, 0, 2, &registry(), &o, None).unwrap();
     assert_eq!(
         result["record"]["players"],
         json!(["candidate", "new", "candidate", "new"])
@@ -382,4 +382,95 @@ fn all_pass_scoring_and_contract_schwarz_remain_engine_owned() {
             stats.card_points[1] + stats.pair_points[1]
         ]
     );
+}
+
+fn recorded_policy(recorder: AssessmentRecorder, calls: Rc<RefCell<usize>>) -> Policy {
+    struct Counted {
+        actual: Box<dyn Agent>,
+        calls: Rc<RefCell<usize>>,
+    }
+    impl Agent for Counted {
+        fn act(&mut self, view: &SeatView, legal: &[GameAction]) -> Decision {
+            *self.calls.borrow_mut() += 1;
+            self.actual.act(view, legal)
+        }
+        fn kind(&self) -> SeatKind {
+            self.actual.kind()
+        }
+    }
+    Policy {
+        name: "candidate".into(),
+        parameters: "current fast; tool recording".into(),
+        make: Box::new(move |seed, _| {
+            let params = heuristic::Params {
+                seed,
+                plan_worlds: 0,
+                return_worlds: 0,
+                endgame_tricks: 0,
+                ..Default::default()
+            };
+            let actual = crate::selfplay::record_current(heuristic::HeuristicAgent::new(params), recorder.clone());
+            Box::new(Counted {
+                actual,
+                calls: calls.clone(),
+            })
+        }),
+    }
+}
+
+#[test]
+fn teacher_records_the_same_call_once_and_rejects_leftover_evidence_before_calling() {
+    let f = fixture(0);
+    let recorder = AssessmentRecorder::default();
+    let calls = Rc::new(RefCell::new(0));
+    let policy = recorded_policy(recorder.clone(), calls.clone());
+    let result = teacher(&f, 0, &policy, Some(&recorder)).unwrap();
+    assert_eq!(*calls.borrow(), 1);
+    let row = &result["decisions"][0];
+    assert_eq!(row["assessment_recorded"], true);
+    assert!(row["capture_ms"].is_number());
+    assert!(row["assessment_serialization_ms"].is_number());
+    assert_eq!(
+        row["event_count"],
+        f.prefix(0).unwrap().view(f.actions[0].player.0).events.len()
+    );
+    recorder.ensure_empty().unwrap();
+    let table = f.prefix(0).unwrap();
+    let (seat, legal) = table.to_act().unwrap();
+    let mut actual = (policy.make)(0, seat);
+    actual.act(&table.view(seat), legal); // Deliberately leave one same-context record queued.
+    assert_eq!(*calls.borrow(), 2);
+    assert!(teacher(&f, 0, &policy, Some(&recorder))
+        .unwrap_err()
+        .contains("boundary"));
+    assert_eq!(*calls.borrow(), 2); // No replay or extra policy call to reconstruct evidence.
+}
+
+#[test]
+fn continue_and_full_capture_only_instrumented_actual_calls_with_correct_action_override() {
+    let f = fixture(0);
+    for (mode, replacement, prefix) in [("continue", "action", 1), ("full", "partnership", 0)] {
+        let recorder = AssessmentRecorder::default();
+        let calls = Rc::new(RefCell::new(0));
+        let mut policies = registry();
+        policies[2] = recorded_policy(recorder.clone(), calls.clone());
+        let options = options(&["--mode", mode, "--replacement", replacement]);
+        let result = continuation(&f, prefix, 2, &policies, &options, Some(&recorder)).unwrap();
+        let rows = result["decisions"].as_array().unwrap();
+        let recorded = rows.iter().filter(|row| row["assessment_recorded"] == true).count();
+        assert_eq!(recorded, *calls.borrow());
+        assert!(recorded > 0);
+        for row in rows {
+            assert_eq!(row["assessment_recorded"], row["policy"] == "candidate");
+            if row["policy"] != "candidate" {
+                assert!(row["assessment"].is_null());
+                assert_eq!(row["value_assessment_present"], false);
+                assert_eq!(row["sequence_present"], false);
+            }
+        }
+        if replacement == "action" {
+            assert_eq!(recorded, 1);
+        }
+        recorder.ensure_empty().unwrap();
+    }
 }

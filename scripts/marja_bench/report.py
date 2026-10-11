@@ -10,9 +10,16 @@ import statistics
 
 
 SEQUENCE_MODES = ("formation", "repair", "prepared", "retry", "deferred")
-SEQUENCE_COUNTERS = ("transitions", "represented_transitions", "comparisons", "response_calls",
+SEQUENCE_COUNTERS = ("transitions", "represented_transitions", "comparisons", "represented_comparisons",
+                     "actual_solver_nodes", "represented_solver_nodes", "response_calls",
                      "response_hits", "suffix_hits", "retained_bytes", "completed_candidates",
                      "attempted_candidates", "total_candidates")
+
+SOLVER_EFFORT_MEANING = (
+    "Canonical response-solver search nodes: actual counts attempted callbacks including failures; "
+    "represented also charges completed memo hits. Algorithm-specific effort, not wall time, total CPU, "
+    "complete policy work or value-graph node counts. The configured optional solver-node ceiling is not recorded."
+)
 
 
 def value_assessment_presence(decision):
@@ -161,7 +168,9 @@ def sequence_metrics(decisions):
     present = sum(compact_sequence(d) is not None or d.get("sequence_present") is True for d in decisions)
 
     def counter(key, memory=False):
-        values = [r["work"][key] for r in records if r["work"][key] is not None]
+        # Older compact records predate new counters: absence remains missing,
+        # rather than zero or a reconstruction from hits/elapsed time.
+        values = [r["work"][key] for r in records if r["work"].get(key) is not None]
         result = {"recorded_decisions": len(values), "missing_decisions": present - len(values),
                   "invalid_decisions": sum(key in r["invalid_work_fields"] for r in records)}
         if memory:
@@ -189,8 +198,12 @@ def sequence_metrics(decisions):
             "paired_completed_attempted": {"recorded_decisions": len(paired), "completed": completed,
                                            "attempted": attempted, "consistent": consistent if paired else None,
                                            "completion_rate": ratio(completed, attempted) if consistent else None},
-            "actual_work": {key: counter(key) for key in ("transitions", "comparisons", "response_calls")},
-            "represented_work": {"transitions": counter("represented_transitions")},
+            "actual_work": {**{key: counter(key) for key in ("transitions", "comparisons", "response_calls")},
+                            "solver_nodes": counter("actual_solver_nodes")},
+            "represented_work": {"transitions": counter("represented_transitions"),
+                                 "comparisons": counter("represented_comparisons"),
+                                 "solver_nodes": counter("represented_solver_nodes")},
+            "solver_effort_meaning": SOLVER_EFFORT_MEANING,
             "reuse": {key: counter(key) for key in ("response_hits", "suffix_hits")},
             "retained_memory": counter("retained_bytes", memory=True)}
 
@@ -408,8 +421,8 @@ def markdown(report):
                      " | ".join(str(modes[m]) for m in SEQUENCE_MODES) + f" | {sequence['mode_unknown_decisions']} |")
     lines += ["", "A sequence-only prepared/retry step does not count as a newly completed value ranking. "
               "Counts describe exported evidence, not absence of internal reasoning in uninstrumented policies.", "",
-              "| Slot / policy | Completed candidates | Attempted candidates | Total candidates | Executed transitions | Represented transitions |",
-              "|---|---:|---:|---:|---:|---:|---:|"]
+              "| Slot / policy | Completed candidates | Attempted candidates | Total candidates | Executed transitions | Represented transitions | Actual canonical solver nodes | Represented canonical solver nodes |",
+              "|---|---:|---:|---:|---:|---:|---:|---:|"]
 
     def observed(counter):
         value = counter["total"]
@@ -422,10 +435,12 @@ def markdown(report):
         counts = sequence["candidate_counts"]
         cells = [counts[k] for k in ("completed_candidates", "attempted_candidates", "total_candidates")]
         cells += [sequence["actual_work"]["transitions"], sequence["represented_work"]["transitions"]]
+        cells += [sequence["actual_work"]["solver_nodes"], sequence["represented_work"]["solver_nodes"]]
         lines.append(f"| {slot['slot']}: {slot['policy']} | " + " | ".join(observed(c) for c in cells) + " |")
     lines += ["", "Work totals use recorded counters only: executed transitions and represented logical transitions are separate. "
               "Missing attempted/total counts stay unknown; neither completed candidates nor available programs establish those counts. "
               "A completion rate uses only decisions recording both completed and attempted counts. "
+              f"{SOLVER_EFFORT_MEANING} "
               "Response calls/hits, suffix hits, comparison calls and maximum reported cache-retention bytes are in summary.json. "
               "Retention bytes are a per-trace cache ledger, not process peak memory. Full traces remain in games NDJSON.", "",
               "## Bidding communication", "",

@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use crate::{
     cli::Cli,
     record::{action_json, game_record, today, Meta, Note},
-    selfplay::{metrics_json, phase, Policy},
+    selfplay::{metrics_json, phase, AssessmentRecorder, Policy},
 };
 use fixture::Fixture;
 use options::{Options, OPTIONS};
@@ -96,12 +96,16 @@ fn decision_json(table: &Table, seat: u8, decision: &Decision) -> Value {
     let raising = table.game.state.phase == GamePhase::Raising;
     json!({
         "seat": seat, "phase": phase(&table.game.state.phase),
+        "event_count": table.view(seat).events.len(),
         "action": action_json(&decision.action, raising), "action_debug": format!("{:?}", decision.action),
         "rule": decision.explanation.label,
         "facts": decision.explanation.facts.iter().map(|f| json!({
             "key": f.key, "value": f.value, "finite": f.value.is_finite(),
         })).collect::<Vec<_>>(),
         "facts_basis": "policy_explanation_not_hard_proof_or_calibrated_probability",
+        "assessment_recorded": false, "value_assessment_present": false, "sequence_present": false,
+        "assessment": null, "assessment_matches_chosen_action": null,
+        "capture_ms": null, "assessment_serialization_ms": null,
         "view": visible(table, seat),
         "legal": table.to_act().map(|(_, legal)| legal.iter().map(|a| action_json(a, raising)).collect::<Vec<_>>()),
     })
@@ -150,20 +154,38 @@ fn players(
         .collect()
 }
 
-fn teacher(fixture: &Fixture, step: usize, policy: &Policy) -> Result<Value, String> {
+fn teacher(
+    fixture: &Fixture,
+    step: usize,
+    policy: &Policy,
+    recorder: Option<&AssessmentRecorder>,
+) -> Result<Value, String> {
+    if let Some(recorder) = recorder {
+        recorder.ensure_empty()?;
+    }
     let table = fixture.prefix(step)?;
     let (seat, legal) = table.to_act().ok_or("teacher prefix already ended")?;
     let mut candidate = (policy.make)(POLICY_SEED, seat);
     let t0 = Instant::now();
     let decision = candidate.act(&table.view(seat), legal);
-    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let nanos = t0.elapsed().as_nanos();
     if !legal.contains(&decision.action) {
         return Err(format!("{} returned illegal teacher action", policy.name));
     }
     let mut row = decision_json(&table, seat, &decision);
     row["step"] = json!(step);
     row["policy"] = json!(policy.name);
-    row["ms"] = json!(ms);
+    row["ms"] = json!(nanos as f64 / 1_000_000.0);
+    if let Some(recorder) = recorder {
+        if let Some(evidence) = recorder.consume(
+            &table.view(seat),
+            &decision.action,
+            table.game.state.phase == GamePhase::Raising,
+        )? {
+            evidence.attach(&mut row, nanos);
+        }
+        recorder.ensure_empty()?;
+    }
     Ok(json!({
         "decisions": [row], "first_divergence": (decision.action != fixture.actions[step]).then_some(step),
         "outcome": null, "record": null,
@@ -176,7 +198,11 @@ fn continuation(
     candidate: usize,
     policies: &[Policy],
     options: &Options,
+    recorder: Option<&AssessmentRecorder>,
 ) -> Result<Value, String> {
+    if let Some(recorder) = recorder {
+        recorder.ensure_empty()?;
+    }
     let (table, mut observer) = fixture.prefix_observed(step)?;
     let target = target_seat(fixture, step, options);
     let mut players = players(fixture, step, candidate, policies, options);
@@ -192,6 +218,8 @@ fn continuation(
         policies[index].name.clone()
     });
     let mut rows = Vec::new();
+    let mut policy_times = Vec::new();
+    let mut capture_error = None;
     let (info, log) = play_table_with(table, &mut players, 128, |table, seat, decision| {
         observer.observe(table);
         let global_step = step + rows.len();
@@ -204,11 +232,40 @@ fn continuation(
         let mut row = decision_json(table, seat, decision);
         row["step"] = json!(global_step);
         row["policy"] = json!(policies[policy].name);
+        let mut policy_nanos = None;
+        if capture_error.is_none() {
+            if let Some(recorder) = recorder {
+                match recorder.consume(
+                    &table.view(seat),
+                    &decision.action,
+                    table.game.state.phase == GamePhase::Raising,
+                ) {
+                    Ok(Some(evidence)) => {
+                        policy_nanos = Some(evidence.policy_nanos);
+                        evidence.attach(&mut row, 0); // Outer act duration is supplied by the completed eval log.
+                    }
+                    Ok(None) => {}
+                    Err(error) => capture_error = Some(format!("capture at step {global_step}: {error}")),
+                }
+            }
+        }
+        policy_times.push(policy_nanos);
         rows.push(row);
     })
     .map_err(|e| e.to_string())?;
-    for (row, logged) in rows.iter_mut().zip(&log) {
-        row["ms"] = json!(logged.nanos as f64 / 1_000_000.0);
+    // The existing eval hook cannot return errors. Fail this bounded result
+    // before emitting any of its rows; never attach a mismatched queued record.
+    if let Some(error) = capture_error {
+        return Err(error);
+    }
+    if let Some(recorder) = recorder {
+        recorder.ensure_empty()?;
+    }
+    for ((row, logged), policy_nanos) in rows.iter_mut().zip(&log).zip(policy_times) {
+        row["ms"] = json!(policy_nanos.unwrap_or(logged.nanos) as f64 / 1_000_000.0);
+        if let Some(nanos) = policy_nanos {
+            row["capture_ms"] = json!(logged.nanos.saturating_sub(nanos) as f64 / 1_000_000.0);
+        }
     }
     let first = log
         .iter()
@@ -248,7 +305,7 @@ fn emit(writer: &mut impl Write, value: &Value) -> Result<(), String> {
         .map_err(|e| format!("flush: {e}"))
 }
 
-fn header(options: &Options, policies: &[Policy], plans: &[(Fixture, Vec<usize>)]) -> Value {
+fn header(options: &Options, policies: &[Policy], plans: &[(Fixture, Vec<usize>)], recording: bool) -> Value {
     json!({
         "schema": SCHEMA, "type": "start", "mode": format!("{:?}", options.mode),
         "replacement": format!("{:?}", options.replacement), "policy_seed": POLICY_SEED,
@@ -265,6 +322,9 @@ fn header(options: &Options, policies: &[Policy], plans: &[(Fixture, Vec<usize>)
         },
         "cases": plans.iter().map(|(f, steps)| json!({"index": f.index, "steps": steps})).collect::<Vec<_>>(),
         "agent_state": "fresh_at_prefix; recorded private cache/RNG state unavailable",
+        "recording": {"enabled": recording,
+            "scope": "only instrumented factories; absence for historical/plain agents is not a completed assessment",
+            "evaluation": "same actual act call; checked honest context; serialization after policy timing"},
         "kinds": ["Heuristic", "Heuristic", "Heuristic", "Heuristic"], "max_runs": options.max_runs, "max_continuation_actions": 128,
     })
 }
@@ -275,14 +335,15 @@ fn execute(
     plans: &[(Fixture, Vec<usize>)],
     writer: &mut impl Write,
     completed: &mut usize,
+    recorder: Option<&AssessmentRecorder>,
 ) -> Result<(), String> {
     for (fixture, steps) in plans {
         for &step in steps {
             for &candidate in &options.candidates {
                 let evaluated = if options.mode == Mode::Teacher {
-                    teacher(fixture, step, &policies[candidate])
+                    teacher(fixture, step, &policies[candidate], recorder)
                 } else {
-                    continuation(fixture, step, candidate, policies, options)
+                    continuation(fixture, step, candidate, policies, options, recorder)
                 };
                 let mut result = evaluated.map_err(|e| {
                     format!(
@@ -322,11 +383,31 @@ pub fn run_with_profiling(policies: Vec<Policy>, profiling: Option<Profiling>) -
     run_args_with_profiling(std::env::args().skip(1), policies, profiling)
 }
 
+/// Optional tools-only recording for current factories. Historical adapters can
+/// keep the existing APIs and plain Agent factories unchanged.
+pub fn run_with_recording(
+    policies: Vec<Policy>,
+    profiling: Option<Profiling>,
+    recorder: Option<AssessmentRecorder>,
+) -> Result<(), String> {
+    run_args_with_recording(std::env::args().skip(1), policies, profiling, recorder)
+}
+
 /// The same CLI contract without process-global argv, useful to compiled adapters.
 pub fn run_args_with_profiling(
     args: impl IntoIterator<Item = String>,
     policies: Vec<Policy>,
     profiling: Option<Profiling>,
+) -> Result<(), String> {
+    run_args_with_recording(args, policies, profiling, None)
+}
+
+/// Matching argv-independent entry point for compiled policy adapters.
+pub fn run_args_with_recording(
+    args: impl IntoIterator<Item = String>,
+    policies: Vec<Policy>,
+    profiling: Option<Profiling>,
+    recorder: Option<AssessmentRecorder>,
 ) -> Result<(), String> {
     let cli = Cli::from_args(args, OPTIONS, &[]);
     let options = Options::parse(&cli, &policies)?;
@@ -346,19 +427,29 @@ pub fn run_args_with_profiling(
             options.max_runs
         ));
     }
+    if let Some(recorder) = &recorder {
+        recorder.ensure_empty()?;
+    }
     let output = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&options.output)
         .map_err(|e| format!("output: {e}"))?;
     let mut writer = BufWriter::new(output);
-    emit(&mut writer, &header(&options, &policies, &plans))?;
+    emit(&mut writer, &header(&options, &policies, &plans, recorder.is_some()))?;
     if let Some(profile) = &profiling {
         (profile.reset)();
     }
     let t0 = Instant::now();
     let mut completed = 0;
-    let mut result = execute(&options, &policies, &plans, &mut writer, &mut completed);
+    let mut result = execute(
+        &options,
+        &policies,
+        &plans,
+        &mut writer,
+        &mut completed,
+        recorder.as_ref(),
+    );
     if result.is_ok() && completed != expected {
         result = Err(format!("incomplete comparison count: {completed}/{expected}"));
     }
