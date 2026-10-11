@@ -212,22 +212,38 @@ impl Reach {
         self.partner_pair > 0.0 && self.partner_pair >= ctx.params.partner_pair_min
     }
 
+    /// Ask "Yours" for a believed pair unless the partner can announce it itself: it keeps
+    /// its right and probably gets a lead (`p_partner_lead` >= `partner_lead_conf`). The
+    /// human games: on a believed pair the players never asked (0 of 1,021 positions, even
+    /// at P >= 0.9); they leave it to the partner (owner #175: "let me go and play my stuff
+    /// and then announce the pair"). That needs the partner's lead, so without it I ask.
+    fn asks_yours(&self, ctx: &Ctx) -> bool {
+        let mate = partner(ctx.me);
+        let partner_announces = ctx.k.pairs(mate).certain == 0
+            && ctx.k.rights(mate).may_announce()
+            && self.p_partner_lead >= ctx.params.partner_lead_conf;
+        self.partner_may(ctx) && !partner_announces
+    }
+
     /// Existing attempt model: uncertain questions before activation. The timing
     /// guard compares it with a certified run, not independent team winners.
     fn attempts(&self, ctx: &Ctx) -> u32 {
-        let yours = self.partner_may(ctx) as u32;
+        let yours = self.asks_yours(ctx) as u32;
         if !self.my_pairs.is_empty() || ctx.k.pairs(partner(ctx.me)).certain != 0 {
             0
         } else if self.halves.iter().any(|h| h.1 >= 1.0) {
             1 + yours
         } else {
-            self.open_halves().count() as u32 + yours
+            self.open_halves(ctx).count() as u32 + yours
         }
     }
 
     /// Live halves the partner may complete (HC-13: a known "no" is no question).
-    fn open_halves(&self) -> impl Iterator<Item = &(Suit, f32)> {
-        self.halves.iter().filter(|h| h.1 > 0.0)
+    /// Half questions worth asking: P(the partner holds the other half) at least
+    /// `half_question_min` (the human games: below 0.4 the players rarely ask).
+    fn open_halves(&self, ctx: &Ctx) -> impl Iterator<Item = &(Suit, f32)> {
+        let min = ctx.params.half_question_min;
+        self.halves.iter().filter(move |h| h.1 > 0.0 && h.1 >= min)
     }
 }
 
@@ -435,18 +451,18 @@ fn action(ctx: &Ctx, legal: &[GameAction], reach: &Reach) -> Option<Decision> {
         return Some(decision(a, rule, why));
     }
     // Yours.
-    if reach.partner_may(ctx) && keeps_needed_rights(ctx, reach, QuestionType::Yours) {
+    if reach.asks_yours(ctx) && keeps_needed_rights(ctx, reach, QuestionType::Yours) {
         if let Some(a) = find(legal, ActionType::Question(QuestionType::Yours)) {
             why.push(fact("partner_pair", reach.partner_pair));
             return Some(decision(a, RuleId::HQ3, why));
         }
     }
     // Ours: the half the partner most likely completes, by pair value.
-    let skipped = reach.halves.len() - reach.open_halves().count();
+    let skipped = reach.halves.len() - reach.open_halves(ctx).count();
     if skipped > 0 {
         why.push(fact("hc13_skipped", skipped as u32));
     }
-    for &(s, p) in reach.open_halves() {
+    for &(s, p) in reach.open_halves(ctx) {
         if !keeps_needed_rights(ctx, reach, QuestionType::YourHalf(s)) {
             why.push(fact("p10a_blocked", 1));
             break;

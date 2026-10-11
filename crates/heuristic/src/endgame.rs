@@ -84,7 +84,10 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
     let Some(mut best) = d.best() else { return unavailable() };
     let means = |m: Move| d.moves.iter().find(|v| v.mv == m).map(|v| v.means.clone());
     let Some(top) = means(best) else { return unavailable() };
-    if matches!(best, Move::Card(_)) {
+    // A question or announcement that gains nothing over a card spends rights and tells the
+    // table: on a tie, play the card (the owner: cash first, ask when it is needed).
+    let card_ties = d.moves.iter().any(|v| matches!(v.mv, Move::Card(_)) && v.means == top);
+    if matches!(best, Move::Card(_)) || card_ties {
         let choice = Choice::new(ctx);
         let leading = k.trick().is_empty();
         let tied = d

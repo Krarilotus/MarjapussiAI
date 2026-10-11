@@ -89,6 +89,9 @@ params! {
     // Card play (§6.0, §7): the valuation (C25)
     /// P8/P10a: the partner "may hold a pair" (worth a "Yours", and a right to keep) from this.
     partner_pair_min: f32 = 0.1,
+    /// HQ-3: ask for a half only from this P(the partner holds the other half) ([A] the human
+    /// games: the ask rate rises clearly only from 0.4).
+    half_question_min: f32 = 0.4,
     /// P10a: the partner will plausibly win a lead if P(it holds a live ace) is at least this.
     partner_lead_conf: f32 = 0.7,
 
@@ -118,6 +121,7 @@ impl Params {
             ("partner_trump_conf", self.partner_trump_conf),
             ("partner_pair_min", self.partner_pair_min),
             ("partner_lead_conf", self.partner_lead_conf),
+            ("half_question_min", self.half_question_min),
         ] {
             if !(0.0..=1.0).contains(&p) {
                 return Err(HeuristicError::Params(format!("{name} must be finite and in [0, 1]")));
