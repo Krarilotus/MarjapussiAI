@@ -161,8 +161,28 @@ repeated actor belief/control evaluation, not generating worlds.
 
 Combined strategy/performance means at the 603 matched positions are diagnostic:
 return 566.2 to 531.7 ms; open lead 127.6 to 81.0 ms; raising 106.1 to 73.2 ms;
-bidding 91.6 to 66.3 ms; following a trick 11.65 to 9.22 ms. Actions can differ,
+bidding 91.6 to 66.3 ms; engine `Trick` phase 11.65 to 9.22 ms. That phase also
+includes leads after declarations/questions; it is not solely following play. Actions can differ,
 so these numbers do not isolate optimization from policy work.
+
+The owner subsequently clarified that planning may take a second or more, while
+ordinary play should remain responsive. Reclassifying the same saved positions
+by whether a trick already contains a card gives the candidate timings below;
+no extra policy run or source change was needed. Percentiles use nearest rank.
+
+| Actual context | Decisions | Mean ms | 95th percentile ms | Maximum ms |
+|---|---:|---:|---:|---:|
+| Following a started trick | 324 | 0.403 | 1.644 | 6.776 |
+| Lead, announcement or question before a card | 142 | 77.890 | 438.358 | 1,341.549 |
+| Return allocation | 12 | 531.691 | 1,442.158 | 1,442.158 |
+
+The common two-second forecast limit does not enforce that phase distinction.
+The remaining in-play performance target is repeated lead/announcement planning.
+Preserve completed actor-visible sequence work across those transitions, with
+explicit invalidation when its evidence changes. Reducing initial planning depth
+or forcing a shallow fallback would not meet the no-functional-compromise goal.
+This requirement is recorded for the next sequence increment; it is not claimed
+implemented by these timing results.
 
 ## Checks and independent review
 
