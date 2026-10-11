@@ -519,7 +519,7 @@ fn logical_budget_cached_nested_choices_match_uncached_values_receipts_and_leaf_
     assert_eq!(cached.values, matched_cold.values);
     assert_eq!(cached.receipt, matched_cold.receipt);
     assert_eq!(cached.executions, matched_cold.executions);
-    assert_eq!(cached.prepared, matched_cold.prepared);
+    assert_eq!(cached.prepared(), matched_cold.prepared());
     assert_eq!(cached.work.completed_candidates, candidates.len());
     assert_eq!(cached.work.represented_transitions, exact.transitions);
     assert_eq!(cached.work.represented_comparisons, exact.comparisons);
@@ -601,7 +601,7 @@ fn logical_budget_tail_hits_cannot_complete_more_candidates_than_uncached_execut
     assert_eq!(cached.values, cold.values);
     assert_eq!(cached.receipt, cold.receipt);
     assert_eq!(cached.executions, cold.executions);
-    assert_eq!(cached.prepared, cold.prepared);
+    assert_eq!(cached.prepared(), cold.prepared());
     let insufficient = Limits {
         transitions: exact.transitions - 1,
         ..exact

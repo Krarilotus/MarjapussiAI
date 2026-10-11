@@ -65,7 +65,7 @@ fn shuffled_live_and_reconstructed_domains_share_values_actions_and_prepared_cho
     assert_eq!(initial.values, replay.values);
     assert_eq!(initial.executions, replay.executions);
     assert_eq!(initial.receipt, replay.receipt);
-    assert_eq!(initial.prepared, replay.prepared);
+    assert_eq!(initial.prepared(), replay.prepared());
     assert_eq!(
         initial.work.represented_transitions,
         replay.work.represented_transitions
@@ -98,7 +98,7 @@ fn shuffled_live_and_reconstructed_domains_share_values_actions_and_prepared_cho
             &mind(&view),
             &context,
             &membership,
-            &initial.prepared,
+            initial.prepared(),
         )
         .expect("exact canonical domain permits the same prepared offer");
         assert_eq!(prepared.action, initial.executions[0].first.action);

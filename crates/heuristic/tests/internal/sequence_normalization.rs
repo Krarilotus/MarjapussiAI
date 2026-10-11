@@ -178,7 +178,7 @@ fn sibling_tail_keeps_every_value_tie_and_edge_evidence() {
         )
         .unwrap();
         let choice = shared
-            .prepared
+            .prepared()
             .iter()
             .find(|choice| choice.assessment.is_some())
             .unwrap();
@@ -363,7 +363,7 @@ fn sibling_tail_unique_allowance_matches_cache_disabled_cold_and_warm() {
         assert_eq!(run.values, uncached.values);
         assert_eq!(run.executions, uncached.executions);
         assert_eq!(run.receipt, uncached.receipt);
-        assert_eq!(run.prepared, uncached.prepared);
+        assert_eq!(run.prepared(), uncached.prepared());
         assert_eq!(run.work.represented_transitions, uncached.work.represented_transitions);
         assert_eq!(run.work.represented_comparisons, uncached.work.represented_comparisons);
         assert_eq!(
@@ -443,7 +443,7 @@ fn sibling_tail_completed_parent_memo_preserves_unique_work_and_selected_support
 
     assert_eq!(cached.values, uncached.values);
     assert_eq!(cached.executions, uncached.executions);
-    assert_eq!(cached.prepared, uncached.prepared);
+    assert_eq!(cached.prepared(), uncached.prepared());
     assert_eq!(cached.receipt, uncached.receipt);
     assert_eq!(cached.values.selected, 0);
     assert!(cached.values.cohort_complete);
@@ -463,7 +463,7 @@ fn sibling_tail_completed_parent_memo_preserves_unique_work_and_selected_support
     );
     assert_eq!(cached.work.accounting(), uncached.work.accounting());
     let selected = cached
-        .prepared
+        .prepared()
         .iter()
         .find(|choice| choice.assessment.is_some())
         .unwrap();
@@ -537,7 +537,7 @@ fn sibling_tail_does_not_alias_engine_actions_and_preserves_prefix_owner() {
     .unwrap();
     assert_eq!(run.work.tail_aliases, 0);
     assert_eq!(
-        run.prepared
+        run.prepared()
             .iter()
             .find(|choice| choice.assessment.is_some())
             .unwrap()
@@ -612,7 +612,7 @@ fn sibling_tail_scope_rebuilds_weighted_values_and_context_on_every_comparison()
     assert_eq!(warm.values, fresh.values);
     assert_eq!(warm.executions, fresh.executions);
     assert_eq!(warm.receipt, fresh.receipt);
-    let choice = warm.prepared.iter().find(|choice| choice.assessment.is_some()).unwrap();
+    let choice = warm.prepared().iter().find(|choice| choice.assessment.is_some()).unwrap();
     assert_eq!(choice.support, [(0, 0.6), (1, 0.4)]);
     assert_eq!(choice.context, context);
     assert_eq!(warm.work.represented_transitions, fresh.work.represented_transitions);

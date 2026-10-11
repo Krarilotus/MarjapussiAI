@@ -245,9 +245,15 @@ pub struct Comparison {
     pub executions: Vec<Execution>,
     pub values: Assessment,
     pub receipt: Receipt,
-    pub prepared: Vec<PreparedChoice>,
     pub selection: std::sync::Arc<SelectedPlan>,
     pub work: Work,
+}
+impl Comparison {
+    /// Raw selected execution records, preserving their order and joint support.
+    /// SelectedPlan's coalesced authorization records are a different view.
+    pub fn prepared(&self) -> &[PreparedChoice] {
+        &self.executions[self.values.selected].prepared
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NeedsReview;
@@ -533,7 +539,7 @@ fn find_stage(program: &Program, suffix: &Suffix) -> Result<Stage, SequenceError
     }
     Err(SequenceError::InvalidProgram)
 }
-impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, LeafFailure>> Session<'_, F> {
+impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, LeafFailure>> Session<'context, F> {
     fn limited(&mut self, limit: DeferredLimit) -> SequenceError {
         self.limit = Some(limit);
         SequenceError::Budget
@@ -648,19 +654,58 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         let cached = self.canonical_program(program)?;
         self.cached_suffix(program, stage, cached)
     }
+    /// One exact lookup/validation for a pure batch over an immutable program.
+    /// The iterator borrows the session, so no response/eviction can invalidate
+    /// its local index. An empty batch performs no validation or admission.
+    fn suffixes<'s, I>(
+        &'s mut self,
+        program: &'s Program,
+        stages: I,
+    ) -> impl Iterator<Item = Result<Suffix, SequenceError>> + 's + use<'s, 'context, I, F>
+    where
+        I: IntoIterator<Item = Stage> + 's,
+        I::IntoIter: 's,
+    {
+        let mut located = None;
+        stages.into_iter().map(move |stage| {
+            let _timing = beliefs::profile::scope("sequence.suffix");
+            let cached = match located {
+                Some(cached) => cached,
+                None => {
+                    let cached = self.canonical_program(program)?;
+                    located = Some(cached);
+                    cached
+                }
+            };
+            self.cached_suffix(program, stage, cached)
+        })
+    }
     /// Reuse exact input validation without hashing the entire authored model.
-    /// A stage scan calls this once, retaining the original linear Eq lookup.
+    /// A batch/scan calls this once, retaining the original linear Eq lookup.
     fn canonical_program(&mut self, program: &Program) -> Result<Option<usize>, SequenceError> {
-        if let Some(index) = self.canonical.iter().position(|entry| entry.program == *program) {
+        let cached = {
+            let _timing = beliefs::profile::scope("sequence.suffix_lookup");
+            self.canonical.iter().position(|entry| entry.program == *program)
+        };
+        if let Some(index) = cached {
             return Ok(Some(index));
         }
-        program.validate()?;
+        {
+            let _timing = beliefs::profile::scope("sequence.suffix_validate");
+            program.validate()?;
+        }
+        // Even full/disabled caches validate the entire input, but need no
+        // allocation ledger traversal when an entry cannot be admitted.
+        if self.canonical.len() >= self.limits.memo_entries {
+            return Ok(None);
+        }
+        let _timing = beliefs::profile::scope("sequence.suffix_program_admission");
         let bytes = 2
             * (std::mem::size_of::<CanonicalProgram>()
                 + program_bytes(program)
                 + std::mem::size_of::<Vec<Option<Suffix>>>()
                 + program.nodes.len() * std::mem::size_of::<Option<Suffix>>());
-        if self.canonical.len() < self.limits.memo_entries && self.retain_reusable(bytes) {
+        if self.retain_reusable(bytes) {
             let index = self.canonical.len();
             self.canonical.push(CanonicalProgram {
                 program: program.clone(),
@@ -671,7 +716,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
             Ok(None)
         }
     }
-    // The index is local to one call/scan: no insertion or eviction occurs
+    // The index is local to one call/batch/scan: no insertion or eviction occurs
     // between lookup and use. Never keep indices in receipts or other caches.
     fn cached_suffix(&mut self, program: &Program, stage: Stage, cached: Option<usize>) -> Result<Suffix, SequenceError> {
         if let Some(index) = cached {
@@ -682,8 +727,12 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         }
         // Either this exact input was validated above, or it equals a validated
         // cache entry. Lack of cache space never skips validation or a stage.
-        let suffix = program.suffix_validated(stage)?;
+        let suffix = {
+            let _timing = beliefs::profile::scope("sequence.suffix_construct");
+            program.suffix_validated(stage)?
+        };
         if let Some(index) = cached {
+            let _timing = beliefs::profile::scope("sequence.suffix_slot_admission");
             if self.retain_reusable(2 * suffix_bytes(&suffix)) {
                 self.canonical[index].suffixes[stage.0] = Some(suffix.clone());
             }
@@ -705,8 +754,13 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         // Validate/locate this immutable input once for the whole scan, also
         // when cache admission is disabled. Preserve first matching stage.
         let cached = self.canonical_program(program)?;
+        let _scan_timing = beliefs::profile::scope("sequence.suffix_scan");
         for stage in 0..program.nodes.len() {
-            if self.cached_suffix(program, Stage(stage), cached)? == *suffix {
+            let matches = match cached.and_then(|index| self.canonical[index].suffixes[stage].as_ref()) {
+                Some(existing) => existing == suffix,
+                None => self.cached_suffix(program, Stage(stage), cached)? == *suffix,
+            };
+            if matches {
                 return Ok(Stage(stage));
             }
         }
@@ -914,10 +968,11 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
             branch.receipt.synchronize(&branch.table.view(self.root))?;
             let inspection = self.inspect(&branch)?;
             let information = Information::of(&branch.table.view(self.root));
-            for read in &inspection.consumed {
+            let suffixes = self.suffixes(&branch.receipt.program, inspection.consumed.iter().map(|read| read.stage));
+            for (read, suffix) in inspection.consumed.iter().zip(suffixes) {
                 branch.consumed.push(Consumed {
                     information: information.clone(),
-                    suffix: self.suffix(&branch.receipt.program, read.stage)?,
+                    suffix: suffix?,
                     reading: read.meaning.clone(),
                 });
             }
@@ -1377,10 +1432,8 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
             };
             let membership = Membership {
                 legal: crate::legal_actions::eligible(&binding.legal),
-                programs: binding
-                    .alternatives
-                    .iter()
-                    .map(|stage| self.suffix(&binding.program, *stage))
+                programs: self
+                    .suffixes(&binding.program, binding.alternatives.iter().copied())
                     .collect::<Result<_, _>>()?,
             };
             for waiting in &mut group {
@@ -1662,7 +1715,6 @@ pub fn evaluate_with_cache<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) ->
             &original,
         )?;
         receipt.propose(selected.first.clone(), &original, legal)?;
-        let prepared = selected.prepared.clone();
         let selection = std::sync::Arc::new(SelectedPlan::completed(
             information,
             context,
@@ -1686,7 +1738,6 @@ pub fn evaluate_with_cache<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) ->
             executions,
             values,
             receipt,
-            prepared,
             selection,
             work: session.work,
         })
@@ -2086,7 +2137,7 @@ mod tests {
         )
         .unwrap();
         let record = result
-            .prepared
+            .prepared()
             .iter()
             .find(|p| p.alternatives.len() == expected.len() && p.assessment.is_some())
             .unwrap();
@@ -2221,7 +2272,7 @@ mod tests {
             consumed: vec![],
             support: vec![(0, 1.0 / 3.0), (1, 2.0 / 3.0)],
         }];
-        prepared.extend(result.prepared.iter().cloned());
+        prepared.extend(result.prepared().iter().cloned());
         let receipt = Receipt::new(binding.program.clone(), &view).unwrap();
         let reader = mind(&view);
         assert_eq!(
@@ -2292,7 +2343,7 @@ mod tests {
         );
         // The stored nested fixed/action records keep the ordinary domain,
         // independently of the extra retained connection at the root Choice.
-        assert!(result.prepared.iter().any(|p| p.information.matches(&view)
+        assert!(result.prepared().iter().any(|p| p.information.matches(&view)
             && p.semantic_suffix != receipt.program.suffix(receipt.stage).unwrap()
             && p.membership == authored));
     }
@@ -2345,7 +2396,7 @@ mod tests {
             1,
             "one shared response, no hidden-world-specific optimization"
         );
-        let record = result.prepared.iter().find(|p| p.information == initial).unwrap();
+        let record = result.prepared().iter().find(|p| p.information == initial).unwrap();
         assert_eq!(
             record.semantic_suffix,
             candidates[0].program.suffix(candidates[0].stage).unwrap()
@@ -2392,7 +2443,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(calls.get(), 1);
-        let record = reused.prepared.iter().find(|p| p.information == initial).unwrap();
+        let record = reused.prepared().iter().find(|p| p.information == initial).unwrap();
         assert_eq!(record.context, current);
         assert_eq!(record.support, [(0, 2.0 / 5.0), (1, 3.0 / 5.0)]);
         assert_eq!(record.selected, 0);
@@ -2528,7 +2579,7 @@ mod tests {
         assert_eq!(warm.work.actual_solver_nodes, 0);
         assert_eq!(warm.values, cold.values);
         assert_eq!(warm.receipt, cold.receipt);
-        assert_eq!(warm.prepared, cold.prepared);
+        assert_eq!(warm.prepared(), cold.prepared());
         assert_eq!(warm.executions, cold.executions);
         assert_eq!(warm.work.represented_transitions, cold.work.represented_transitions);
         assert_eq!(warm.work.represented_comparisons, cold.work.represented_comparisons);
@@ -2566,7 +2617,7 @@ mod tests {
             .unwrap();
             assert_eq!(run.values, cold.values);
             assert_eq!(run.receipt, cold.receipt);
-            assert_eq!(run.prepared, cold.prepared);
+            assert_eq!(run.prepared(), cold.prepared());
             assert_eq!(run.executions, cold.executions);
             assert_eq!(run.work.represented_transitions, cold.work.represented_transitions);
             assert_eq!(run.work.represented_comparisons, cold.work.represented_comparisons);
@@ -2776,6 +2827,83 @@ mod cache_tests {
             assert_eq!(session.work.represented_comparisons, 0);
             assert_eq!(session.work.represented_solver_nodes, 0);
         }
+    }
+    #[test]
+    fn suffix_batches_match_single_reads_under_cache_pressure_and_eviction() {
+        let context = context();
+        let original = program();
+        let mut changed = original.clone();
+        changed.nodes[2] = Node::Choice(vec![Stage(1), Stage(0)]);
+        let stages = [Stage(2), Stage(0), Stage(1), Stage(2)];
+        for (entries, bytes) in [(0, 0), (1, 0), (1, 1024 * 1024), (8, 1024 * 1024)] {
+            let limits = Limits {
+                memo_entries: entries,
+                memo_bytes: bytes,
+                ..Limits::default()
+            };
+            let mut batch_leaf = no_leaf;
+            let mut single_leaf = no_leaf;
+            let mut batch = session(&context, &mut batch_leaf, limits);
+            let mut single = session(&context, &mut single_leaf, limits);
+            // The second distinct program misses under a one-entry cap. Both
+            // admitted and unadmitted repeats preserve suffix order and ledger.
+            for program in [&original, &changed, &changed, &original] {
+                let actual = batch.suffixes(program, stages).collect::<Result<Vec<_>, _>>().unwrap();
+                let expected = stages
+                    .iter()
+                    .map(|stage| single.suffix(program, *stage))
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                assert_eq!(actual, expected);
+                assert_eq!(batch.work, single.work);
+                assert_eq!(batch.canonical.len(), single.canonical.len());
+            }
+            // No local batch index survives the real response-eviction path.
+            assert_eq!(batch.retain_response(bytes), single.retain_response(bytes));
+            let actual = batch.suffixes(&changed, stages).collect::<Result<Vec<_>, _>>().unwrap();
+            let expected = stages
+                .iter()
+                .map(|stage| single.suffix(&changed, *stage))
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(batch.work, single.work);
+        }
+    }
+    #[test]
+    fn suffix_batches_revalidate_changed_inputs_at_full_cap_and_keep_empty_reads_lazy() {
+        let context = context();
+        let mut leaf = no_leaf;
+        let mut session = session(
+            &context,
+            &mut leaf,
+            Limits {
+                memo_entries: 1,
+                ..Limits::default()
+            },
+        );
+        let mut program = program();
+        session
+            .suffixes(&program, [Stage(0), Stage(2)])
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(session.canonical.len(), 1);
+        // The next batch must reject invalid unreachable authored data even
+        // when its requested suffix is otherwise valid and the cache is full.
+        program.nodes.push(Node::Choice(vec![Stage(3)]));
+        let retained = session.work.retained_bytes;
+        assert_eq!(
+            session.suffixes(&program, [Stage(0)]).collect::<Result<Vec<_>, _>>(),
+            Err(SequenceError::InvalidProgram)
+        );
+        assert_eq!(session.suffixes(&program, []).count(), 0);
+        assert_eq!(session.work.retained_bytes, retained);
+        program.nodes.pop();
+        assert_eq!(
+            session.suffixes(&program, [Stage(99)]).collect::<Result<Vec<_>, _>>(),
+            Err(SequenceError::InvalidProgram)
+        );
+        assert_eq!(session.find_stage(&program, &program.suffix(Stage(0)).unwrap()), Ok(Stage(0)));
     }
     #[test]
     fn membership_reuse_requires_exact_private_view_and_canonical_legal_domain() {

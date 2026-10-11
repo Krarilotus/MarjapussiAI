@@ -322,7 +322,7 @@ fn post_exchange_root_choices_keep_the_joint_hidden_cohort() {
         1.0
     );
     let choice = result
-        .prepared
+        .prepared()
         .iter()
         .find(|choice| choice.assessment.is_some() && choice.support.len() == 2)
         .expect("one future choice for the whole indistinguishable root group");
