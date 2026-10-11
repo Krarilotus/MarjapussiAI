@@ -399,14 +399,27 @@ fn optional_raises_preserve_every_legal_value_and_bid_receipts_install_composed_
         panic!("raise fixture binding expected")
     };
 
-    let selected = offers.last().unwrap().clone();
+    let selected = offers
+        .iter()
+        .max_by_key(|offer| match offer.action.action_type {
+            ActionType::NewBid(value) => value,
+            _ => unreachable!("raise family only binds bids"),
+        })
+        .unwrap()
+        .clone();
     let mut receipt = Receipt::new(raising.clone(), &view).unwrap();
     receipt.propose(selected.clone(), &view, legal).unwrap();
     let pending = receipt.clone();
     receipt.synchronize(&view).unwrap();
     assert_eq!(receipt, pending, "unaccepted retry cannot spend the raise");
     let mut wrong_table = table.clone();
-    wrong_table.apply(offers[0].action);
+    wrong_table.apply(
+        offers
+            .iter()
+            .find(|offer| offer.action != selected.action)
+            .unwrap()
+            .action,
+    );
     assert_eq!(
         receipt.synchronize(&wrong_table.view(seat)),
         Err(SequenceError::HistoryChanged)
