@@ -59,8 +59,10 @@ GPU training and framework selection remain separate from the reasoning contract
 
 Review the [executable reasoning contract](design/executable-reasoning.md) and
 [worked decision](design/worked-decision.md) before production implementation.
-Then implement one authored pair/entry/control slice whose dependencies drive
-evaluation, selection and explanation. Validate joint mass, actor information,
+Then implement an authored joint-trick-outcome and continuation slice whose
+dependencies drive evaluation, selection and explanation. Pair activation is one
+next-leader opportunity in that model. Expected scores remain typed model
+estimates, distinct from known rules and conditionally exact branch scores. Validate joint mass, actor information,
 route coverage and engine scoring before broader policy changes. New evidence
 must revise value as well as feasibility. The
 [conditional-sequence design](design/conditional-sequences.md) supplies supporting

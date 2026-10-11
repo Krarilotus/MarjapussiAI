@@ -8,9 +8,9 @@ Review with the [worked decision](worked-decision.md),
 [current-system audit](reasoning-boundary-review.md) and
 [graph definitions](reasoning-graph.json). Build the portable HTML with
 `python docs/assets/build_reasoning_review.py --output <review-folder>`
-(requires `markdown-it-py`).
+(requires `markdown-it-py` and Graphviz).
 
-The agent asks: **which legal next action has the greatest expected engine score
+The agent asks: **which legal next action has the greatest expected final game score
 difference, given my information and the stated continuation model?** The same
 computation supplies its explanation, counterfactual comparisons and evaluation
 record. Contract success is a named outcome probability, separate from that
@@ -34,6 +34,14 @@ definitions have stable identities, typed results and explicit dependencies.
 Existing holding queries and proof operations are leaf evaluators beneath it.
 Strategic composition belongs in that authored model. The uncertainty layer
 continues to own probability, and the rules engine continues to own legality.
+
+The scoring rule is known, but an expected final score is a **model estimate**.
+For a fully specified terminal branch the engine computes the score exactly,
+conditional on that branch occurring. Weighting these conditional scores by
+estimated branch probabilities retains that uncertainty. Deterministic arithmetic,
+a fully evaluated model, or a model probability of 1 does not turn an estimate
+into a fact. Proof, conditional exactness, estimate and unresolved status travel
+with the result and its scope; the node's computational role is a separate field.
 
 ## 2. What is authored and what is evaluated
 
@@ -132,8 +140,11 @@ slice. This table specifies semantics before choosing storage or dispatch:
 
 Evidence edges describe what must be read to evaluate a node. Temporal edges
 describe a legal action followed by its observations and later choices. They have
-different types and different update semantics. The view may unfold both as a
-tree, but shared query instances retain one identity.
+different types and different update semantics. The review renders the definition
+dependencies as a DAG: each definition appears once. The inspector describes its
+temporal program and successor bindings; evidence arrows alone do not advance play.
+Repeated future steps instantiate the same definitions in new contexts. Only
+equivalent relevant inputs may share a runtime result.
 
 Each call also binds its successor context and trajectory measure. Retained
 control receives the post-activation state, probability integration receives the
@@ -154,6 +165,28 @@ Heuristic ordering may prioritize work, with exclusions and unresolved compariso
 recorded. A result can be best among completed candidates without being proved
 best among all legal continuations.
 
+### The trick is the continuation boundary
+
+The main strategic dependency is **who wins the next trick and what remains**.
+Each joint branch contains the winning seat, captured points, spent cards,
+remaining rights and the observations each player receives. Those determine the
+next leader's legal opportunities and updated beliefs. The continuation compares
+cashing or developing winners, drawing trump, transferring the lead, activating
+or delaying a pair, and disrupting an opponent's route.
+
+Forced following/overtaking is a rule constraint; choices among legal cards use
+an explicit actor-response model. That actor sees its own hand and permitted
+observations, updated after every preceding card. A possible partner win is not
+proof that partner chooses the necessary card. Two branches with the same winner
+may consume different entries, reveal different voids or lose different pairs;
+they cannot be merged merely because their winners match.
+
+Sequence definitions bind legal actions, joint trick queries, observations and
+successor comparisons. The same trick definition is reused at later contexts,
+with finite progress from card and declaration-right consumption. Complete
+outcomes remain conditional records; their weights enter the final expectation
+once. A score cannot be joined to another branch's probability or resources.
+
 ## 5. Probability propagation and future choices
 
 The root candidate is an intervention, not evidence about the cards that would
@@ -162,7 +195,7 @@ uses the initial joint belief and correctly conditioned response/observation
 likelihoods. Shared cards, counts, rights and model assumptions remain connected.
 
 ```text
-Q(action) = E[engine_score(us) - engine_score(opponents)
+Q(action) = E[game_score(us) - game_score(opponents)
               | current_information, do(action), continuation_model]
 ```
 
@@ -194,7 +227,7 @@ test differences between live and forecast reselection levels as model error.
 
 ## 6. Value, risk and context
 
-The objective is expected engine score difference. Contract failure penalties,
+The objective is expected final game score difference. Contract failure penalties,
 opponent scoring, Schwarz and lost opportunities enter through engine outcomes.
 Pair possession alone supplies no score; the corresponding legal activation must
 occur. A lead opportunity or card cannot pay for incompatible future actions on

@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 from markdown_it import MarkdownIt
+from dag_layout import layout_view
 
 
 def validate_graph(model):
@@ -21,9 +22,9 @@ def validate_graph(model):
             if identity in ancestors:
                 raise ValueError(f"Dependency cycle at {identity}")
             node = nodes[identity]
-            if node["kind"] not in {"fact", "belief", "future", "decision"}:
+            if node["kind"] not in {"fact", "rule", "belief", "future", "decision"}:
                 raise ValueError(f"Unknown kind for {identity}")
-            for field in ("label", "summary", "returns", "operator"):
+            for field in ("label", "summary", "returns", "operator", "epistemic"):
                 if not node.get(field):
                     raise ValueError(f"Missing {field} on {identity}")
             visited.add(identity)
@@ -61,6 +62,10 @@ def main():
         contents[target] = text
     model = json.loads(contents["reasoning-graph.json"])
     validate_graph(model)
+    for view in model["views"]:
+        geometry = layout_view(view)
+        view["layouts"] = geometry["layouts"]
+        view["max_depths"] = geometry["max_depths"]
     renderer = MarkdownIt("commonmark", {"html": True}).enable("table")
 
     def chapters(markdown, first_open=True):
@@ -79,6 +84,7 @@ def main():
         "@@EXAMPLE@@": chapters(contents["worked-decision.md"], first_open=False),
         "@@BOUNDARY@@": renderer.render(contents["boundary-review.md"]),
         "@@MODEL@@": json.dumps(model, ensure_ascii=False).replace("</", "<\\/"),
+        "@@SCRIPT@@": (docs / "assets" / "reasoning-review.js").read_text(encoding="utf-8"),
         "@@VALIDATION@@": (
             "Review-only · source 8ea7a6a · 11 October 2026. "
             "The worked example distinguishes retained replay evidence from illustrative beliefs. "

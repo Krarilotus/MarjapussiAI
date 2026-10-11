@@ -29,7 +29,7 @@ facts and uncertain beliefs. Queries are computed when needed and cached until
 their inputs change. Strategic composition still lives in procedural policy
 helpers. The [reasoning contract](docs/design/executable-reasoning.md) proposes
 authored dependencies for entries, pair activation and control, evaluated by
-expected engine score difference. See the [architecture](docs/ARCHITECTURE.md)
+expected game score difference. See the [architecture](docs/ARCHITECTURE.md)
 and [current concept boundaries](docs/design/concept-store.md).
 
 The Game Solver is separate from the rules engine. It solves an exposed deal

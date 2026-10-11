@@ -1,8 +1,8 @@
 # Worked decision: cash first or ask for the pair?
 
-**The cash-first route loses 35 fewer engine score points on the retained allocation.** Both routes collect the Green pair and miss the 160 contract. The opponent's score makes the difference.
+**The cash-first route loses 35 fewer game score points on the retained allocation.** Both routes collect the Green pair and miss the 160 contract. The opponent's score makes the difference.
 
-| Retained continuation | Our engine score | Opponents' engine score | Difference |
+| Retained continuation | Our game score | Opponents' game score | Difference |
 |---|---:|---:|---:|
 | Cash Acorn Ten, ask for pair, try entry | -160 | 215 | **-375** |
 | Ask for pair, try entry immediately | -160 | 250 | **-410** |
@@ -46,7 +46,7 @@ Let `V = opponent 2 void in Acorns` and `A = opponent 2 holds Green Ace`. In thi
 **Proposed dependency composition, not a depiction of current executable code:**
 
 ```text
-Expected engine score difference for candidate + conditional suffix
+Expected game score difference for candidate + conditional suffix
  ├─ legal transitions and terminal scoring                       [engine]
  ├─ immediate cash value / root retains lead                     [facts + engine]
  ├─ Green-pair activation
@@ -81,7 +81,7 @@ The completed H1 diagnostics have the same legal original prefix. Full-game outc
 | E: `ask_pair, e-8`, then candidate | `[88,52]` | `[160,40]` | `[248,92]` | `[7,2]` | `[250,-160]` | **−410** | No |
 | Control: whole-pair ask only, then candidate | `[111,29]` | `[160,40]` | `[271,69]` | `[7,2]` | `[270,-160]` | −430 | No |
 
-Both main alternatives activate Green and fail 160. C improves realized score difference by **35** on H1, despite lower own raw points. Defender scoring and additional enemy pair calls matter; pair activation and contract success cannot replace engine utility. Rounding of 248 to 250 is intentional. Neither side is Schwarz. C result (`counterfactual-2549-cash-ask-entry.ndjson`); E result (`counterfactual-2549-ask-entry.ndjson`); scoring owner (`scoring.rs:76`)
+Both main alternatives activate Green and fail 160. C improves realized score difference by **35** on H1, despite lower own raw points. Defender scoring and additional enemy pair calls matter; pair activation and contract success cannot replace final-game value. Rounding of 248 to 250 is intentional. Neither side is Schwarz. C result (`counterfactual-2549-cash-ask-entry.ndjson`); E result (`counterfactual-2549-ask-entry.ndjson`); scoring owner (`scoring.rs:76`)
 
 **H2 terminal outcome is unavailable.** Use a conservative bound, not a fabricated score table: all card points total 140, all pair points total 280; root's team already won a trick and cannot become Schwarz. With fixed contract 160, our final score is ±160; defenders score at most 420, or −320 if Schwarz on our made contract. Therefore for either continuation, `D(H2) ∈ [−580,480]`. The bound is loose but valid under the current engine constants. Point ceilings (`points.rs:28`); Schwarz/scoring (`scoring.rs:76`)
 

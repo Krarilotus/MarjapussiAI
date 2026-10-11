@@ -59,19 +59,30 @@ strategic definitions for review, not an execution trace.
 
 ## How to inspect the graph
 
-Start at **Best next action** and expand the dependency you want to challenge.
-The arrows point upward: lower nodes supply the information needed above.
-Blue means deterministic or proven information in its declared context; purple
-means a belief estimate; green means a future continuation; orange means a
-comparison or decision. A deterministic engine score within a hypothetical world
-is not a fact known to the player.
+Start at **Best next move**. Inputs point upward to their consumers. The graph
+is a DAG: each definition appears once, with all visible direct dependencies
+connected to that same node. Select a node to highlight its connections and read
+both **Requires** and **Used by**. **Focus on dependencies**, **Show more**, **Back**
+and **Full graph** change the projection without duplicating nodes.
 
-The diagram unfolds shared dependencies into a tree for readability. Repeated
-nodes retain one identity and must not be counted as independent evidence.
-The inspector gives each node’s output, evaluator and conditions. Runtime
-limits and cache counters belong in assessment metadata, outside this semantic
-tree. Action sequences are described as continuations; evidence arrows alone
-do not advance the game.
+Colors identify roles: knowledge in context, rules, belief estimates, hypothetical
+continuations and decisions. **Result meaning** describes the proof/estimate
+boundary. The expected final score is a belief-based prediction. Exact scoring
+under an assumed outcome does not make that outcome known. A current holding
+query can return a hard proof and model probability in separate fields.
+
+The main line is joint trick outcomes → changed cards/rights and observations →
+next leader's opportunities → subsequent tricks → final game scores → their
+belief-weighted difference. The current `routes.rs` computes goal-specific
+capabilities in an exposed deal; overlapping capabilities can require different
+plays, so they are not mutually exclusive trick-outcome probabilities. Current
+`planning.rs` simulates legal continuations and records winners afterwards. It
+does not encode that strategic dependency chain in the concept store.
+
+One visible definition is not a promise of one runtime calculation across every
+future state. Queries with equivalent relevant bindings reuse a result; changed
+hands, observations or models require distinct instances. Their context belongs
+in the key. Runtime budgets and cache counters stay assessment metadata.
 
 ## Review decisions before implementation
 
