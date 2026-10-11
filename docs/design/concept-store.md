@@ -1,5 +1,11 @@
 # Concept store: from cards to decisions
 
+The implemented store answers holding and perspective queries. Strategic choices
+still use procedural composition. The [executable reasoning contract](executable-reasoning.md)
+and [worked decision](worked-decision.md) propose the authored strategic layer;
+they are under review. The catalogue below contains both current capabilities
+and earlier proposed concepts.
+
 This catalogue describes the concepts and their dependencies, including proposed
 work. Typed Rust helpers implement [entry conditions](entry-conditions.md), joint
 holding queries and [bounded return forecasts](return-rollouts.md). The shared

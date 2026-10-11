@@ -1,0 +1,636 @@
+{
+  "schema": 1,
+  "status": "Review definitions, not an exported production execution trace",
+  "source_revision": "8ea7a6aac09fa147b1604f7c0c68a10c288ae0e7",
+  "views": [
+    {
+      "id": "best",
+      "title": "Proposed · Best next action",
+      "root": "best",
+      "nodes": [
+        {
+          "id": "best",
+          "label": "Best next action",
+          "kind": "decision",
+          "summary": "Choose the legal action and conditional continuation with the highest expected score difference under the declared model.",
+          "returns": "Action, conditional intent, ranking status and explanation references",
+          "operator": "Best",
+          "detail": "The winner is model-relative. Contract-success chance is reported separately. Overlapping bounds mean the ranking remains unresolved, even if a fallback action must be chosen. Candidate coverage, excluded routes, residual mass and work counters are assessment metadata.",
+          "source": "Contract §§3, 6, 8",
+          "inputs": [
+            {
+              "id": "values",
+              "label": "compares"
+            },
+            {
+              "id": "legal",
+              "label": "legal choices"
+            },
+            {
+              "id": "objective",
+              "label": "optimises"
+            }
+          ]
+        },
+        {
+          "id": "values",
+          "label": "Expected score by route",
+          "kind": "decision",
+          "summary": "Evaluate competing uses of the same cards and opportunities through their final score consequences.",
+          "returns": "Expected score difference and named event estimates per candidate",
+          "operator": "Integrate",
+          "detail": "An available pair contributes points only after a legal activation. Alternative successful routes overlap unless their joint trajectories establish otherwise.",
+          "inputs": [
+            {
+              "id": "routes",
+              "label": "candidate policies"
+            },
+            {
+              "id": "mass",
+              "label": "joint branch mass"
+            },
+            {
+              "id": "scores",
+              "label": "outcome values"
+            }
+          ]
+        },
+        {
+          "id": "objective",
+          "label": "Engine score difference",
+          "kind": "fact",
+          "summary": "The agreed objective is our engine score minus the opponents’ engine score at the declared horizon.",
+          "returns": "Objective identity and scoring context",
+          "operator": "Known / engine scoring contract",
+          "detail": "The first slice uses end-of-game scores. Series payouts require a separately declared horizon and key. Contract penalties and Schwarz already belong to scoring; do not add tactical risk bonuses.",
+          "inputs": []
+        },
+        {
+          "id": "routes",
+          "label": "Competing legal continuations",
+          "kind": "future",
+          "summary": "Compare announcing now, reaching partner first, removing a threat first, and other legal uses of the resources.",
+          "returns": "Conditional action/observation routes with shared resource bindings",
+          "operator": "Bind + Alternatives + Then",
+          "detail": "These are general route definitions parameterised by seats, suits and cards. The author describes dependencies; the evaluator compares them. No callback chooses the route before the graph runs.",
+          "inputs": [
+            {
+              "id": "own",
+              "label": "own activation"
+            },
+            {
+              "id": "partner",
+              "label": "partner activation"
+            },
+            {
+              "id": "other",
+              "label": "other uses"
+            }
+          ]
+        },
+        {
+          "id": "own",
+          "label": "Holder announces the pair",
+          "kind": "future",
+          "summary": "Evaluate the holder's legal own announcement and the resulting trump. A future other-seat choice requires a response prediction.",
+          "returns": "Successor context or unavailable route",
+          "operator": "Apply + Then",
+          "inputs": [
+            {
+              "id": "entry",
+              "label": "holder opportunity"
+            },
+            {
+              "id": "pair",
+              "label": "pair survives"
+            },
+            {
+              "id": "rights",
+              "label": "own route legal"
+            },
+            {
+              "id": "control",
+              "label": "value afterwards"
+            },
+            {
+              "id": "responses",
+              "label": "holder choice"
+            }
+          ],
+          "bindings": {
+            "holder": "pair_holder; direct action only when that actor has the legal opportunity",
+            "context": "that actor information at the opportunity",
+            "transition": "Apply(own announcement) -> control(activation.successor)"
+          }
+        },
+        {
+          "id": "partner",
+          "label": "Activate the pair by asking",
+          "kind": "future",
+          "summary": "The holder's partner gets a legal question opportunity; the holder truthfully answers. Either seat may be root in the bound route.",
+          "returns": "Activation event and successor contexts, including failure branches",
+          "operator": "Then + Response + Apply",
+          "detail": "Root cannot command partner. Knowing partner knows the connection is evidence for a response prediction, not a guarantee of cooperation.",
+          "inputs": [
+            {
+              "id": "pair",
+              "label": "surviving pair"
+            },
+            {
+              "id": "entry",
+              "label": "reach partner"
+            },
+            {
+              "id": "ask",
+              "label": "legal response"
+            },
+            {
+              "id": "control",
+              "label": "value afterwards"
+            }
+          ],
+          "bindings": {
+            "holder": "pair_holder",
+            "questioner": "partner(pair_holder)",
+            "context": "questioner opportunity successor",
+            "pair": "Pair(holder, target_suit) survives in that context",
+            "transition": "questioner action/Response -> Apply(question) -> holder legal Response -> Apply(answer) -> control(activation.successor)"
+          }
+        },
+        {
+          "id": "other",
+          "label": "Other uses of the cards",
+          "kind": "future",
+          "summary": "Keep legal non-pair plays and interrupted routes in the comparison, including spending an entry or pair card.",
+          "returns": "Other candidate continuations and explicit coverage",
+          "operator": "Alternatives + Apply",
+          "detail": "Resource preservation is a dependency of a particular route, not a new rule forbidding other moves.",
+          "inputs": [
+            {
+              "id": "legal",
+              "label": "legal choices"
+            },
+            {
+              "id": "responses",
+              "label": "counterplay"
+            }
+          ]
+        },
+        {
+          "id": "entry",
+          "label": "Reach the required player",
+          "kind": "future",
+          "summary": "Evaluate whether the required actor already leads or can obtain the opportunity, retaining the target pair and later resources.",
+          "returns": "Entry event under each observed continuation",
+          "operator": "Then + Apply + Observe",
+          "detail": "Compare immediate entry and a threat-removal prefix. A possession estimate alone cannot answer this future-event question.",
+          "inputs": [
+            {
+              "id": "draw",
+              "label": "optional draw prefix"
+            },
+            {
+              "id": "entrycards",
+              "label": "resources"
+            },
+            {
+              "id": "threat",
+              "label": "counterplay"
+            },
+            {
+              "id": "responses",
+              "label": "actual choices"
+            }
+          ],
+          "bindings": {
+            "context": "either current state or the selected draw-prefix successor",
+            "transition": "Apply(lead) -> actor Responses -> Observe(completed trick) -> entry EventWitness",
+            "pair": "must survive until later activation; failure still continues to an engine outcome",
+            "required_actor": "holder for own announcement; questioner for asking route"
+          }
+        },
+        {
+          "id": "ask",
+          "label": "The legal question and answer",
+          "kind": "future",
+          "summary": "Evaluate the questioner and holder from their respective information, including alternative truthful answers when more than one pair is available.",
+          "returns": "Legal question/answer branches and response likelihoods",
+          "operator": "Response + Apply",
+          "inputs": [
+            {
+              "id": "rights",
+              "label": "legal opportunity"
+            },
+            {
+              "id": "perspective",
+              "label": "partner information"
+            },
+            {
+              "id": "responses",
+              "label": "response model"
+            }
+          ]
+        },
+        {
+          "id": "control",
+          "label": "Useful control after activation",
+          "kind": "future",
+          "summary": "Re-evaluate which tricks and entries remain after the announced suit becomes trump.",
+          "returns": "Conditional suffixes and retained-control event",
+          "operator": "Observe + Then",
+          "detail": "Old trump masters may become ordinary suit cards. A route can remain legal and still lose to a newly better route after an observation.",
+          "inputs": [
+            {
+              "id": "resources",
+              "label": "remaining cards"
+            },
+            {
+              "id": "responses",
+              "label": "later responses"
+            }
+          ],
+          "bindings": {
+            "context": "the specific own/partner activation successor",
+            "resources": "read from successor; old trump rankings and spent cards invalidated",
+            "alternatives": "legal continuations after activation under the same objective"
+          }
+        },
+        {
+          "id": "pair",
+          "label": "The target pair remains held",
+          "kind": "belief",
+          "summary": "Use a hard proof when the holder is known to retain both halves; otherwise query joint possession. Recheck after every relevant transition.",
+          "returns": "Scoped possession proof/refutation or joint estimate",
+          "operator": "Known + HoldingEvent",
+          "inputs": [
+            {
+              "id": "resources",
+              "label": "own cards"
+            },
+            {
+              "id": "holdings",
+              "label": "uncertain holder"
+            }
+          ],
+          "bindings": {
+            "holder": "root or partner, bound for this route",
+            "suit": "uncalled target suit",
+            "context": "route stage, not only initial hand"
+          }
+        },
+        {
+          "id": "rights",
+          "label": "Actor-specific declaration rights",
+          "kind": "fact",
+          "summary": "Read who can announce, ask and answer in this phase, for this unannounced suit.",
+          "returns": "Legal route requirements",
+          "operator": "Known / engine legality",
+          "detail": "Regaining lead does not restore spent rights. Truthfully answering a question and announcing one’s own pair have different rule conditions.",
+          "inputs": [
+            {
+              "id": "legal",
+              "label": "rules and phase"
+            }
+          ]
+        },
+        {
+          "id": "entrycards",
+          "label": "Available entry resources",
+          "kind": "belief",
+          "summary": "Ask jointly about the lead card, partner’s winner or void, and retained trump. Preserve known parts as proofs.",
+          "returns": "Joint possession conditions with proof and model estimate separate",
+          "operator": "HoldingEvent(All(...))",
+          "detail": "A passed-back card can refill a void. The graph must use the current hand constraints, not an earlier remembered label.",
+          "inputs": [
+            {
+              "id": "resources",
+              "label": "certain resources"
+            },
+            {
+              "id": "holdings",
+              "label": "uncertain resources"
+            }
+          ]
+        },
+        {
+          "id": "threat",
+          "label": "Opponents can interrupt entry",
+          "kind": "belief",
+          "summary": "Evaluate following suit, ruffing and overruffing under the same joint card constraints as the intended entry.",
+          "returns": "Joint threat event and exhaustion evidence",
+          "operator": "HoldingEvent + bounded continuation",
+          "detail": "A draw-first prefix is a legal sequence that must spend cards and be reevaluated after observations. No unbounded loop or unconditional draw-trump rule is implied.",
+          "inputs": [
+            {
+              "id": "holdings",
+              "label": "outside holdings"
+            },
+            {
+              "id": "legal",
+              "label": "forced responses"
+            }
+          ],
+          "bindings": {
+            "context": "the current or route-conditioned future trump; preserve this context in the query key"
+          }
+        },
+        {
+          "id": "perspective",
+          "label": "The acting seat's information",
+          "kind": "belief",
+          "summary": "Model another actor's permitted information from shared observations and private-hand hypotheses. Root uses its own actual information.",
+          "returns": "Root proof of partner knowledge; expected partner belief",
+          "operator": "Perspective query",
+          "detail": "The real partner’s store or intent is never read. Shared transfer evidence can establish knowledge directly; convention evidence remains uncertain.",
+          "inputs": [
+            {
+              "id": "information",
+              "label": "visible evidence"
+            },
+            {
+              "id": "holdings",
+              "label": "private hypotheses"
+            }
+          ]
+        },
+        {
+          "id": "mass",
+          "label": "Joint trajectory probabilities",
+          "kind": "belief",
+          "summary": "Carry one constrained allocation measure through actions, observations and actor responses.",
+          "returns": "Disjoint branch weights, residual mass and model identity",
+          "operator": "HoldingEvent + Response + Observe",
+          "detail": "Do not multiply marginal pair, void and entry probabilities. Refining a class preserves its mass. Current aggregate ConceptQuery answers alone do not provide a trajectory measure.",
+          "inputs": [
+            {
+              "id": "routes",
+              "label": "candidate branches"
+            },
+            {
+              "id": "holdings",
+              "label": "initial joint support"
+            },
+            {
+              "id": "responses",
+              "label": "conditional responses"
+            }
+          ],
+          "bindings": {
+            "candidate": "the particular route intervention, not all routes combined",
+            "measure": "initial joint allocation mass conditioned through this route and permitted observations",
+            "responses": "conditional on each acting seat information and the named finite response model"
+          }
+        },
+        {
+          "id": "holdings",
+          "label": "Hard-consistent uncertain hands",
+          "kind": "belief",
+          "summary": "Assign convention and exchange likelihoods only to allocations allowed by the knowledge layer.",
+          "returns": "Joint model support and weights; logical support retained separately",
+          "operator": "Existing deal-space and belief measure",
+          "detail": "Hand capacities connect suits. A probability-one event is not proof if a hard-consistent counterexample has zero soft weight.",
+          "inputs": [
+            {
+              "id": "information",
+              "label": "hard constraints"
+            },
+            {
+              "id": "conventions",
+              "label": "soft evidence"
+            }
+          ]
+        },
+        {
+          "id": "responses",
+          "label": "Each actor’s next choice",
+          "kind": "future",
+          "summary": "Predict a legal response from that actor’s hypothetical information using a named, finite response level.",
+          "returns": "Legal action distribution and model qualification",
+          "operator": "Response",
+          "detail": "Equal actor information and intent require equal choice distributions. Never choose a different root continuation for hidden worlds it cannot distinguish. Recursive best-response calls must bottom out.",
+          "inputs": [
+            {
+              "id": "information",
+              "label": "projected history"
+            },
+            {
+              "id": "legal",
+              "label": "legal actions"
+            }
+          ]
+        },
+        {
+          "id": "scores",
+          "label": "Final scores and named events",
+          "kind": "fact",
+          "summary": "Read scores from completed engine trajectories. Incomplete leaves remain bounded or explicitly estimated.",
+          "returns": "Per-trajectory team scores, contract-make and activation events",
+          "operator": "EngineOutcome",
+          "detail": "This node is deterministic for a terminal scenario; it does not make that hidden scenario known to the player. Current contract score and captured points are different quantities.",
+          "inputs": [
+            {
+              "id": "routes",
+              "label": "terminal trajectories"
+            },
+            {
+              "id": "objective",
+              "label": "scoring semantics"
+            }
+          ],
+          "bindings": {
+            "terminal_state": "each completed candidate trajectory from Apply/Response/Observe",
+            "incomplete_state": "retain bounds or declared leaf estimate; never call terminal scoring early"
+          }
+        },
+        {
+          "id": "resources",
+          "label": "Cards and rights still available",
+          "kind": "fact",
+          "summary": "Use own cards and proven observations in the current or explicitly hypothetical successor context.",
+          "returns": "Scoped resource facts",
+          "operator": "Known",
+          "detail": "A card or opportunity can be consumed once per realised branch. Different alternative branches may use the same card.",
+          "inputs": [
+            {
+              "id": "information",
+              "label": "accepted observations"
+            }
+          ]
+        },
+        {
+          "id": "legal",
+          "label": "Legal actions in this context",
+          "kind": "fact",
+          "summary": "The engine supplies legal actions and exact transitions for the current phase and rights.",
+          "returns": "Legal action set and rule context",
+          "operator": "Engine legality",
+          "inputs": [
+            {
+              "id": "information",
+              "label": "actor context"
+            }
+          ]
+        },
+        {
+          "id": "information",
+          "label": "Permitted observations and facts",
+          "kind": "fact",
+          "summary": "Own hand, public history, personally visible transfers and exact deductions anchor every query.",
+          "returns": "Actor-local information and hard-consistent support",
+          "operator": "Observation + knowledge",
+          "detail": "Hypothetical conditions carry their own scope. They never silently mutate actual knowledge or expose another seat’s private backend state.",
+          "inputs": []
+        },
+        {
+          "id": "conventions",
+          "label": "Bid and exchange likelihoods",
+          "kind": "belief",
+          "summary": "Interpret observed signals under a named convention model, conditional on the hard facts.",
+          "returns": "Soft joint weighting factors",
+          "operator": "Belief model",
+          "detail": "Signals can strengthen a supported interpretation but cannot override an impossible holding. A new signal can affect values in more than one suit.",
+          "inputs": []
+        },
+        {
+          "id": "draw",
+          "label": "Remove a threat before entry",
+          "kind": "future",
+          "summary": "Compare finite draw prefixes with immediate entry. Each draw spends a legal card and observes the resulting trick.",
+          "returns": "Observed successor contexts and interruption branches",
+          "operator": "Until(Then(Apply, Response, Observe))",
+          "detail": "This family does not force drawing whenever a threat is possible. Compare each supported stop/continue route by score. Branch choices may use only observed evidence; losing lead or a required resource interrupts the prefix.",
+          "bindings": {
+            "start": "current context with established trump; no draw route when no trump is established",
+            "one_iteration": "Bind a legal current-trump lead -> Apply -> legal actor responses -> completed-trick observation",
+            "stop": "observed threat exhaustion, lost opportunity/resource, or a compared stop route selected",
+            "progress": "completed tricks increase and remaining cards decrease; no repeated question loop",
+            "output": "entry(prefix.successor) or legal interrupted continuation"
+          },
+          "inputs": [
+            {
+              "id": "threat",
+              "label": "target condition"
+            },
+            {
+              "id": "resources",
+              "label": "spendable cards"
+            },
+            {
+              "id": "responses",
+              "label": "trick responses"
+            }
+          ]
+        }
+      ],
+      "bindings": {
+        "root": "acting seat",
+        "pair_holder": "root or partner, from legal route binding",
+        "questioner": "partner(pair_holder)",
+        "suit": "target unannounced pair",
+        "context": "explicit current or successor information state"
+      }
+    },
+    {
+      "id": "holding",
+      "title": "Current · Does partner hold a pair?",
+      "root": "holding-answer",
+      "nodes": [
+        {
+          "id": "holding-answer",
+          "label": "Does partner hold this pair?",
+          "kind": "belief",
+          "status": "Implemented query boundary",
+          "summary": "The current ConceptQuery API can answer a holding question with separate proof and model probability fields.",
+          "returns": "Hard truth, conditional truth, probability bounds and resolution",
+          "operator": "Mind::concept / ConceptQuery",
+          "detail": "This does not calculate whether partner gets the lead, chooses to ask, activates a pair and wins the contract. Those strategic dependencies are currently composed in procedural policy helpers.",
+          "source": "crates/beliefs/src/concepts.rs",
+          "inputs": [
+            {
+              "id": "hard",
+              "label": "proof support"
+            },
+            {
+              "id": "weighted",
+              "label": "model mass"
+            },
+            {
+              "id": "predicate",
+              "label": "question"
+            }
+          ]
+        },
+        {
+          "id": "hard",
+          "label": "Every permitted allocation",
+          "kind": "fact",
+          "status": "Implemented",
+          "summary": "Exact deductions define which hidden holdings remain possible from this seat’s information.",
+          "returns": "Hard support; proof includes zero-soft-weight cases",
+          "operator": "knowledge allocation space",
+          "source": "crates/knowledge/src/allocations.rs",
+          "inputs": [
+            {
+              "id": "seen",
+              "label": "observations"
+            }
+          ]
+        },
+        {
+          "id": "weighted",
+          "label": "Joint weighted allocations",
+          "kind": "belief",
+          "status": "Implemented",
+          "summary": "Belief queries integrate joint allocation weights rather than treating pair halves as independent cards.",
+          "returns": "Conditional weighted mass with unresolved bounds",
+          "operator": "DealModel / ConceptQuery integration",
+          "source": "crates/beliefs/src/deals.rs; concepts.rs",
+          "inputs": [
+            {
+              "id": "hard",
+              "label": "valid support"
+            },
+            {
+              "id": "signals",
+              "label": "soft weighting"
+            }
+          ]
+        },
+        {
+          "id": "predicate",
+          "label": "Pair, with optional conditions",
+          "kind": "belief",
+          "status": "Implemented",
+          "summary": "Pair means both King and Ober held by the named seat; conditions may also constrain cards, voids and counts.",
+          "returns": "Canonical signed holding predicates and conditions",
+          "operator": "Concept / ConceptQuery",
+          "detail": "Conjunctions and conditions share card-count constraints. This schema does not yet author action sequences or compare their scores.",
+          "source": "crates/beliefs/src/concepts.rs: Concept and ConceptQuery",
+          "inputs": []
+        },
+        {
+          "id": "seen",
+          "label": "What this seat has observed",
+          "kind": "fact",
+          "status": "Implemented",
+          "summary": "Own hand, public play and transfers visible to this actor feed exact deduction.",
+          "returns": "Private seat view and exact constraints",
+          "operator": "observation + knowledge",
+          "source": "crates/observation/src/lib.rs; crates/knowledge/src/lib.rs",
+          "inputs": []
+        },
+        {
+          "id": "signals",
+          "label": "Observed bid and exchange signals",
+          "kind": "belief",
+          "status": "Implemented",
+          "summary": "Existing convention models assign weights within hard-consistent support.",
+          "returns": "Joint belief model parameters and factors",
+          "operator": "beliefs",
+          "source": "crates/beliefs/src",
+          "inputs": []
+        }
+      ]
+    }
+  ]
+}

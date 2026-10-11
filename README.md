@@ -24,13 +24,13 @@ Each layer has one job:
 | `solver` | The Game Solver: searches card plays, announcements, questions, answers and legal trump changes. |
 | `eval`, `tools` | Replays, human-game analysis and comparisons on the same deals. |
 
-The **concept store** is a collection of typed calculations with explicit
-inputs, not a separate graph database. Facts constrain beliefs; the agent combines
-these with ideas such as entries, pair activation and developing winners. Belief
-queries are computed when needed and cached until their inputs change. Continuing
-histories reuse state; rewinds, changed histories and belief settings rebuild it.
-See the [architecture](docs/ARCHITECTURE.md) and
-[concept dependencies](docs/design/concept-store.md).
+The **concept store** provides typed holding and perspective queries over exact
+facts and uncertain beliefs. Queries are computed when needed and cached until
+their inputs change. Strategic composition still lives in procedural policy
+helpers. The [reasoning contract](docs/design/executable-reasoning.md) proposes
+authored dependencies for entries, pair activation and control, evaluated by
+expected engine score difference. See the [architecture](docs/ARCHITECTURE.md)
+and [current concept boundaries](docs/design/concept-store.md).
 
 The Game Solver is separate from the rules engine. It solves an exposed deal
 exactly when search completes. With hidden cards it compares possible deals;
@@ -62,8 +62,10 @@ The AI is playable, but there is more to improve:
 - Playing-strength qualification remains open. The
   [targeted review](docs/checkpoints/2026-10-11-conditional-plan-dryrun.md)
   records remaining control-sequence failures and measured performance improvements.
-  The [conditional-sequence proposal](docs/design/conditional-sequences.md) describes
-  adaptive plans, persistent intent and dependency-aware reuse for the next iteration.
+  The [reasoning review](docs/design/reasoning-boundary-review.md) and
+  [worked decision](docs/design/worked-decision.md) define the next review gate.
+  The [conditional-sequence proposal](docs/design/conditional-sequences.md) supplies
+  supporting execution and persistence detail.
 - Agreement with human moves measures similarity, not playing strength.
 
 The [next steps](docs/NEXT_STEPS.md) and

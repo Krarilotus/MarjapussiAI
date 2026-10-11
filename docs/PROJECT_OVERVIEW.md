@@ -55,9 +55,10 @@ through HTTP and PyO3 respectively. It reuses these engine and agent contracts.
 - Duplicate deals, deterministic seeds, hidden-card swaps, and decision explanations.
 - A local play/debug interface for reviewing concrete disagreements with the owner.
 
-Keep these boundaries. A rewrite or a generic runtime concept-graph framework is
-not justified by this review. The concept catalogue can continue to describe typed
-Rust helpers; a diagram is not evidence that a complete planner already exists.
+Keep these layer boundaries. The [reasoning contract](design/executable-reasoning.md)
+proposes an authored strategic dependency model over the existing primitives,
+with a common evaluator and runtime-derived explanations. Current typed helpers
+remain the implementation baseline; the contract and worked slice are under review.
 
 ## Current limits
 

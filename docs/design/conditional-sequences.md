@@ -1,8 +1,9 @@
 # Conditional sequences: planning that survives the next turn
 
-Status: **design for implementation**, based on `1907407`. The policy described
-here is not implemented or qualified. This is the next slice of the
-[concept-store design](concept-store.md), using the existing crates and runtime.
+Status: **supporting execution design**, based on `1907407`. The policy described
+here is not implemented or qualified. The [executable reasoning contract](executable-reasoning.md)
+governs strategic authoring and comparison; its worked slice is under review.
+This document supplies intent, execution and persistence detail using the existing crates.
 The [targeted review](../checkpoints/2026-10-11-conditional-plan-dryrun.md)
 provides the evidence; its preserved pairs and entries did not reliably become
 completed activation routes.
@@ -76,9 +77,10 @@ points in the same module, with one executor.
 
 ## 3. A small domain model
 
-Use concrete Rust enums and compact indexed storage inside `heuristic::planning`.
-The existing concept store continues to describe holdings and epistemic queries.
-Temporal actions do not belong in `beliefs::Concept`.
+Use typed definitions and compact indexed storage for the authored strategic model
+described in the [reasoning contract](executable-reasoning.md). Existing holding
+and epistemic queries remain belief-layer primitives. Temporal composition belongs
+to the strategic layer above those primitives, with explicit evidence and action edges.
 
 | Proposed type | Meaning |
 |---|---|
@@ -91,7 +93,7 @@ Temporal actions do not belong in `beliefs::Concept`.
 | `Advance` | `Action`, `AwaitObservation`, `Complete`, or `Repair` with a typed reason. An action is checked against engine legal actions. |
 
 These are design names, not new public APIs already present in the code.
-Start with these shapes; do not build a general-purpose graph interpreter.
+The common evaluator executes a closed set of authored composition operators.
 Store only reachable alternatives, and deduplicate identical suffixes by full
 structural equality. A loop such as drawing trumps must consume a card or accepted
 event on every iteration. Questions cannot form a zero-progress cycle.

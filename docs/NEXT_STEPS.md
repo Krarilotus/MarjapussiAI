@@ -53,20 +53,20 @@ should grow from concrete failure modes, not tests that restate implementation.
 Midgame information-set search, neural policies, PPO/GRPO, difficulty styles, and
 upstream-site integration remain later work. The separate public testbed is live.
 Choose an algorithm from measured benefit and constraints; this review does not establish GRPO as preferable.
-No GPU training or new runtime graph framework is needed for the next iterations.
+GPU training and framework selection remain separate from the reasoning contract.
 
 ## Next implementation task
 
-Implement the first vertical slice of the
-[conditional-sequence design](design/conditional-sequences.md): private plan
-receipts and one shared executor for threat removal, entry, pair activation and
-retained control. New evidence must revise value as well as feasibility. Validate
-restore/undo/cache semantics and all-seat preplay preparation before enabling the
-strategic change. The [dryrun checkpoint](checkpoints/2026-10-11-conditional-plan-dryrun.md)
-is incomplete strategically; preserving resources alone did not complete these
-sequences. Reuse its recorded cases and close controls, and measure formation,
-execution and repair separately. [Research prompts](design/sequence-research-prompts.md)
-cover adaptive planning and incremental probability computation.
+Review the [executable reasoning contract](design/executable-reasoning.md) and
+[worked decision](design/worked-decision.md) before production implementation.
+Then implement one authored pair/entry/control slice whose dependencies drive
+evaluation, selection and explanation. Validate joint mass, actor information,
+route coverage and engine scoring before broader policy changes. New evidence
+must revise value as well as feasibility. The
+[conditional-sequence design](design/conditional-sequences.md) supplies supporting
+intent, restore/undo and cache contracts. Reuse the
+[incomplete dryrun](checkpoints/2026-10-11-conditional-plan-dryrun.md) cases and close
+controls; measure formation, execution and repair separately.
 
 The paired live Debug smoke passes; use concrete owner-played mistakes to
 choose the next small iteration. The [bounded return checkpoint](checkpoints/2026-10-09-return-planning.md)
