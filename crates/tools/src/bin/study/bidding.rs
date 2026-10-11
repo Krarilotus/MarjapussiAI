@@ -14,7 +14,7 @@ use tools::legacy::{meta, replay, seat_groups};
 
 /// The actor's hand class: ace or not, and the best of red pair, Bells pair, small pair (Acorns
 /// or Green), 3+ halves, 2 halves, fewer.
-fn hand_class(h: CardSet) -> String {
+pub(crate) fn hand_class(h: CardSet) -> String {
     let ace = if (h & CardSet::ACES).is_empty() { "-" } else { "A" };
     let pair = |s: Suit| CardSet::halves(s).is_subset(h);
     let halves = (h & CardSet::HALVES).len();
@@ -34,7 +34,7 @@ fn hand_class(h: CardSet) -> String {
     format!("{ace} {shape}")
 }
 
-fn action_key(bid: Option<i32>, value: i32) -> String {
+pub(crate) fn action_key(bid: Option<i32>, value: i32) -> String {
     match bid {
         None => "pass".into(),
         Some(140) => "=140".into(),
@@ -43,7 +43,7 @@ fn action_key(bid: Option<i32>, value: i32) -> String {
     }
 }
 
-fn band(v: i32) -> &'static str {
+pub(crate) fn band(v: i32) -> &'static str {
     match v {
         ..=115 => "115",
         116..=135 => "120-135",
@@ -63,7 +63,7 @@ struct Cell {
     groups: BTreeMap<(&'static str, &'static str), (u64, u64)>,
 }
 
-fn dist(m: &BTreeMap<String, u64>, n: u64) -> String {
+pub(crate) fn dist(m: &BTreeMap<String, u64>, n: u64) -> String {
     let mut v: Vec<_> = m.iter().collect();
     v.sort_by(|a, b| b.1.cmp(a.1));
     v.iter()
@@ -72,7 +72,7 @@ fn dist(m: &BTreeMap<String, u64>, n: u64) -> String {
         .join(", ")
 }
 
-fn bid_of(t: &ActionType) -> Option<i32> {
+pub(crate) fn bid_of(t: &ActionType) -> Option<i32> {
     match t {
         ActionType::NewBid(v) => Some(*v),
         _ => None,

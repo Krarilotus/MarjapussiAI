@@ -6,9 +6,17 @@
 //! `study find [filters] [--list N]`: the human decisions matching every filter, with counts.
 //! `study bidding [--selfplay N]`: HP1 against every human bidding decision, by situation cell
 //! (C36), in Markdown; `--selfplay` adds HP1 self-play rates on `holdout` (information only).
+//! `study full --out DIR --md FILE [--threads N] [--fresh game|decision]`: HP1 against every
+//! human decision of every phase (C38): `DIR/decisions.ndjson`, `DIR/games.ndjson` and the
+//! overview `FILE`; the runtime and the decision hash go to stderr. `--fresh` switches the speed
+//! shortcuts off (new agents for every game, or for every decision): the hash must not change.
+//! `study kingace --out DIR [--deals N] [--suite NAME] [--threads N]`: the owner's "king instead
+//! of ace" pattern in 4×HP1 self-play (C44): the hits to `DIR/kingace.ndjson`, a summary on
+//! stdout. Needs no human games.
 //!
 //! The dataset path comes from `MARJA_GAMES` (or `--games PATH`); it holds real names, which
-//! never leave `tools::legacy`.
+//! never leave `tools::legacy`. The player groups of the splits come from the private
+//! `MARJA_PLAYER_GROUPS` (`tools::legacy::seat_groups`).
 //!
 //! Filters of `find` (all optional, combined with "and"):
 //! - `--phase first-bid|later-bid|raise|pass-forth|pass-back|trump|lead|follow|answer`;
@@ -21,17 +29,19 @@
 //! - `--result made|failed|allpass`, `--margin-over X` (made or failed by more than X).
 
 mod bidding;
+mod full;
+mod kingace;
 
 use std::collections::BTreeMap;
 
-use engine::{suit_of, ActionType, Card, CardSet, GameFinishedInfo, Suit, SUITS};
+use engine::{suit_of, takes, ActionType, Card, CardSet, GameFinishedInfo, Suit, SUITS};
 use observation::Seat;
 use tools::cli::Cli;
 use tools::legacy::{read, replay};
 
 const SEATS: [&str; 4] = ["N", "E", "S", "W"];
 
-/// One action, before it was applied; automatic completions remain in transcripts.
+/// One human decision, before it was applied.
 struct Act {
     step: usize,
     seat: Seat,
@@ -44,7 +54,6 @@ struct Act {
     pos: u8,
     /// The partner's previous bidding action: `Some(None)` passed, `Some(Some(v))` bid v.
     partner: Option<Option<i32>>,
-    claimed_by: Option<Seat>,
 }
 
 /// One replayed game.
@@ -94,7 +103,6 @@ fn load(path: &str) -> Vec<Option<Game>> {
                         _ => 0,
                     },
                     partner,
-                    claimed_by: s.claimed_by,
                 });
             })
             .ok()?;
@@ -216,6 +224,18 @@ fn transcript(games: &[Option<Game>], id: usize) {
     }
 }
 
+/// Cards of `hand` that stand from the hand alone: every higher card of their suit is in it.
+fn standing(hand: CardSet) -> u32 {
+    hand.iter()
+        .filter(|&c| {
+            CardSet::suit(suit_of(c))
+                .iter()
+                .filter(|&b| takes(b, c, None))
+                .all(|b| hand.contains(b))
+        })
+        .count() as u32
+}
+
 fn suit_named(name: &str) -> Suit {
     match name {
         "red" => Suit::Red,
@@ -249,7 +269,7 @@ fn find(games: &[Option<Game>], cli: &Cli) {
             continue;
         }
         let mut any = false;
-        for a in g.acts.iter().filter(|a| a.claimed_by.is_none()) {
+        for a in &g.acts {
             let phase_ok = cli.str("--phase").is_none_or(|p| {
                 p.replace('-', " ").starts_with(a.phase) || (p == "trump" && a.phase == "trump or lead")
             });
@@ -287,7 +307,7 @@ fn find(games: &[Option<Game>], cli: &Cli) {
                 && count_ok("--tens", (h & CardSet::TENS).len())
                 && count_ok("--halves", (h & CardSet::HALVES).len())
                 && count_ok("--pairs", h.pair_suits().count() as u32)
-                && count_ok("--standing", knowledge::own_standing_of(h).len())
+                && count_ok("--standing", standing(h))
                 && count_ok("--long", lens.iter().copied().max().unwrap_or(0))
                 && count_ok("--blank", lens.iter().filter(|&&l| l == 0).count() as u32)
                 && (!cli.flag("--ace-ten")
@@ -369,14 +389,86 @@ fn main() {
             "--result",
             "--margin-over",
             "--selfplay",
+            "--out",
+            "--md",
+            "--threads",
+            "--fresh",
+            "--deals",
+            "--suite",
         ],
         &["--ace-ten", "--cross140"],
     );
+    if cmd == "kingace" {
+        let start = std::time::Instant::now();
+        let suite = eval::suite::DealSuite::named(cli.str("--suite").unwrap_or("dev"), cli.get("--deals", 1000u64))
+            .expect("--suite");
+        let threads = cli.get("--threads", 1usize);
+        let out = std::path::Path::new(cli.str("--out").expect("--out DIR"));
+        print!("{}", kingace::run(&suite, threads, out).expect("write kingace.ndjson"));
+        eprintln!(
+            "study kingace: {} games in {:.1} s on {threads} threads",
+            suite.deals,
+            start.elapsed().as_secs_f64()
+        );
+        return;
+    }
     let path = cli
         .str("--games")
         .map(String::from)
         .or_else(|| std::env::var("MARJA_GAMES").ok())
         .expect("set MARJA_GAMES (or --games PATH) to the human games");
+    if std::env::var("MARJA_PLAYER_GROUPS").map_or(true, |v| v.trim().is_empty()) {
+        eprintln!("note: MARJA_PLAYER_GROUPS is not set, so every seat is in the group \"others\"");
+    }
+    if cmd == "full" {
+        let start = std::time::Instant::now();
+        let (recs, _) = read(&path);
+        let read_s = start.elapsed().as_secs_f64();
+        let opts = full::Opts {
+            out: cli.str("--out").expect("--out DIR").into(),
+            threads: cli.get("--threads", 1usize),
+            fresh: match cli.str("--fresh") {
+                None => full::Fresh::No,
+                Some("game") => full::Fresh::Game,
+                Some("decision") => full::Fresh::Decision,
+                Some(other) => panic!("--fresh {other}: game or decision"),
+            },
+        };
+        let done = full::run(&recs, &opts).expect("write the NDJSON files");
+        let total = start.elapsed().as_secs_f64();
+        let commit = std::process::Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        let decide: Vec<String> = done
+            .decide_s
+            .iter()
+            .map(|(p, (n, s))| format!("{p} {s:.1} s ({:.0} µs each)", 1e6 * s / *n as f64))
+            .collect();
+        let md = format!(
+            "# KB-02: HP1 against every human decision (C38)
+
+Generated by `study full` on {commit}; the data: `tmp/kb-compare/decisions.ndjson` (one line per human decision) and `tmp/kb-compare/games.ndjson` (one line per game). At every human decision HP1 gets that seat's view at that moment and is asked once (counterfactual; the game goes on with the human's action). Player groups from the private `MARJA_PLAYER_GROUPS` (unmatched seats: others; no names); era by the game's month. Runtime {total:.0} s on {} threads, decision hash `{:016x}`. `info_value_for_partner` is not recorded: the agent does not expose it. Data only: the conclusions are the orchestrator's.
+
+{}",
+            opts.threads, done.hash, done.overview
+        );
+        std::fs::write(cli.str("--md").expect("--md FILE"), md).expect("write the overview");
+        eprintln!(
+            "study full: {} records, {} games, {} decisions; read {read_s:.2} s, total {total:.1} s on {} threads (--fresh {:?}); decision hash {:016x}
+HP1's decision time by phase (summed over the threads): {}",
+            recs.len(),
+            done.games,
+            done.decisions,
+            opts.threads,
+            opts.fresh,
+            done.hash,
+            decide.join(", ")
+        );
+        return;
+    }
     if cmd == "bidding" {
         let (recs, _) = read(&path);
         print!("{}", bidding::run(&recs, cli.get("--selfplay", 0u64)));
