@@ -77,6 +77,12 @@ pub(super) fn choose(ctx: &Ctx<'_>, legal: &[GameAction], mut fallback: Decision
         provenance: forecast.provenance,
     };
     let limits = Limits {
+        transitions: if full_formation {
+            ctx.params.plan_formation_transitions as usize
+        } else {
+            ctx.params.plan_repair_transitions as usize
+        },
+        memo_bytes: ctx.params.plan_memo_mib as usize * 1024 * 1024,
         deadline: Some(deadline),
         ..Limits::default()
     };
