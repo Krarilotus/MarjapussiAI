@@ -2,14 +2,17 @@
 //! belong to actor information sets, never individual hidden worlds.
 
 use crate::concepts::sequence::{
-    authored_programs, inspect, inspect_with, Frontier, Information, Offer, Program, ReadMeaning, Receipt,
-    SequenceError, Stage, Suffix,
+    authored_programs, bind_reconsideration, inspect, inspect_with, Frontier, Information, Offer, Program, ReadMeaning,
+    Receipt, SequenceError, Stage, Suffix,
 };
 use crate::concepts::value::{Assessment, Provenance, ValueStore};
 use agent::{SeatView, Table};
 use beliefs::{BeliefParams, ConceptBudget, Mind};
 use engine::{GameAction, GameFinishedInfo, GameOutcome, PlayPhase, PublicState};
 use std::time::Instant;
+
+mod reuse;
+pub use reuse::CompletedCache;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Candidate {
@@ -65,6 +68,11 @@ impl Default for Limits {
 /// The response leaf must obey this remaining lane. Checking after the callback
 /// rejects an overrun; Rust cannot forcibly preempt a callback. This is a soft
 /// wall deadline, never a hard process-time guarantee.
+/// A callback's Ok(action) certifies a deterministic, semantically completed
+/// response under Context's model/configuration. Incomplete eligible search
+/// must return Err rather than a timed prefix or weaker fallback. The owner
+/// enforces this through its completed-response wrapper; the bare action type
+/// cannot check the certificate or account canonical solver effort yet.
 #[derive(Clone, Copy, Debug)]
 pub struct LeafBudget {
     pub deadline: Option<Instant>,
@@ -108,6 +116,9 @@ pub struct Terminal {
     pub consumed: Vec<Consumed>,
     pub interrupted: bool,
     pub first: Option<Offer>,
+    /// Canonical program owning `first.next`; composed stage ids never escape
+    /// paired with an unrelated original candidate's program.
+    pub first_program: Option<Program>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Selection {
@@ -182,6 +193,36 @@ pub struct Deferred {
     pub reason: SequenceError,
     pub work: Work,
     pub total_candidates: usize,
+    pub limit: Option<DeferredLimit>,
+}
+
+/// The failed lane, separate from the stable primitive SequenceError contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeferredLimit {
+    Deadline,
+    RepresentedTransitions {
+        required: usize,
+        remaining: usize,
+    },
+    RepresentedComparisons {
+        required: usize,
+        remaining: usize,
+    },
+    ResponseCache {
+        required_bytes: usize,
+        remaining_bytes: usize,
+        entries: usize,
+        max_entries: usize,
+    },
+    LeafUnavailable {
+        actor: u8,
+    },
+    FiniteContinuation {
+        max_steps: usize,
+    },
+    Reconsideration {
+        remaining: u8,
+    },
 }
 
 /// Same primitive dispatcher as forecasting. A retained selected suffix is only
@@ -205,7 +246,7 @@ pub fn prepared_lookup(
         let offers = match inspection.frontier {
             Frontier::Actions(offers) => Some(offers),
             Frontier::Choice(_) => None,
-            Frontier::Tail | Frontier::Interrupted => return Err(NeedsReview),
+            Frontier::Tail | Frontier::Interrupted | Frontier::Reconsider { .. } => return Err(NeedsReview),
         };
         // Even a now-singleton choice must validate modeled scope: an
         // opportunity/evidence change cannot silently reuse its old assessment.
@@ -247,6 +288,7 @@ struct Branch {
     weight: f64,
     receipt: Receipt,
     first: Option<Offer>,
+    first_program: Option<Program>,
     tricks: Vec<TrickOutcome>,
     consumed: Vec<Consumed>,
     interrupted: bool,
@@ -291,7 +333,6 @@ impl BranchKey {
 struct CachedRun {
     key: Vec<BranchKey>,
     terminals: Vec<Terminal>,
-    program: Program,
     prepared: Vec<PreparedChoice>,
     transitions: usize,
     comparisons: usize,
@@ -328,11 +369,15 @@ struct Session<'a, F> {
     tails: Vec<TailRun>,
     canonical: Vec<CanonicalProgram>,
     memberships: Vec<AuthoredMembership>,
+    reusable_bytes: usize,
+    response_bytes: usize,
+    limit: Option<DeferredLimit>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Alternative {
     Stage(Stage),
     Offer(Offer),
+    Reconsider { stage: Stage, remaining: u8 },
 }
 struct Waiting {
     branch: Branch,
@@ -347,9 +392,13 @@ fn find_stage(program: &Program, suffix: &Suffix) -> Result<Stage, SequenceError
     Err(SequenceError::InvalidProgram)
 }
 impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, SequenceError>> Session<'_, F> {
-    fn check(&self) -> Result<(), SequenceError> {
+    fn limited(&mut self, limit: DeferredLimit) -> SequenceError {
+        self.limit = Some(limit);
+        SequenceError::Budget
+    }
+    fn check(&mut self) -> Result<(), SequenceError> {
         if self.limits.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return Err(SequenceError::Budget);
+            return Err(self.limited(DeferredLimit::Deadline));
         }
         Ok(())
     }
@@ -357,18 +406,25 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
     /// Reject an unaffordable unit before exposing any of its values or trace.
     fn charge(&mut self, transitions: usize, comparisons: usize) -> Result<(), SequenceError> {
         self.check()?;
-        if transitions
-            > self
-                .limits
-                .transitions
-                .saturating_sub(self.work.represented_transitions)
-            || comparisons
-                > self
-                    .limits
-                    .comparisons
-                    .saturating_sub(self.work.represented_comparisons)
-        {
-            return Err(SequenceError::Budget);
+        let remaining = self
+            .limits
+            .transitions
+            .saturating_sub(self.work.represented_transitions);
+        if transitions > remaining {
+            return Err(self.limited(DeferredLimit::RepresentedTransitions {
+                required: transitions,
+                remaining,
+            }));
+        }
+        let remaining = self
+            .limits
+            .comparisons
+            .saturating_sub(self.work.represented_comparisons);
+        if comparisons > remaining {
+            return Err(self.limited(DeferredLimit::RepresentedComparisons {
+                required: comparisons,
+                remaining,
+            }));
         }
         self.work.represented_transitions += transitions;
         self.work.represented_comparisons += comparisons;
@@ -380,6 +436,30 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
         }
         self.work.retained_bytes += bytes;
         true
+    }
+    fn retain_reusable(&mut self, bytes: usize) -> bool {
+        if !self.retain(bytes) {
+            return false;
+        }
+        self.reusable_bytes += bytes;
+        true
+    }
+    /// Optional trace/dependency reuse cannot starve frozen response admission.
+    /// Eviction recomputes optional results from retained completed responses.
+    /// Response eviction is deferred to the canonical leaf-effort interface;
+    /// this slice never recomputes a completed response after eviction.
+    fn retain_response(&mut self, bytes: usize) -> bool {
+        if bytes > self.limits.memo_bytes.saturating_sub(self.work.retained_bytes) {
+            // Drop capacities as well as elements before releasing the ledger.
+            self.memo = Vec::new();
+            self.tails = Vec::new();
+            self.hard_reads = Vec::new();
+            self.canonical = Vec::new();
+            self.memberships = Vec::new();
+            self.work.retained_bytes = self.response_bytes;
+            self.reusable_bytes = self.response_bytes;
+        }
+        self.retain(bytes)
     }
     fn suffix(&mut self, program: &Program, stage: Stage) -> Result<Suffix, SequenceError> {
         let mut cached = self.canonical.iter().position(|entry| entry.program == *program);
@@ -394,7 +474,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                     + program_bytes(program)
                     + std::mem::size_of::<Vec<Option<Suffix>>>()
                     + program.nodes.len() * std::mem::size_of::<Option<Suffix>>());
-            if self.canonical.len() < self.limits.memo_entries && self.retain(bytes) {
+            if self.canonical.len() < self.limits.memo_entries && self.retain_reusable(bytes) {
                 cached = Some(self.canonical.len());
                 self.canonical.push(CanonicalProgram {
                     program: program.clone(),
@@ -406,7 +486,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
         // cache entry. Lack of cache space never skips validation or a stage.
         let suffix = program.suffix_validated(stage)?;
         if let Some(index) = cached {
-            if self.retain(2 * suffix_bytes(&suffix)) {
+            if self.retain_reusable(2 * suffix_bytes(&suffix)) {
                 self.canonical[index].suffixes[stage.0] = Some(suffix.clone());
             }
         }
@@ -419,6 +499,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                 action: offer.action,
                 next: self.suffix(program, offer.next)?,
             },
+            Alternative::Reconsider { .. } => return Err(SequenceError::InvalidProgram),
         })
     }
     fn find_stage(&mut self, program: &Program, suffix: &Suffix) -> Result<Stage, SequenceError> {
@@ -454,7 +535,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                 + std::mem::size_of::<Vec<observation::SeatEvent>>()
                 + std::mem::size_of_val(view.events)
                 + membership_bytes(&membership));
-        if self.memberships.len() < self.limits.memo_entries && self.retain(bytes) {
+        if self.memberships.len() < self.limits.memo_entries && self.retain_reusable(bytes) {
             self.memberships.push(AuthoredMembership {
                 information: Information::of(view),
                 membership: membership.clone(),
@@ -465,7 +546,10 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
     fn response(&mut self, table: &Table) -> Result<GameAction, SequenceError> {
         self.check()?;
         if self.work.represented_transitions >= self.limits.transitions {
-            return Err(SequenceError::Budget);
+            return Err(self.limited(DeferredLimit::RepresentedTransitions {
+                required: 1,
+                remaining: 0,
+            }));
         }
         let (seat, legal) = table.to_act().ok_or(SequenceError::WrongContext)?;
         let view = table.view(seat);
@@ -477,17 +561,27 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             self.work.response_hits += 1;
             return Ok(*action);
         }
-        let key = ResponseKey {
-            information: Information::of(&view),
-            legal: legal.to_vec(),
-        };
-        // Frozen responses cannot be evicted then resampled. Exhaustion defers
-        // the entire comparison, retaining difficult worlds rather than dropping.
-        let bytes = 2 * (info_bytes(&key.information) + vec_bytes(&key.legal) + std::mem::size_of::<GameAction>());
-        if self.responses.len() >= self.limits.memo_entries.saturating_mul(32) || !self.retain(bytes) {
-            return Err(SequenceError::Budget);
+        // Until canonical leaf effort is returned/accounted, keep completed
+        // responses mandatory. Exhaustion defers the entire comparison rather
+        // than evicting/recomputing responses or dropping difficult worlds.
+        let bytes = 2
+            * (std::mem::size_of::<Information>()
+                + std::mem::size_of::<Vec<observation::SeatEvent>>()
+                + std::mem::size_of_val(view.events)
+                + std::mem::size_of::<Vec<GameAction>>()
+                + std::mem::size_of_val(legal)
+                + std::mem::size_of::<GameAction>());
+        let max_entries = self.limits.memo_entries.saturating_mul(32);
+        if self.responses.len() >= max_entries || !self.retain_response(bytes) {
+            let remaining_bytes = self.limits.memo_bytes.saturating_sub(self.work.retained_bytes);
+            return Err(self.limited(DeferredLimit::ResponseCache {
+                required_bytes: bytes,
+                remaining_bytes,
+                entries: self.responses.len(),
+                max_entries,
+            }));
         }
-        let action = (self.leaf)(
+        let result = (self.leaf)(
             &view,
             legal,
             LeafBudget {
@@ -497,13 +591,32 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                     .transitions
                     .saturating_sub(self.work.represented_transitions),
             },
-        )?;
+        );
+        // Admission is a reservation until a valid completed response exists.
+        // Failed leaves must not inflate either this comparison's retained
+        // ledger or the persistent cache handed to the next repair.
+        self.work.retained_bytes -= bytes;
         self.work.response_calls += 1;
+        let action = match result {
+            Ok(action) => action,
+            Err(SequenceError::Budget) => {
+                self.check()?;
+                return Err(self.limited(DeferredLimit::LeafUnavailable { actor: seat }));
+            }
+            Err(error) => return Err(error),
+        };
         self.check()?;
         if !legal.contains(&action) || action.player.0 != seat {
             return Err(SequenceError::IllegalAction);
         }
+        let key = ResponseKey {
+            information: Information::of(&view),
+            legal: legal.to_vec(),
+        };
         self.responses.push((key, action));
+        self.work.retained_bytes += bytes;
+        self.reusable_bytes += bytes;
+        self.response_bytes += bytes;
         Ok(action)
     }
     fn apply(&mut self, branch: &mut Branch, action: GameAction) -> Result<(), SequenceError> {
@@ -580,7 +693,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                 .and_then(|estimate| estimate.known);
             let information = Information::of(&view);
             let bytes = 2 * (info_bytes(&information) + query_bytes(query) + std::mem::size_of::<Option<bool>>());
-            if self.hard_reads.len() < self.limits.memo_entries && self.retain(bytes) {
+            if self.hard_reads.len() < self.limits.memo_entries && self.retain_reusable(bytes) {
                 self.hard_reads.push((information, query.clone(), truth));
             }
             truth
@@ -607,6 +720,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                     consumed: branch.consumed,
                     interrupted: branch.interrupted,
                     first: branch.first,
+                    first_program: branch.first_program,
                 }));
             }
             let (actor, _) = branch.table.to_act().ok_or(SequenceError::WrongContext)?;
@@ -632,6 +746,13 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                         branch,
                         alternatives: stages.into_iter().map(Alternative::Stage).collect(),
                     }))
+                }
+                Frontier::Reconsider { stage, remaining, .. } => {
+                    branch.receipt.stage = stage;
+                    return Ok(Err(Waiting {
+                        branch,
+                        alternatives: vec![Alternative::Reconsider { stage, remaining }],
+                    }));
                 }
                 Frontier::Actions(offers) if offers.len() > 1 => {
                     return Ok(Err(Waiting {
@@ -670,7 +791,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                 }
             }
         }
-        Err(SequenceError::Budget)
+        Err(self.limited(DeferredLimit::FiniteContinuation { max_steps: 128 }))
     }
     fn commit(&mut self, branch: &mut Branch, offer: Offer) -> Result<(), SequenceError> {
         branch.receipt.propose(
@@ -678,19 +799,42 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             &branch.table.view(self.root),
             branch.table.to_act().ok_or(SequenceError::WrongContext)?.1,
         )?;
-        branch.first.get_or_insert_with(|| offer.clone());
+        self.first_step(branch, &offer)?;
         self.apply(branch, offer.action)
     }
-    /// The named leaf has NO root suffix choices, so its deterministic result
+    fn first_step(&mut self, branch: &mut Branch, offer: &Offer) -> Result<(), SequenceError> {
+        if branch.first.is_none() {
+            let suffix = self.suffix(&branch.receipt.program, branch.receipt.stage)?;
+            let next = self.suffix(&branch.receipt.program, offer.next)?;
+            let program = Program {
+                name: "evaluated-first-step",
+                version: 1,
+                start: suffix.start,
+                nodes: suffix.nodes,
+            };
+            branch.first = Some(Offer {
+                action: offer.action,
+                next: self.find_stage(&program, &next)?,
+            });
+            branch.first_program = Some(program);
+        }
+        Ok(())
+    }
+    /// The named leaf has NO root suffix choices, so its frozen modeled result
     /// can be shared per complete hypothetical input without strategy fusion.
     /// This boundary also shares tails reached through different guard paths.
     fn tail(&mut self, mut branch: Branch, tail: Stage) -> Result<Terminal, SequenceError> {
         let views = std::array::from_fn(|seat| Information::of(&branch.table.view(seat as u8)));
         let legal = branch.table.to_act().ok_or(SequenceError::WrongContext)?.1.to_vec();
         let cached = self
-            .tails
-            .iter()
-            .position(|run| run.views == views && run.legal == legal);
+            .limits
+            .reuse_suffixes
+            .then(|| {
+                self.tails
+                    .iter()
+                    .position(|run| run.views == views && run.legal == legal)
+            })
+            .flatten();
         let (outcome, first, tricks, consumed) = if let Some(index) = cached {
             self.charge(self.tails[index].transitions, 0)?;
             self.work.suffix_hits += 1;
@@ -722,7 +866,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                 self.apply(&mut branch, action)?;
             }
             if !branch.table.game.ended() {
-                return Err(SequenceError::Budget);
+                return Err(self.limited(DeferredLimit::FiniteContinuation { max_steps: 128 }));
             }
             let info = GameFinishedInfo::from(branch.table.game.clone());
             let run = TailRun {
@@ -742,7 +886,8 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                     + run.tricks.iter().map(|trick| info_bytes(&trick.root)).sum::<usize>()
                     + vec_bytes(&run.consumed)
                     + run.consumed.iter().map(consumed_bytes).sum::<usize>());
-            if self.limits.reuse_suffixes && self.tails.len() < self.limits.memo_entries && self.retain(bytes) {
+            if self.limits.reuse_suffixes && self.tails.len() < self.limits.memo_entries && self.retain_reusable(bytes)
+            {
                 self.tails.push(TailRun {
                     views: run.views,
                     legal: run.legal,
@@ -755,10 +900,13 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             }
             (run.outcome, run.first, run.tricks, run.consumed)
         };
-        branch.first.get_or_insert(Offer {
-            action: first,
-            next: tail,
-        });
+        self.first_step(
+            &mut branch,
+            &Offer {
+                action: first,
+                next: tail,
+            },
+        )?;
         branch.tricks.extend(tricks);
         branch.consumed.extend(consumed);
         Ok(Terminal {
@@ -769,6 +917,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             consumed: branch.consumed,
             interrupted: branch.interrupted,
             first: branch.first,
+            first_program: branch.first_program,
         })
     }
     fn values<'t>(
@@ -809,16 +958,13 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                 Ok(BranchKey::of(branch, suffix, pending))
             })
             .collect::<Result<Vec<_>, SequenceError>>()?;
-        // A finish cohort comes from one candidate: children vary only stage,
-        // intent and observations, never the immutable authored program.
-        let program = branches[0].receipt.program.clone();
-        debug_assert!(branches.iter().all(|branch| branch.receipt.program == program));
         let prefixes: Vec<_> = branches
             .iter_mut()
             .map(|branch| {
                 (
                     branch.origin,
                     branch.first.take(),
+                    branch.first_program.take(),
                     std::mem::take(&mut branch.tricks),
                     std::mem::take(&mut branch.consumed),
                     std::mem::take(&mut branch.interrupted),
@@ -830,15 +976,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             self.charge(self.memo[index].transitions, self.memo[index].comparisons)?;
             self.work.suffix_hits += 1;
             prepared.extend(self.memo[index].prepared.iter().cloned());
-            let cached_program = self.memo[index].program.clone();
-            let mut terminals = self.memo[index].terminals.clone();
-            for terminal in &mut terminals {
-                if let Some(first) = &mut terminal.first {
-                    let suffix = self.suffix(&cached_program, first.next)?;
-                    first.next = self.find_stage(&program, &suffix)?;
-                }
-            }
-            terminals
+            self.memo[index].terminals.clone()
         } else {
             let before = self.work.represented_transitions;
             let comparisons_before = self.work.represented_comparisons;
@@ -846,12 +984,11 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             let terminals = self.finish_uncached(branches, &mut records)?;
             if self.limits.reuse_suffixes
                 && self.memo.len() < self.limits.memo_entries
-                && self.retain(run_bytes(&key, &terminals, &program, &records))
+                && self.retain(run_bytes(&key, &terminals, &records))
             {
                 self.memo.push(CachedRun {
                     key,
                     terminals: terminals.clone(),
-                    program,
                     prepared: records.clone(),
                     transitions: self.work.represented_transitions - before,
                     comparisons: self.work.represented_comparisons - comparisons_before,
@@ -861,12 +998,13 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             terminals
         };
         for terminal in &mut terminals {
-            let (_, first, tricks, consumed, interrupted) = prefixes
+            let (_, first, first_program, tricks, consumed, interrupted) = prefixes
                 .iter()
                 .find(|prefix| prefix.0 == terminal.origin)
                 .ok_or(SequenceError::InvalidCohort)?;
             if let Some(first) = first {
                 terminal.first = Some(first.clone());
+                terminal.first_program = first_program.clone();
             }
             terminal.tricks.splice(0..0, tricks.iter().cloned());
             terminal.consumed.splice(0..0, consumed.iter().cloned());
@@ -908,6 +1046,62 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
         group: Vec<Waiting>,
         prepared: &mut Vec<PreparedChoice>,
     ) -> Result<Vec<Terminal>, SequenceError> {
+        let boundary = match group[0].alternatives.as_slice() {
+            [Alternative::Reconsider { stage, remaining }] => Some((*stage, *remaining)),
+            _ => None,
+        };
+        if let Some((stage, remaining)) = boundary {
+            return self.reconsider(group, stage, remaining, prepared);
+        }
+        self.choose_bound(group, prepared, None)
+    }
+    fn reconsider(
+        &mut self,
+        mut group: Vec<Waiting>,
+        stage: Stage,
+        remaining: u8,
+        prepared: &mut Vec<PreparedChoice>,
+    ) -> Result<Vec<Terminal>, SequenceError> {
+        self.check()?;
+        let first = &group[0].branch;
+        let view = first.table.view(self.root);
+        let legal = first.table.to_act().ok_or(SequenceError::WrongContext)?.1;
+        // finish_uncached grouped full root Information + canonical boundary
+        // BEFORE binding/ranking. The binder is pure data expansion, not policy.
+        let binding = match bind_reconsideration(&first.receipt.program, stage, &view, legal) {
+            Ok(binding) => binding,
+            Err(SequenceError::Budget) => return Err(self.limited(DeferredLimit::Reconsideration { remaining })),
+            Err(error) => return Err(error),
+        };
+        let membership = Membership {
+            legal: binding.legal.clone(),
+            programs: binding
+                .alternatives
+                .iter()
+                .map(|stage| self.suffix(&binding.program, *stage))
+                .collect::<Result<_, _>>()?,
+        };
+        for waiting in &mut group {
+            if !matches!(waiting.alternatives.as_slice(), [Alternative::Reconsider { remaining: n, .. }] if *n == remaining)
+            {
+                return Err(SequenceError::WrongContext);
+            }
+            let view = waiting.branch.table.view(self.root);
+            let legal = waiting.branch.table.to_act().ok_or(SequenceError::WrongContext)?.1;
+            waiting
+                .branch
+                .receipt
+                .install_reconsideration_at_frontier(&binding, &view, legal)?;
+            waiting.alternatives = binding.alternatives.iter().copied().map(Alternative::Stage).collect();
+        }
+        self.choose_bound(group, prepared, Some(membership))
+    }
+    fn choose_bound(
+        &mut self,
+        group: Vec<Waiting>,
+        prepared: &mut Vec<PreparedChoice>,
+        membership: Option<Membership>,
+    ) -> Result<Vec<Terminal>, SequenceError> {
         let first = &group[0].branch;
         let view = first.table.view(self.root);
         let semantic_suffix = self.suffix(&first.receipt.program, first.receipt.stage)?;
@@ -927,7 +1121,10 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             }
         }
         let information = Information::of(&view);
-        let membership = self.membership(&view, first.table.to_act().ok_or(SequenceError::WrongContext)?.1)?;
+        let membership = match membership {
+            Some(membership) => membership,
+            None => self.membership(&view, first.table.to_act().ok_or(SequenceError::WrongContext)?.1)?,
+        };
         let consumed = first.consumed.clone();
         let mut outcomes = Vec::new();
         let mut records = Vec::new();
@@ -944,6 +1141,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                 match &waiting.alternatives[index] {
                     Alternative::Stage(stage) => branch.receipt.stage = *stage,
                     Alternative::Offer(offer) => self.commit(&mut branch, offer.clone())?,
+                    Alternative::Reconsider { .. } => return Err(SequenceError::InvalidProgram),
                 }
                 children.push(branch);
             }
@@ -980,19 +1178,51 @@ pub fn evaluate<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Gam
     limits: Limits,
     leaf: &mut F,
 ) -> Result<Comparison, Deferred> {
+    evaluate_with_cache(
+        candidates,
+        cohort,
+        root,
+        provenance,
+        context,
+        limits,
+        &mut CompletedCache::default(),
+        leaf,
+    )
+}
+
+/// Rebuild all conditional support/value comparisons under this call's measure.
+/// Only exact compatible hard dependencies and completed response leaves reuse
+/// work across calls. No prepared ranking or weighted suffix optimum persists.
+pub fn evaluate_with_cache<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, SequenceError>>(
+    candidates: &[Candidate],
+    cohort: &[(Table, f64)],
+    root: u8,
+    provenance: Provenance,
+    context: &Context,
+    limits: Limits,
+    cache: &mut CompletedCache,
+    leaf: &mut F,
+) -> Result<Comparison, Deferred> {
+    let inputs = cache.begin(root, context, limits);
     let mut session = Session {
         root,
         provenance,
         context,
         limits,
-        work: Work::default(),
+        work: Work {
+            retained_bytes: inputs.bytes,
+            ..Work::default()
+        },
         leaf,
-        responses: Vec::new(),
-        hard_reads: Vec::new(),
+        responses: inputs.responses,
+        hard_reads: inputs.hard_reads,
         memo: Vec::new(),
-        tails: Vec::new(),
-        canonical: Vec::new(),
-        memberships: Vec::new(),
+        tails: inputs.tails,
+        canonical: inputs.canonical,
+        memberships: inputs.memberships,
+        reusable_bytes: inputs.bytes,
+        response_bytes: inputs.response_bytes,
+        limit: None,
     };
     let result = (|| -> Result<Comparison, SequenceError> {
         if root >= 4
@@ -1042,6 +1272,7 @@ pub fn evaluate<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Gam
                     weight: *weight,
                     receipt: initial_receipt.clone(),
                     first: None,
+                    first_program: None,
                     tricks: Vec::new(),
                     consumed: Vec::new(),
                     interrupted: false,
@@ -1053,7 +1284,10 @@ pub fn evaluate<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Gam
                 return Err(SequenceError::InvalidCohort);
             }
             let first = terminals[0].first.clone().ok_or(SequenceError::WrongContext)?;
-            if terminals.iter().any(|terminal| terminal.first.as_ref() != Some(&first)) {
+            let first_program = terminals[0].first_program.as_ref().ok_or(SequenceError::WrongContext)?;
+            if terminals.iter().any(|terminal| {
+                terminal.first.as_ref() != Some(&first) || terminal.first_program.as_ref() != Some(first_program)
+            }) {
                 return Err(SequenceError::WrongContext);
             }
             executions.push(Execution {
@@ -1066,8 +1300,13 @@ pub fn evaluate<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Gam
         }
         let values = session.values(executions.iter().map(|run| run.terminals.as_slice()))?;
         let selected = &executions[values.selected];
-        let mut receipt = Receipt::new(selected.candidate.program.clone(), &original)?;
-        receipt.stage = selected.candidate.stage;
+        let mut receipt = Receipt::new(
+            selected.terminals[0]
+                .first_program
+                .clone()
+                .ok_or(SequenceError::WrongContext)?,
+            &original,
+        )?;
         receipt.propose(selected.first.clone(), &original, legal)?;
         let prepared = selected.prepared.clone();
         Ok(Comparison {
@@ -1078,10 +1317,20 @@ pub fn evaluate<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Gam
             work: session.work,
         })
     })();
+    cache.finish(reuse::Inputs {
+        responses: session.responses,
+        hard_reads: session.hard_reads,
+        tails: session.tails,
+        canonical: session.canonical,
+        memberships: session.memberships,
+        bytes: session.reusable_bytes,
+        response_bytes: session.response_bytes,
+    });
     result.map_err(|reason| Deferred {
         reason,
         work: session.work,
         total_candidates: candidates.len(),
+        limit: session.limit,
     })
 }
 
@@ -1178,12 +1427,7 @@ fn prepared_bytes(p: &PreparedChoice) -> usize {
         + vec_bytes(&p.support)
 }
 /// Estimate the owned cache payload from borrowed results, BEFORE cloning it.
-fn run_bytes(
-    key: &Vec<BranchKey>,
-    terminals: &Vec<Terminal>,
-    program: &Program,
-    prepared: &Vec<PreparedChoice>,
-) -> usize {
+fn run_bytes(key: &Vec<BranchKey>, terminals: &Vec<Terminal>, prepared: &Vec<PreparedChoice>) -> usize {
     2 * (std::mem::size_of::<CachedRun>()
         + vec_bytes(key)
         + key
@@ -1201,19 +1445,290 @@ fn run_bytes(
             .iter()
             .map(|t| {
                 vec_bytes(&t.tricks)
+                    + t.first_program.as_ref().map(program_bytes).unwrap_or(0)
                     + t.tricks.iter().map(|trick| info_bytes(&trick.root)).sum::<usize>()
                     + vec_bytes(&t.consumed)
                     + t.consumed.iter().map(consumed_bytes).sum::<usize>()
             })
             .sum::<usize>()
-        + program_bytes(program)
         + vec_bytes(prepared)
         + prepared.iter().map(prepared_bytes).sum::<usize>())
 }
 
 #[cfg(test)]
-#[path = "../../tests/internal/sequence_execution.rs"]
-mod tests;
+mod tests {
+    // Keep the owner's fixture corrections in their existing source file.
+    include!("../../tests/internal/sequence_execution.rs");
+
+    fn joint_fixture() -> (u8, Vec<GameAction>, Vec<(Table, f64)>) {
+        let table = at_lead();
+        let (root, legal) = table.to_act().unwrap();
+        let legal = legal.to_vec();
+        let view = table.view(root);
+        let remaining: [CardSet; 4] = std::array::from_fn(|seat| table.view(seat as u8).knowledge.certain(seat as u8));
+        let mut alternate = None;
+        'pairs: for left in remaining[1].iter() {
+            for right in remaining[3].iter() {
+                let mut changed = remaining;
+                changed[1] = (changed[1] - CardSet::single(left)) | CardSet::single(right);
+                changed[3] = (changed[3] - CardSet::single(right)) | CardSet::single(left);
+                if let Some(candidate) = Table::from_view(&view, changed) {
+                    alternate = Some(candidate);
+                    break 'pairs;
+                }
+            }
+        }
+        let alternate = alternate.expect("hidden allocation compatible with the unchanged recorded view");
+        (root, legal, vec![(table, 1.0 / 3.0), (alternate, 2.0 / 3.0)])
+    }
+    #[test]
+    fn persistent_leaves_reweight_current_support_and_rebuild_choice_values() {
+        let (root, legal, cohort) = joint_fixture();
+        let cards: Vec<_> = legal
+            .iter()
+            .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+            .take(2)
+            .copied()
+            .collect();
+        let choice = Candidate::new(Program {
+            name: "reweighted-choice",
+            version: 1,
+            start: Stage(3),
+            nodes: vec![
+                Node::Tail,
+                Node::Action {
+                    actions: Actions::Exact(cards[0].action_type),
+                    next: Stage(0),
+                },
+                Node::Action {
+                    actions: Actions::Exact(cards[1].action_type),
+                    next: Stage(0),
+                },
+                Node::Choice(vec![Stage(1), Stage(2)]),
+            ],
+        });
+        let candidates = [choice, direct(cards[0]), direct(cards[1])];
+        let mut cache = CompletedCache::default();
+        let limits = Limits {
+            memo_bytes: 64 * 1024 * 1024,
+            ..Limits::default()
+        };
+        let old_context = context();
+        evaluate_with_cache(
+            &candidates,
+            &cohort,
+            root,
+            provenance(),
+            &old_context,
+            limits,
+            &mut cache,
+            &mut leaf,
+        )
+        .unwrap();
+        let reweighted = [(cohort[1].0.clone(), 1.0 / 5.0), (cohort[0].0.clone(), 4.0 / 5.0)];
+        let mut current = old_context.clone();
+        current.posterior_revision += 1;
+        current.seed += 1; // cohort generation changes, actual response params do not
+        let warm = evaluate_with_cache(
+            &candidates,
+            &reweighted,
+            root,
+            provenance(),
+            &current,
+            limits,
+            &mut cache,
+            &mut leaf,
+        )
+        .unwrap();
+        let cold = evaluate(
+            &candidates,
+            &reweighted,
+            root,
+            provenance(),
+            &current,
+            limits,
+            &mut leaf,
+        )
+        .unwrap();
+        assert_eq!(warm.values, cold.values);
+        assert_eq!(warm.executions, cold.executions);
+        assert_eq!(warm.receipt, cold.receipt);
+        assert_eq!(warm.work.response_calls, 0);
+        assert!(warm.work.suffix_hits > 0);
+        assert_eq!(warm.work.represented_transitions, cold.work.represented_transitions);
+        assert_eq!(warm.work.represented_comparisons, cold.work.represented_comparisons);
+        let choice = warm.executions[0]
+            .prepared
+            .iter()
+            .find(|p| p.assessment.is_some())
+            .unwrap();
+        assert_eq!(choice.context, current);
+        assert_eq!(choice.support, [(0, 1.0 / 5.0), (1, 4.0 / 5.0)]);
+        assert!(cache.retained_bytes() <= limits.memo_bytes);
+        // Restore/configuration/model changes cannot transfer a frozen response.
+        current.params.seed += 1;
+        let changed = evaluate_with_cache(
+            &candidates,
+            &reweighted,
+            root,
+            provenance(),
+            &current,
+            limits,
+            &mut cache,
+            &mut leaf,
+        )
+        .unwrap();
+        assert!(changed.work.response_calls > 0);
+        cache.clear();
+        assert_eq!(cache.retained_bytes(), 0);
+        fn send<T: Send>() {}
+        send::<CompletedCache>();
+    }
+    #[test]
+    fn deferred_diagnostics_distinguish_deadline_logical_lanes_and_leaf_failure() {
+        let table = at_lead();
+        let (root, legal) = table.to_act().unwrap();
+        let card = *legal
+            .iter()
+            .find(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+            .unwrap();
+        let candidates = [direct(card)];
+        let cohort = [(table, 1.0)];
+        let context = context();
+        let run = |limits| evaluate(&candidates, &cohort, root, provenance(), &context, limits, &mut leaf).unwrap_err();
+        assert_eq!(
+            run(Limits {
+                deadline: Some(Instant::now()),
+                ..Limits::default()
+            })
+            .limit,
+            Some(DeferredLimit::Deadline)
+        );
+        assert_eq!(
+            run(Limits {
+                transitions: 0,
+                ..Limits::default()
+            })
+            .limit,
+            Some(DeferredLimit::RepresentedTransitions {
+                required: 1,
+                remaining: 0
+            })
+        );
+        assert_eq!(
+            run(Limits {
+                comparisons: 0,
+                ..Limits::default()
+            })
+            .limit,
+            Some(DeferredLimit::RepresentedComparisons {
+                required: 1,
+                remaining: 0
+            })
+        );
+        assert!(matches!(
+            run(Limits {
+                memo_bytes: 0,
+                ..Limits::default()
+            })
+            .limit,
+            Some(DeferredLimit::ResponseCache { remaining_bytes: 0, .. })
+        ));
+        let mut unable = |_: &SeatView<'_>, _: &[GameAction], _: LeafBudget| Err(SequenceError::Budget);
+        let failed = evaluate(
+            &candidates,
+            &cohort,
+            root,
+            provenance(),
+            &context,
+            Limits::default(),
+            &mut unable,
+        )
+        .unwrap_err();
+        assert!(matches!(failed.limit, Some(DeferredLimit::LeafUnavailable { .. })));
+    }
+    #[test]
+    fn reconsideration_compares_one_joint_group_and_returns_the_actual_program_owner() {
+        let mut table = at_lead();
+        while table.view(0).knowledge.hand_len(0) > 2 || table.game.state.phase != GamePhase::StartTrick {
+            let (actor, legal) = table.to_act().unwrap();
+            let action = leaf(
+                &table.view(actor),
+                legal,
+                LeafBudget {
+                    deadline: None,
+                    remaining_transitions: 100,
+                },
+            )
+            .unwrap();
+            table.apply(action);
+        }
+        let (root, legal) = table.to_act().unwrap();
+        let view = table.view(root);
+        let program = Program {
+            name: "current-group",
+            version: 1,
+            start: Stage(1),
+            nodes: vec![
+                Node::Tail,
+                Node::Reconsider {
+                    remaining: 1,
+                    retained: Stage(0),
+                },
+            ],
+        };
+        let binding = bind_reconsideration(&program, program.start, &view, legal).unwrap();
+        let expected = binding
+            .alternatives
+            .iter()
+            .map(|stage| binding.program.suffix(*stage).unwrap())
+            .collect::<Vec<_>>();
+        let candidates = [Candidate::new(program)];
+        let cohort = [(table.clone(), 1.0 / 3.0), (table, 2.0 / 3.0)];
+        let context = context();
+        let result = evaluate(
+            &candidates,
+            &cohort,
+            root,
+            provenance(),
+            &context,
+            Limits::default(),
+            &mut leaf,
+        )
+        .unwrap();
+        let record = result
+            .prepared
+            .iter()
+            .find(|p| p.alternatives.len() == expected.len() && p.assessment.is_some())
+            .unwrap();
+        assert_eq!(
+            record.alternatives,
+            expected.iter().cloned().map(Selection::Stage).collect::<Vec<_>>()
+        );
+        assert_eq!(record.membership.programs, expected);
+        assert_eq!(record.support, [(0, 1.0 / 3.0), (1, 2.0 / 3.0)]);
+        let owner = result.executions[0].terminals[0].first_program.as_ref().unwrap();
+        assert_eq!(&result.receipt.program, owner);
+        assert!(result
+            .receipt
+            .program
+            .nodes
+            .get(result.executions[0].first.next.0)
+            .is_some());
+        assert_eq!(
+            result.executions[0].terminals[0].first,
+            result.executions[0].terminals[1].first
+        );
+        assert_eq!(
+            result.executions[0].terminals[0].first_program,
+            result.executions[0].terminals[1].first_program
+        );
+        assert!(result.executions[0].terminals[0]
+            .consumed
+            .iter()
+            .any(|c| matches!(&c.reading, ReadMeaning::Reconsider { .. })));
+    }
+}
 
 #[cfg(test)]
 mod cache_tests {
@@ -1251,6 +1766,9 @@ mod cache_tests {
             tails: Vec::new(),
             canonical: Vec::new(),
             memberships: Vec::new(),
+            reusable_bytes: 0,
+            response_bytes: 0,
+            limit: None,
         }
     }
     fn program() -> Program {
@@ -1381,5 +1899,53 @@ mod cache_tests {
         assert_eq!(session.work.retained_bytes, 0);
         assert_eq!(session.work.represented_transitions, 0);
         assert_eq!(session.work.represented_comparisons, 0);
+    }
+    #[test]
+    fn mandatory_response_admission_drops_optional_capacity_without_resampling() {
+        let context = context();
+        let calls = std::cell::Cell::new(0usize);
+        let mut leaf = |_: &SeatView<'_>, legal: &[GameAction], _: LeafBudget| {
+            let call = calls.get();
+            calls.set(call + 1);
+            Ok(legal[call % legal.len()])
+        };
+        let mut session = session(&context, &mut leaf, Limits::default());
+        let mut hands: [Vec<Card>; 4] =
+            std::array::from_fn(|seat| (0..9).map(|i| Card::from_index((9 * seat + i) as u8)).collect());
+        let first_table = Table::new(&hands);
+        let frozen = session.response(&first_table).unwrap();
+        let first_bytes = session.response_bytes;
+        session.limits.memo_bytes = 2 * first_bytes;
+        let tail = Program {
+            name: "optional",
+            version: 1,
+            start: Stage(0),
+            nodes: vec![Node::Tail],
+        };
+        session.suffix(&tail, tail.start).unwrap();
+        assert!(session.work.retained_bytes > first_bytes);
+        assert!(!session.canonical.is_empty());
+        let card = hands[0][0];
+        hands[0][0] = hands[1][0];
+        hands[1][0] = card;
+        session.response(&Table::new(&hands)).unwrap();
+        assert_eq!(calls.get(), 2);
+        assert!(session.canonical.is_empty());
+        assert_eq!(session.canonical.capacity(), 0);
+        assert_eq!(session.work.retained_bytes, session.response_bytes);
+        assert_eq!(session.work.retained_bytes, session.reusable_bytes);
+        assert!(session.work.retained_bytes <= session.limits.memo_bytes);
+        assert_eq!(session.response(&first_table).unwrap(), frozen);
+        assert_eq!(calls.get(), 2, "eviction must not realize an old timed response again");
+        // Both frozen keys now fill the response allowance. A new private input
+        // defers rather than evicting a response or exposing a partial value.
+        hands[0].swap(0, 1); // same card set: this is deliberately NOT new info
+        assert_eq!(session.response(&Table::new(&hands)).unwrap(), session.responses[1].1);
+        let card = hands[0][1];
+        hands[0][1] = hands[1][1];
+        hands[1][1] = card;
+        assert_eq!(session.response(&Table::new(&hands)), Err(SequenceError::Budget));
+        assert!(matches!(session.limit, Some(DeferredLimit::ResponseCache { .. })));
+        assert_eq!(calls.get(), 2);
     }
 }
