@@ -82,8 +82,9 @@ class Resources:
         self.job = k.CreateJobObjectW(None, None)
         self.check(self.job)
         limits = Limits()
-        # Job-wide commit cap, CPU affinity, below-normal priority, kill children on owner exit.
-        limits.basic.flags = 0x200 | 0x10 | 0x20 | 0x2000
+        # Subset affinity lets workers use individual cores inside the job's CPU cap.
+        # Retain the total commit cap, below-normal priority and kill-on-owner-exit.
+        limits.basic.flags = 0x200 | 0x10 | 0x4000 | 0x20 | 0x2000
         limits.basic.affinity = self.mask
         limits.basic.priority = 0x4000
         limits.job_memory = memory_gib * 1024**3
@@ -99,7 +100,12 @@ class Resources:
     def pin(self, process, worker, workers):
         # When possible, one physical core (including its SMT sibling) per worker.
         if workers <= len(self.cores):
-            self.check(self.k.SetProcessAffinityMask(int(process._handle), self.cores[worker]))
+            expected = self.cores[worker]
+            self.check(self.k.SetProcessAffinityMask(int(process._handle), expected))
+            actual, system = c.c_size_t(), c.c_size_t()
+            self.check(self.k.GetProcessAffinityMask(int(process._handle), c.byref(actual), c.byref(system)))
+            if actual.value != expected:
+                raise RuntimeError(f"Worker {worker} CPU affinity is {actual.value}, expected {expected}")
 
     def describe(self):
         limits = Limits()
