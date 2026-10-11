@@ -1,4 +1,4 @@
-//! Return candidates followed through by seat-local policies, not exposed-deal minimax.
+//! Existing return nominations evaluated by the common authored continuation.
 //! The engine owns every transition and score; incomplete comparisons keep C42's choice.
 
 use std::time::Instant;
@@ -10,8 +10,8 @@ use engine::{ActionType, CardSet, GameAction, Suit, SUITS};
 use observation::SeatEvent;
 
 use super::{back_features, Partner, BACK_FEATURES, PASSING_WEIGHTS};
-use crate::planning::{Forecast, BUDGET};
-use crate::{fact, Ctx, Decision};
+use crate::planning::{preplay, BUDGET};
+use crate::{Ctx, Decision};
 
 /// Represent suit length, pair ownership and each legal returned-Ace entry.
 /// C42 orders alternatives within each allocation; continuation play values them.
@@ -228,45 +228,25 @@ fn choose_until(
     if options.len() == 1 {
         return baseline;
     }
-    let incomplete = |mut baseline: Decision| {
-        baseline.why.extend([
-            fact("forecast_candidates", options.len() as u32),
-            fact("forecast_complete", 0),
-        ]);
-        baseline
-    };
-    let Some(forecast) = Forecast::new(ctx, ctx.params.return_worlds as usize, deadline) else {
-        return incomplete(baseline);
-    };
-    let Some(compared) = forecast.compare(&options) else {
-        baseline.why.extend(forecast.work_facts());
-        return incomplete(baseline);
-    };
-    let best = compared.assessment.selected;
-    if best != 0 {
-        baseline.action = options[best];
+    let original = baseline.action;
+    let rule = baseline.rule;
+    baseline = preplay::choose(
+        ctx,
+        &options,
+        ctx.params.return_worlds as usize,
+        deadline,
+        rule,
+        baseline,
+    );
+    if baseline.action != original {
         let ActionType::Pass(cards) = baseline.action.action_type else {
             unreachable!()
         };
         let features = back_features(ctx.k.certain(ctx.me), mate, trump, CardSet::from_cards(&cards));
-        baseline.why = super::explain(&PASSING_WEIGHTS.back, &BACK_FEATURES, features);
+        let mut explanation = super::explain(&PASSING_WEIGHTS.back, &BACK_FEATURES, features);
+        explanation.append(&mut baseline.why);
+        baseline.why = explanation;
     }
-    baseline.why.extend(forecast.facts(&compared, best));
-    let chosen = &compared.means[best];
-    let ActionType::Pass(cards) = baseline.action.action_type else {
-        unreachable!()
-    };
-    let returned = CardSet::from_cards(&cards);
-    let kept = ctx.k.certain(ctx.me) - returned;
-    baseline.why.extend([
-        fact("forecast_kept_wins", chosen.wins(kept)),
-        fact("forecast_kept_developed_wins", chosen.developed_wins(kept)),
-        fact("forecast_returned_wins", chosen.wins(returned)),
-        fact("forecast_returned_developed_wins", chosen.developed_wins(returned)),
-        fact("forecast_target", ctx.k.value()),
-        fact("forecast_opening", chosen.opening),
-    ]);
-    forecast.record(ctx, &options, compared.assessment);
     baseline
 }
 
