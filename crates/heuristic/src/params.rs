@@ -60,6 +60,9 @@ params! {
     /// Pass-back plan: minimum P(partner holds a half of the suit) to favour my single half.
     partner_half_conf: f32 = 0.5,
 
+    /// HZ-1: raise after the exchange by `contract_estimate` (the best expected contract score).
+    estimated_raise: bool = true,
+
     /// HL-2: cash a side-suit standing card before the valuation leads.
     lead_cash_standing: bool = true,
     // Planned leads (M3, Judge item 5; `leads.rs`), each switchable for its A/B against the

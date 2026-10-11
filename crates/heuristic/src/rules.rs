@@ -73,9 +73,9 @@ rules! {
     HR8 "HR-8" Reading 7 1 "[D]" "a half question suggests the asker holds the other half; Yours suggests the partner has a pair";
     HR9 "HR-9" Reading 8 1 "[D]" "an early side-suit lead suggests a long or standing suit (trump majority: M3)";
     // Raising (§4)
-    HZ1 "HZ-1" Raising 0 3 "[O]" "after the exchange, compute EGP from my 9 cards and the 4 given back";
+    HZ1 "HZ-1" Raising 0 1 "[O] [A]" "after the exchange, estimate the team's points from my 9 cards and the pairs given back (contract_estimate); raise to the value with the best expected contract score";
     HZ2 "HZ-2" Raising 1 1 "[D]" "raise only within a certified own-card run and one reachable own pair; follow that route before sampled search";
-    HZ3 "HZ-3" Raising 2 3 "[O]" "never raise across 140 without a certain team pair";
+    HZ3 "HZ-3" Raising 2 1 "[O]" "never raise across 140 without a certain team pair (a cap inside HZ-1)";
     // Passing (KB batch 2, C42): the store, score = Σ passing_weights × features
     PForth "P-forth" PassingForth 0 1 "[O] [A]" "pass forth: the best Σ passing_weights × features (human choice analysis, owner-requested)";
     PBack "P-back" PassingBack 0 1 "[O] [A]" "pass back: the best Σ passing_weights × features (human choice analysis, owner-requested)";

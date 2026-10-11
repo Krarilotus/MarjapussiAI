@@ -1,6 +1,10 @@
-//! Proven pre-play floors and their follow-through from seat-visible information.
-//! Reuse the complete claim proof where possible; otherwise certify opening Aces,
-//! side runs and one own trump run. Uncertain raises belong to shared planning.
+//! Raising after the exchange.
+//! - HZ-2: proven pre-play floors and their follow-through from seat-visible information.
+//!   Reuse the complete claim proof where possible; otherwise certify opening Aces, side runs
+//!   and one own trump run.
+//! - HZ-1: `contract_estimate`, the team's expected points from my 9 cards and the pairs I
+//!   passed back, with its observed spread. The raise is the value with the best expected
+//!   contract score, (2 P(make) - 1) x value. HZ-3 caps it at 140 without a certain team pair.
 
 use engine::{partner, points_set, ActionType, CardSet, GameAction, Suit, SUITS};
 use observation::SeatEvent;
@@ -57,6 +61,119 @@ impl Certificate {
     }
 }
 
+/// HZ-1 `contract_estimate`: the declaring team's points (cards + announced pairs) from the
+/// declarer's hand after the exchange. One named table from the human-game analysis
+/// (owner-requested; `tools/kbstudy/teampoints.py`, 1,577 games, least squares).
+struct TeamPoints {
+    intercept: f32,
+    per_standing: f32,
+    per_ace: f32,
+    per_trump_card: f32,
+    per_void: f32,
+    per_potential: f32,
+    own_pairs_share: f32,
+    given_pairs_share: f32,
+    /// Residuals (actual - estimate) at the 0th, 5th, ..., 100th percentile.
+    residuals: [f32; 21],
+}
+
+const TEAM_POINTS: TeamPoints = TeamPoints {
+    intercept: 118.77,
+    per_standing: 4.32,
+    per_ace: 0.12,
+    per_trump_card: 0.96,
+    per_void: -0.46,
+    per_potential: 2.95,
+    own_pairs_share: 0.7117,
+    given_pairs_share: 0.503,
+    residuals: [
+        -278.7, -86.2, -65.9, -52.1, -42.9, -33.1, -24.7, -16.9, -11.9, -6.7, -2.2, 4.0, 10.4, 16.6, 22.9, 32.6,
+        43.4, 54.2, 75.3, 98.1, 179.3,
+    ],
+};
+
+impl TeamPoints {
+    /// P(actual >= target): the share of the residual distribution at or above `target - estimate`.
+    fn p_reach(&self, estimate: f32, target: i32) -> f32 {
+        let need = target as f32 - estimate;
+        let r = &self.residuals;
+        if need <= r[0] {
+            return 1.0;
+        }
+        if need >= r[20] {
+            return 0.0;
+        }
+        let i = r.iter().rposition(|&x| x <= need).unwrap_or(0).min(19);
+        let below = (i as f32 + (need - r[i]) / (r[i + 1] - r[i]).max(1e-6)) * 0.05;
+        1.0 - below
+    }
+}
+
+/// The cards I passed back to my partner: certain to the partner and to me.
+fn given_back(ctx: &Ctx) -> CardSet {
+    let mut given = CardSet::EMPTY;
+    for event in ctx.mind.events() {
+        if let SeatEvent::Pass {
+            from,
+            to,
+            cards: Some(cards),
+        } = *event
+        {
+            if from == ctx.me && to == partner(ctx.me) {
+                given |= cards;
+            }
+        }
+    }
+    given
+}
+
+/// HZ-1 with HZ-3: the best expected-score raise, if it beats keeping the current value.
+fn estimated_raise(ctx: &Ctx, legal: &[GameAction]) -> Option<(GameAction, i32, Vec<crate::Fact>)> {
+    if !ctx.params.estimated_raise || ctx.k.declarer() != Some(ctx.me) || !ctx.k.played().is_empty() {
+        return None;
+    }
+    let hand = ctx.k.certain(ctx.me);
+    let given = given_back(ctx);
+    let own_pairs: i32 = hand.pair_suits().map(beliefs::conventions::pair_value).sum();
+    let given_pairs: i32 = given.pair_suits().map(beliefs::conventions::pair_value).sum();
+    let trump_len = hand.pair_suits().map(|s| (hand & CardSet::suit(s)).len()).max().unwrap_or(0);
+    let voids = SUITS.into_iter().filter(|&s| (hand & CardSet::suit(s)).is_empty()).count();
+    let t = &TEAM_POINTS;
+    let estimate = t.intercept
+        + t.per_standing * knowledge::own_standing_of(hand).len() as f32
+        + t.per_ace * (hand & CardSet::ACES).len() as f32
+        + t.per_trump_card * trump_len as f32
+        + t.per_void * voids as f32
+        + t.per_potential * knowledge::standing_potential_of(hand) as f32
+        + t.own_pairs_share * own_pairs as f32
+        + t.given_pairs_share * given_pairs as f32;
+    let value = ctx.k.value();
+    // HZ-3 [O]: never raise across 140 without a certain team pair.
+    let cap = if value < 140 && own_pairs + given_pairs == 0 { 140 } else { i32::MAX };
+    let score = |v: i32| (2.0 * t.p_reach(estimate, v) - 1.0) * v as f32;
+    let keep = score(value);
+    let (action, target) = legal
+        .iter()
+        .filter_map(|a| match a.action_type {
+            ActionType::NewBid(v) if v <= cap => Some((*a, v)),
+            _ => None,
+        })
+        .max_by(|a, b| score(a.1).total_cmp(&score(b.1)).then(b.1.cmp(&a.1)))?;
+    (score(target) > keep).then(|| {
+        (
+            action,
+            target,
+            vec![
+                fact("contract_estimate", estimate),
+                fact("p_make", t.p_reach(estimate, target)),
+                fact("expected_score", score(target)),
+                fact("expected_score_keep", keep),
+                fact("raise_target", target),
+            ],
+        )
+    })
+}
+
 /// The same seat-visible proof used by the optional human claim. Recompute its
 /// remaining route; a consumed card or lost declaration right cannot persist.
 fn claim(ctx: &Ctx, legal: &[GameAction]) -> Option<(Vec<GameAction>, i32)> {
@@ -75,6 +192,9 @@ fn claim(ctx: &Ctx, legal: &[GameAction]) -> Option<(Vec<GameAction>, i32)> {
 }
 
 pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], cards: &[GameAction]) -> Decision {
+    let estimated = estimated_raise(ctx, legal);
+    let above = |target: i32| estimated.as_ref().filter(|e| e.1 > target).cloned();
+    let estimated_decision = |(a, _, why): (GameAction, i32, Vec<crate::Fact>)| decision(&a, RuleId::HZ1, why);
     // Reuse the same seat-visible proof as "Zum Hinlegen". It tracks suit
     // exhaustion and every legal own announcement, so lower trumps promoted by
     // the run and multiple reachable pairs are counted through a real sequence.
@@ -91,6 +211,9 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], cards: &[GameAction]) -> D
                 let ActionType::NewBid(target) = a.action_type else {
                     unreachable!()
                 };
+                if let Some(e) = above(target) {
+                    return estimated_decision(e);
+                }
                 return decision(
                     a,
                     RuleId::HZ2,
@@ -132,6 +255,9 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], cards: &[GameAction]) -> D
             let ActionType::NewBid(target) = a.action_type else {
                 unreachable!()
             };
+            if let Some(e) = above(target) {
+                return estimated_decision(e);
+            }
             let team = (ctx.me % 2) as usize;
             let mut outcome = engine::GameOutcome {
                 playing_team: Some(team as u8),
@@ -159,6 +285,9 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], cards: &[GameAction]) -> D
                 ],
             );
         }
+    }
+    if let Some(e) = estimated {
+        return estimated_decision(e);
     }
     let mut d = play::decide(ctx, cards);
     d.why.extend([

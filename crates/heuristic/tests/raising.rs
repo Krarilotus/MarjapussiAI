@@ -7,11 +7,11 @@ use common::{bid_of, c, set, Scene};
 use engine::{ActionType, Card, CardSet, GameFinishedInfo, GamePhase, Suit};
 use heuristic::{Decision, HeuristicAgent, Params, RuleId};
 
-// Certificates have stronger guarantees than the optional probabilistic raising
-// comparison. These oracle checks isolate that guarantee and its follow-through.
+// Certificates have stronger guarantees than the estimated raise (HZ-1). These oracle checks
+// isolate that guarantee and its follow-through.
 fn certified_agent() -> HeuristicAgent {
     HeuristicAgent::new(Params {
-
+        estimated_raise: false,
         ..Params::default()
     })
 }
@@ -235,4 +235,26 @@ fn interrupted_routes_are_not_relabelled_as_certified() {
     assert_eq!(lost.tracker.knowledge().trick_winners(), &[0, 1]);
     let d = lost.act(&lost.card_legal());
     assert!(!d.why.iter().any(|f| f.key == "certified_raise_route"));
+}
+
+#[test]
+fn two_pairs_raise_by_the_expected_contract_score() {
+    let cards = ["r-K", "r-O", "s-K", "s-O", "e-A", "g-6", "g-7", "e-6", "e-7"];
+    let table = preplay(&cards, 140, 0);
+    let (seat, legal) = table.to_act().unwrap();
+    let d = HeuristicAgent::new(Params::default()).decide(&table.view(seat), legal);
+    assert_eq!(d.rule, RuleId::HZ1, "{d:?}");
+    let target = bid_of(&d).unwrap();
+    assert!(target > 140, "{d:?}");
+    assert!(value(&d, "p_make") > 0.5);
+    assert!(value(&d, "expected_score") > value(&d, "expected_score_keep"));
+}
+
+#[test]
+fn no_certain_team_pair_never_raises_across_140() {
+    let cards = ["r-A", "r-Z", "g-A", "g-Z", "e-A", "e-Z", "s-A", "s-Z", "r-9"];
+    let table = preplay(&cards, 120, 0);
+    let (seat, legal) = table.to_act().unwrap();
+    let d = HeuristicAgent::new(Params::default()).decide(&table.view(seat), legal);
+    assert!(bid_of(&d).is_none_or(|v| v <= 140), "{d:?}");
 }
