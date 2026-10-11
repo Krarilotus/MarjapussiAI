@@ -7,8 +7,12 @@ use engine::{ActionType, CardSet, GameAction, PlayPhase, Suit, SUITS};
 use knowledge::Knowledge;
 use observation::SeatEvent;
 
-pub const MAX_STAGES: usize = 128;
-pub const MAX_ALTERNATIVES: usize = 64;
+/// Structural caps for a composed current-information catalogue. Exceeding a
+/// cap defers the complete comparison; it never trims or ranks alternatives.
+pub const MAX_STAGES: usize = 4096;
+pub const MAX_ALTERNATIVES: usize = 128;
+/// Semantic lookahead, independent of wall time and logical-work allowances.
+pub const MAX_RECONSIDERATIONS: u8 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stage(pub usize);
@@ -17,6 +21,8 @@ pub struct Stage(pub usize);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Actions {
     Exact(ActionType),
+    /// All current legal raises, sharing a post-acceptance continuation edge.
+    Raises,
     Cards(CardSet),
     /// Rebind known team-winning leads at the current observation. Partner may
     /// overtake; this predicate does NOT prove that this seat retains its lead.
@@ -46,6 +52,12 @@ pub enum Node {
         unknown: Stage,
     },
     Choice(Vec<Stage>),
+    /// Bind a complete current-information catalogue plus the retained edge.
+    /// The evaluator ranks that bound Choice on the whole information group.
+    Reconsider {
+        remaining: u8,
+        retained: Stage,
+    },
     /// Named response approximation continues to a real terminal outcome.
     Tail,
 }
@@ -88,12 +100,14 @@ impl Program {
             match &program.nodes[stage.0] {
                 Node::Action { actions, next } => {
                     let valid = match actions {
+                        Actions::Raises => true,
                         Actions::Cards(cards) | Actions::Standing(cards) => {
                             !cards.is_empty() && cards.0 & !CardSet::ALL.0 == 0
                         }
                         Actions::Exact(kind) => matches!(
                             kind,
                             ActionType::CardPlayed(_)
+                                | ActionType::NewBid(_)
                                 | ActionType::Question(_)
                                 | ActionType::AnnounceTrump(_)
                                 | ActionType::Answer(_)
@@ -129,6 +143,12 @@ impl Program {
                     for next in alternatives {
                         visit(program, *next, marks)?;
                     }
+                }
+                Node::Reconsider { remaining, retained } => {
+                    if *remaining == 0 || *remaining > MAX_RECONSIDERATIONS {
+                        return Err(SequenceError::InvalidProgram);
+                    }
+                    visit(program, *retained, marks)?;
                 }
                 Node::Tail => {}
             }
@@ -185,6 +205,10 @@ impl Program {
                         .map(|stage| copy(program, *stage, remap, nodes))
                         .collect::<Result<_, _>>()?,
                 ),
+                Node::Reconsider { remaining, retained } => Node::Reconsider {
+                    remaining: *remaining,
+                    retained: copy(program, *retained, remap, nodes)?,
+                },
                 Node::Tail => Node::Tail,
             };
             let mapped = match nodes.iter().position(|old| *old == node) {
@@ -208,6 +232,206 @@ impl Program {
 pub struct Suffix {
     pub start: Stage,
     pub nodes: Vec<Node>,
+}
+
+/// A fully bound comparison domain, not an assessment or selected route.
+/// All alternative stages share this one canonical DAG and one observer input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reconsideration {
+    pub information: Information,
+    pub legal: Vec<GameAction>,
+    pub source: Suffix,
+    pub program: Program,
+    pub alternatives: Vec<Stage>,
+    pub retained: Stage,
+}
+
+#[derive(Default)]
+struct Composition {
+    nodes: Vec<Node>,
+}
+impl Composition {
+    fn intern(&mut self, node: Node) -> Result<Stage, SequenceError> {
+        if let Some(index) = self.nodes.iter().position(|old| *old == node) {
+            return Ok(Stage(index));
+        }
+        if self.nodes.len() >= MAX_STAGES {
+            return Err(SequenceError::Budget);
+        }
+        let stage = Stage(self.nodes.len());
+        self.nodes.push(node);
+        Ok(stage)
+    }
+
+    fn import(
+        &mut self,
+        program: &Program,
+        stage: Stage,
+        remap: &mut [Option<Stage>],
+        depth: Option<u8>,
+    ) -> Result<Stage, SequenceError> {
+        if let Some(mapped) = remap.get(stage.0).copied().flatten() {
+            return Ok(mapped);
+        }
+        let node = match program.nodes.get(stage.0).ok_or(SequenceError::InvalidProgram)? {
+            Node::Action { actions, next } => {
+                let mut next = self.import(program, *next, remap, depth)?;
+                if let Some(remaining) = depth.filter(|remaining| *remaining > 0) {
+                    if !matches!(self.nodes[next.0], Node::Reconsider { remaining: n, .. } if n == remaining) {
+                        next = self.intern(Node::Reconsider {
+                            remaining,
+                            retained: next,
+                        })?;
+                    }
+                }
+                Node::Action {
+                    actions: actions.clone(),
+                    next,
+                }
+            }
+            Node::Guard {
+                predicate,
+                yes,
+                no,
+                unknown,
+            } => Node::Guard {
+                predicate: predicate.clone(),
+                yes: self.import(program, *yes, remap, depth)?,
+                no: self.import(program, *no, remap, depth)?,
+                unknown: self.import(program, *unknown, remap, depth)?,
+            },
+            Node::Choice(alternatives) => {
+                let mut bound = Vec::new();
+                for alternative in alternatives {
+                    bound.push(self.import(program, *alternative, remap, depth)?);
+                }
+                Node::Choice(bound)
+            }
+            Node::Reconsider { remaining, retained } => {
+                let retained = self.import(program, *retained, remap, depth)?;
+                let remaining = depth.map_or(*remaining, |cap| (*remaining).min(cap));
+                if remaining == 0 {
+                    remap[stage.0] = Some(retained);
+                    return Ok(retained);
+                }
+                Node::Reconsider { remaining, retained }
+            }
+            Node::Tail => Node::Tail,
+        };
+        let mapped = self.intern(node)?;
+        remap[stage.0] = Some(mapped);
+        Ok(mapped)
+    }
+}
+
+/// Install a finite opportunity to reconsider after each authored action. On
+/// expansion the remaining count is reduced on ALL successor alternatives,
+/// including the retained suffix, so no path can replenish its semantic depth.
+/// Zero denotes the underlying authored routes with no global reconsideration.
+pub fn with_reconsideration(program: &Program, remaining: u8) -> Result<Program, SequenceError> {
+    if remaining > MAX_RECONSIDERATIONS {
+        return Err(SequenceError::InvalidProgram);
+    }
+    program.validate()?;
+    let mut composition = Composition::default();
+    let start = composition.import(
+        program,
+        program.start,
+        &mut vec![None; program.nodes.len()],
+        Some(remaining),
+    )?;
+    Ok(Program {
+        name: program.name,
+        version: program.version,
+        start,
+        nodes: composition.nodes,
+    })
+}
+
+/// Complete authored catalogue with an explicit semantic horizon. This binds
+/// data only. The caller must jointly rank all returned alternatives or defer.
+pub fn authored_programs_with_reconsideration(
+    view: &SeatView<'_>,
+    legal: &[GameAction],
+    remaining: u8,
+) -> Result<Vec<Program>, SequenceError> {
+    let mut programs = Vec::new();
+    let mut identities = Vec::new();
+    for program in authored_programs(view, legal) {
+        let program = with_reconsideration(&program, remaining)?;
+        let identity = program.suffix(program.start)?;
+        if !identities.contains(&identity) {
+            if programs.len() >= MAX_ALTERNATIVES {
+                return Err(SequenceError::Budget);
+            }
+            identities.push(identity);
+            programs.push(program);
+        }
+    }
+    Ok(programs)
+}
+
+/// Bind at the actual observed boundary, never at the original decision's view.
+/// The resulting Choice must be evaluated on the complete conditional root
+/// information group, preserving its mass, before any ancestor can be valued.
+pub fn bind_reconsideration(
+    program: &Program,
+    stage: Stage,
+    view: &SeatView<'_>,
+    legal: &[GameAction],
+) -> Result<Reconsideration, SequenceError> {
+    let Some(Node::Reconsider { remaining, retained }) = program.nodes.get(stage.0) else {
+        return Err(SequenceError::InvalidProgram);
+    };
+    if *remaining == 0 {
+        return Err(SequenceError::Budget);
+    }
+    program.validate()?;
+    let source = program.suffix(stage)?;
+    let old_suffix = program.suffix(*retained)?;
+    let retained_program = with_reconsideration(
+        &Program {
+            name: "retained-current-suffix",
+            version: 1,
+            start: old_suffix.start,
+            nodes: old_suffix.nodes,
+        },
+        remaining - 1,
+    )?;
+    let mut programs = authored_programs_with_reconsideration(view, legal, remaining - 1)?;
+    programs.push(retained_program);
+    let mut composition = Composition::default();
+    let mut alternatives = Vec::new();
+    let mut retained = None;
+    let last = programs.len() - 1;
+    for (index, candidate) in programs.iter().enumerate() {
+        let start = composition.import(candidate, candidate.start, &mut vec![None; candidate.nodes.len()], None)?;
+        if index == last {
+            retained = Some(start);
+        }
+        if !alternatives.contains(&start) {
+            if alternatives.len() >= MAX_ALTERNATIVES {
+                return Err(SequenceError::Budget);
+            }
+            alternatives.push(start);
+        }
+    }
+    let start = composition.intern(Node::Choice(alternatives.clone()))?;
+    let program = Program {
+        name: "current-information-reconsideration",
+        version: 1,
+        start,
+        nodes: composition.nodes,
+    };
+    program.validate()?;
+    Ok(Reconsideration {
+        information: Information::of(view),
+        legal: legal.to_vec(),
+        source,
+        program,
+        alternatives,
+        retained: retained.ok_or(SequenceError::InvalidProgram)?,
+    })
 }
 
 /// Full equality, not a digest or exposed allocation, defines an information set.
@@ -250,6 +474,11 @@ pub struct Offer {
 pub enum Frontier {
     Actions(Vec<Offer>),
     Choice(Vec<Stage>),
+    Reconsider {
+        stage: Stage,
+        remaining: u8,
+        retained: Stage,
+    },
     Tail,
     /// An unavailable action is a failed route, not a discarded hidden world.
     Interrupted,
@@ -280,6 +509,10 @@ pub enum ReadMeaning {
         legal_members: Vec<GameAction>,
     },
     Alternatives(Vec<Stage>),
+    Reconsider {
+        remaining: u8,
+        retained: Stage,
+    },
     ResponseLeaf,
 }
 
@@ -321,9 +554,13 @@ pub(crate) fn inspect_with(
                 };
                 let offers: Vec<_> = legal.iter().filter(|action| action.player.0 == view.seat && match actions {
                     Actions::Exact(kind) => action.action_type == *kind,
+                    Actions::Raises => matches!(action.action_type, ActionType::NewBid(_)),
                     Actions::Cards(cards) => matches!(action.action_type, ActionType::CardPlayed(card) if cards.contains(card.index())),
                     Actions::Standing(cards) => matches!(action.action_type, ActionType::CardPlayed(card) if (*cards & standing).contains(card.index())),
                 }).map(|action| Offer { action: *action, next: *next }).collect();
+                if offers.len() > MAX_ALTERNATIVES {
+                    return Err(SequenceError::Budget);
+                }
                 consumed.push(Read {
                     stage,
                     event_count: view.events.len(),
@@ -387,6 +624,27 @@ pub(crate) fn inspect_with(
                 });
                 Frontier::Choice(alternatives.clone())
             }
+            Node::Reconsider { remaining, retained } => {
+                if *remaining == 0 {
+                    return Err(SequenceError::Budget);
+                }
+                if *remaining > MAX_RECONSIDERATIONS {
+                    return Err(SequenceError::InvalidProgram);
+                }
+                consumed.push(Read {
+                    stage,
+                    event_count: view.events.len(),
+                    meaning: ReadMeaning::Reconsider {
+                        remaining: *remaining,
+                        retained: *retained,
+                    },
+                });
+                Frontier::Reconsider {
+                    stage,
+                    remaining: *remaining,
+                    retained: *retained,
+                }
+            }
             Node::Tail => {
                 consumed.push(Read {
                     stage,
@@ -433,6 +691,38 @@ impl Receipt {
         Ok(())
     }
 
+    /// Replace a reached boundary with its complete bound comparison graph.
+    /// Installing is not choosing or accepting an action: the evaluator/live
+    /// lookup must still select an actually compared alternative and propose it.
+    pub fn install_reconsideration(
+        &mut self,
+        binding: &Reconsideration,
+        view: &SeatView<'_>,
+        legal: &[GameAction],
+        mind: &Mind,
+    ) -> Result<(), SequenceError> {
+        if self.pending.is_some()
+            || !self.accepted.matches(view)
+            || !binding.information.matches(view)
+            || binding.legal != legal
+        {
+            return Err(SequenceError::WrongContext);
+        }
+        let Frontier::Reconsider { stage, .. } = inspect(&self.program, self.stage, view, legal, mind)?.frontier else {
+            return Err(SequenceError::WrongContext);
+        };
+        if self.program.suffix(stage)? != binding.source
+            || binding.program.nodes.get(binding.program.start.0) != Some(&Node::Choice(binding.alternatives.clone()))
+            || !binding.alternatives.contains(&binding.retained)
+        {
+            return Err(SequenceError::WrongContext);
+        }
+        binding.program.validate()?;
+        self.program = binding.program.clone();
+        self.stage = self.program.start;
+        Ok(())
+    }
+
     pub fn synchronize(&mut self, view: &SeatView<'_>) -> Result<(), SequenceError> {
         if self.accepted.seat != view.seat
             || self.accepted.kinds != view.kinds
@@ -454,6 +744,9 @@ impl Receipt {
         }
         if let Some(offer) = &self.pending {
             let matches = match (&offer.action.action_type, &delta[0]) {
+                (ActionType::NewBid(value), SeatEvent::Bid { seat, value: accepted }) => {
+                    *seat == view.seat && value == accepted
+                }
                 (ActionType::CardPlayed(card), SeatEvent::CardPlayed { seat, card: played }) => {
                     *seat == view.seat && card.index() == *played
                 }
@@ -542,6 +835,26 @@ pub fn authored_programs(view: &SeatView<'_>, legal: &[GameAction]) -> Vec<Progr
                 ],
             });
         }
+    }
+    // Optional first-play raising is one action family, not a static product
+    // of bids and routes. With one reconsideration, opening routes bind AFTER
+    // the accepted bid, using the engine's new contract and rights. No-raise
+    // card/activation routes remain in the same root catalogue.
+    if legal.iter().any(|a| matches!(a.action_type, ActionType::NewBid(_)))
+        && legal.iter().any(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+    {
+        programs.push(Program {
+            name: "optional-raise-then-opening",
+            version: 1,
+            start: Stage(1),
+            nodes: vec![
+                Node::Tail,
+                Node::Action {
+                    actions: Actions::Raises,
+                    next: tail,
+                },
+            ],
+        });
     }
     if own.is_empty() {
         return programs;

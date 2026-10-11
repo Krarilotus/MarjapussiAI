@@ -281,3 +281,377 @@ fn split_pair_has_the_same_activation_chain_and_distinct_success_suffix() {
         );
     }
 }
+
+fn raising_table() -> Table {
+    let hands = std::array::from_fn(|seat| (0..9).map(|i| Card::from_index((4 * i + seat) as u8)).collect());
+    let mut table = Table::new(&hands);
+    let bid = *table
+        .to_act()
+        .unwrap()
+        .1
+        .iter()
+        .find(|a| a.action_type == ActionType::NewBid(120))
+        .unwrap();
+    table.apply(bid);
+    while table.game.state.phase == engine::GamePhase::Bidding {
+        let pass = *table
+            .to_act()
+            .unwrap()
+            .1
+            .iter()
+            .find(|a| a.action_type == ActionType::StopBidding)
+            .unwrap();
+        table.apply(pass);
+    }
+    for _ in 0..2 {
+        let pass = *table
+            .to_act()
+            .unwrap()
+            .1
+            .iter()
+            .find(|a| matches!(a.action_type, ActionType::Pass(_)))
+            .unwrap();
+        table.apply(pass);
+    }
+    assert_eq!(table.game.state.phase, engine::GamePhase::Raising);
+    table
+}
+
+fn reader(view: &SeatView<'_>) -> Mind {
+    let mut mind = Mind::new(
+        view.seat,
+        view.knowledge.dealt_certain(view.seat),
+        view.kinds,
+        BeliefParams::base_only(),
+    );
+    for event in view.events {
+        mind.apply(event).unwrap();
+    }
+    assert_eq!(mind.knowledge(), view.knowledge);
+    mind
+}
+
+#[test]
+fn optional_raises_share_a_boundary_and_every_legal_value_is_preserved() {
+    let mut table = raising_table();
+    let (seat, legal) = table.to_act().unwrap();
+    let view = table.view(seat);
+    let mind = reader(&view);
+    let programs = authored_programs_with_reconsideration(&view, legal, 1).unwrap();
+    let raising = programs
+        .iter()
+        .find(|p| p.name == "optional-raise-then-opening")
+        .unwrap();
+    assert_eq!(
+        raising.nodes.len(),
+        3,
+        "one shared successor, no static bid x route product"
+    );
+    let inspection = inspect(raising, raising.start, &view, legal, &mind).unwrap();
+    let Frontier::Actions(offers) = inspection.frontier else {
+        panic!("raise binding expected")
+    };
+    let expected: Vec<_> = legal
+        .iter()
+        .filter(|a| matches!(a.action_type, ActionType::NewBid(_)))
+        .copied()
+        .collect();
+    assert_eq!(offers.iter().map(|offer| offer.action).collect::<Vec<_>>(), expected);
+    assert!(offers.len() > 1);
+    assert!(offers.iter().all(|offer| offer.next == offers[0].next));
+    assert!(matches!(&inspection.consumed[0].meaning,
+        ReadMeaning::Binding { actions: Actions::Raises, legal_members } if *legal_members == expected));
+    // Engine limits, not a chosen hand or a heuristic priority, determine the
+    // needed capacity. Combined bid/card domains may exceed the old cap of 64.
+    assert!(MAX_ALTERNATIVES >= engine::bid_range(engine::NO_BID).count() + engine::HAND_SIZE + 8);
+    for card in legal
+        .iter()
+        .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+    {
+        assert!(
+            programs.iter().any(|p| matches!(&p.nodes[p.start.0],
+            Node::Action { actions: Actions::Exact(kind), .. } if *kind == card.action_type)),
+            "no-raise openings must remain explicit alternatives"
+        );
+    }
+
+    let selected = offers.last().unwrap().clone();
+    let mut receipt = Receipt::new(raising.clone(), &view).unwrap();
+    receipt.propose(selected.clone(), &view, legal).unwrap();
+    let pending = receipt.clone();
+    receipt.synchronize(&view).unwrap();
+    assert_eq!(receipt, pending, "unaccepted retry cannot spend the raise");
+    let mut wrong_table = table.clone();
+    wrong_table.apply(offers[0].action);
+    assert_eq!(
+        receipt.synchronize(&wrong_table.view(seat)),
+        Err(SequenceError::HistoryChanged)
+    );
+    assert_eq!(receipt, pending);
+
+    table.apply(selected.action);
+    assert_eq!(table.game.state.value.0, engine::MAX_BID);
+    assert_eq!(table.game.state.phase, engine::GamePhase::Trick);
+    receipt.synchronize(&table.view(seat)).unwrap();
+    assert_eq!(receipt.stage, selected.next);
+    assert!(receipt.pending.is_none());
+    let after_raise = receipt.clone();
+    receipt.synchronize(&table.view(seat)).unwrap();
+    assert_eq!(receipt, after_raise, "accepted raise advances exactly once");
+
+    let legal = table.to_act().unwrap().1;
+    let view = table.view(seat);
+    let mind = reader(&view);
+    let reading = inspect(&receipt.program, receipt.stage, &view, legal, &mind).unwrap();
+    let Frontier::Reconsider {
+        stage, remaining: 1, ..
+    } = reading.frontier
+    else {
+        panic!("future boundary expected")
+    };
+    assert!(matches!(
+        &reading.consumed[0].meaning,
+        ReadMeaning::Reconsider { remaining: 1, .. }
+    ));
+    let binding = bind_reconsideration(&receipt.program, stage, &view, legal).unwrap();
+    assert!(
+        binding
+            .program
+            .nodes
+            .iter()
+            .all(|node| !matches!(node, Node::Reconsider { .. })),
+        "all successors exhaust the one permitted global expansion"
+    );
+    assert!(
+        binding.program.nodes.iter().all(|node| !matches!(
+            node,
+            Node::Action {
+                actions: Actions::Raises,
+                ..
+            }
+        )),
+        "engine already consumed the raise right"
+    );
+    let actual = binding
+        .alternatives
+        .iter()
+        .map(|stage| binding.program.suffix(*stage).unwrap())
+        .collect::<Vec<_>>();
+    for program in authored_programs_with_reconsideration(&view, legal, 0).unwrap() {
+        assert!(actual.contains(&program.suffix(program.start).unwrap()));
+    }
+    assert!(binding.alternatives.contains(&binding.retained));
+    for (index, node) in binding.program.nodes.iter().enumerate() {
+        assert!(
+            !binding.program.nodes[..index].contains(node),
+            "identical semantic nodes share storage"
+        );
+    }
+    let mut stale = binding.clone();
+    stale.legal.clear();
+    assert_eq!(
+        receipt.install_reconsideration(&stale, &view, legal, &mind),
+        Err(SequenceError::WrongContext)
+    );
+    let mut stale = binding.clone();
+    stale.information.series = SeriesScore::default();
+    stale.information.events.clear();
+    assert_eq!(
+        receipt.install_reconsideration(&stale, &view, legal, &mind),
+        Err(SequenceError::WrongContext)
+    );
+    assert_eq!(receipt, after_raise);
+    receipt.install_reconsideration(&binding, &view, legal, &mind).unwrap();
+    assert_eq!(receipt.program, binding.program);
+    assert_eq!(receipt.stage, binding.program.start);
+    assert!(
+        receipt.pending.is_none(),
+        "installation is not a strategic choice or accepted action"
+    );
+    // Simulate the evaluator selecting an explicit no-raise card branch from
+    // this new program. Its Offer.next must refer to the installed DAG.
+    let stage = *binding
+        .alternatives
+        .iter()
+        .find(|stage| {
+            matches!(
+                &receipt.program.nodes[stage.0],
+                Node::Action {
+                    actions: Actions::Exact(ActionType::CardPlayed(_)),
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    receipt.stage = stage;
+    let Frontier::Actions(next) = inspect(&receipt.program, stage, &view, legal, &mind).unwrap().frontier else {
+        panic!("selected opening must bind")
+    };
+    let next = next[0].clone();
+    receipt.propose(next.clone(), &view, legal).unwrap();
+    table.apply(next.action);
+    receipt.synchronize(&table.view(seat)).unwrap();
+    assert_eq!(receipt.stage, next.next);
+    assert!(matches!(receipt.program.nodes[receipt.stage.0], Node::Tail));
+}
+
+#[test]
+fn reconsideration_identity_retains_resource_edges_and_zero_removes_global_expansion() {
+    let plain = Program {
+        name: "two-actions",
+        version: 1,
+        start: Stage(2),
+        nodes: vec![
+            Node::Tail,
+            Node::Action {
+                actions: Actions::Exact(ActionType::CardPlayed(Card::from_index(1))),
+                next: Stage(0),
+            },
+            Node::Action {
+                actions: Actions::Exact(ActionType::CardPlayed(Card::from_index(2))),
+                next: Stage(1),
+            },
+        ],
+    };
+    let bounded = with_reconsideration(&plain, 1).unwrap();
+    assert_ne!(
+        bounded.suffix(bounded.start).unwrap(),
+        plain.suffix(plain.start).unwrap()
+    );
+    let stripped = with_reconsideration(&bounded, 0).unwrap();
+    assert_eq!(
+        stripped.suffix(stripped.start).unwrap(),
+        plain.suffix(plain.start).unwrap()
+    );
+    let again = with_reconsideration(&bounded, 1).unwrap();
+    assert_eq!(
+        again.suffix(again.start).unwrap(),
+        bounded.suffix(bounded.start).unwrap()
+    );
+    let stage = bounded
+        .nodes
+        .iter()
+        .position(|node| {
+            matches!(node,
+        Node::Reconsider { retained, .. } if matches!(bounded.nodes[retained.0], Node::Action { .. }))
+        })
+        .unwrap();
+    let mut changed = bounded.clone();
+    let tail = Stage(
+        changed
+            .nodes
+            .iter()
+            .position(|node| matches!(node, Node::Tail))
+            .unwrap(),
+    );
+    changed.nodes[stage] = Node::Reconsider {
+        remaining: 1,
+        retained: tail,
+    };
+    assert_ne!(
+        changed.suffix(Stage(stage)).unwrap(),
+        bounded.suffix(Stage(stage)).unwrap()
+    );
+    changed.nodes[stage] = Node::Reconsider {
+        remaining: 0,
+        retained: tail,
+    };
+    let table = table();
+    let (seat, legal) = table.to_act().unwrap();
+    assert_eq!(
+        bind_reconsideration(&changed, Stage(stage), &table.view(seat), legal),
+        Err(SequenceError::Budget)
+    );
+    assert_eq!(
+        with_reconsideration(&plain, MAX_RECONSIDERATIONS + 1),
+        Err(SequenceError::InvalidProgram)
+    );
+}
+
+#[test]
+fn finite_composition_exhaustion_defers_without_returning_a_partial_catalogue() {
+    // A broad, shallow syntactically valid DAG avoids a recursion-depth test.
+    // Distinct valid card masks prevent folding of these resource paths. This
+    // exercises structural admission, not a claim that every route is playable.
+    let mut nodes = vec![Node::Tail];
+    let mut roots = Vec::new();
+    for route in 0..MAX_ALTERNATIVES {
+        let mut next = Stage(0);
+        for _ in 0..31 {
+            let stage = Stage(nodes.len());
+            nodes.push(Node::Action {
+                actions: Actions::Cards(CardSet(route as u64 + 1)),
+                next,
+            });
+            next = stage;
+        }
+        roots.push(next);
+    }
+    let start = Stage(nodes.len());
+    nodes.push(Node::Choice(roots));
+    let program = Program {
+        name: "structural-bound-fixture",
+        version: 1,
+        start,
+        nodes,
+    };
+    program.validate().unwrap();
+    assert_eq!(with_reconsideration(&program, 1), Err(SequenceError::Budget));
+}
+
+#[test]
+fn current_catalogue_binding_preserves_a_still_legal_non_catalogue_retained_route() {
+    let table = table();
+    let (seat, legal) = table.to_act().unwrap();
+    let view = table.view(seat);
+    let mind = reader(&view);
+    let first = *legal
+        .iter()
+        .find(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+        .unwrap();
+    let program = Program {
+        name: "retained-resource-proof",
+        version: 1,
+        start: Stage(3),
+        nodes: vec![
+            Node::Tail,
+            Node::Action {
+                actions: Actions::Exact(first.action_type),
+                next: Stage(0),
+            },
+            Node::Guard {
+                predicate: Guard::OwnCards(view.knowledge.certain(seat)),
+                yes: Stage(1),
+                no: Stage(0),
+                unknown: Stage(0),
+            },
+            Node::Reconsider {
+                remaining: 1,
+                retained: Stage(2),
+            },
+        ],
+    };
+    let retained = program.suffix(Stage(2)).unwrap();
+    let catalogue = authored_programs_with_reconsideration(&view, legal, 0).unwrap();
+    assert!(!catalogue.iter().any(|p| p.suffix(p.start).unwrap() == retained));
+    let binding = bind_reconsideration(&program, program.start, &view, legal).unwrap();
+    assert_eq!(binding.program.suffix(binding.retained).unwrap(), retained);
+    let actual = binding
+        .alternatives
+        .iter()
+        .map(|stage| binding.program.suffix(*stage).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(actual.len(), catalogue.len() + 1);
+    for candidate in catalogue {
+        assert!(actual.contains(&candidate.suffix(candidate.start).unwrap()));
+    }
+    let reading = inspect(&binding.program, binding.retained, &view, legal, &mind).unwrap();
+    assert!(matches!(reading.frontier, Frontier::Actions(ref offers) if offers.iter().any(|o| o.action == first)));
+    assert!(reading.consumed.iter().any(|read| matches!(
+        &read.meaning,
+        ReadMeaning::Guard {
+            predicate: Guard::OwnCards(_),
+            truth: Some(true)
+        }
+    )));
+}
