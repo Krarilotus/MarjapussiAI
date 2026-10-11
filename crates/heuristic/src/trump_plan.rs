@@ -137,11 +137,16 @@ impl Reach {
             if known_entry {
                 p_partner_lead = 1.0;
             } else {
-                for action in legal {
-                    if let ActionType::CardPlayed(c) = action.action_type {
-                        p_partner_lead = p_partner_lead.max(ctx.entry(c.index()).lead[mate as usize]);
-                    }
-                }
+                p_partner_lead = entry_access(
+                    p_partner_lead,
+                    legal.iter().filter_map(|action| {
+                        if let ActionType::CardPlayed(c) = action.action_type {
+                            Some(ctx.entry(c.index()).lead[mate as usize])
+                        } else {
+                            None
+                        }
+                    }),
+                );
             }
         }
         Reach {
@@ -224,6 +229,16 @@ impl Reach {
     fn open_halves(&self) -> impl Iterator<Item = &(Suit, f32)> {
         self.halves.iter().filter(|h| h.1 > 0.0)
     }
+}
+
+/// Entry clamps every estimate to [0, 1]. Once this access proxy is exactly
+/// saturated, remaining entries cannot change it; their full data stays lazy.
+fn entry_access(mut lead: f32, mut entries: impl Iterator<Item = f32>) -> f32 {
+    while lead != 1.0 {
+        let Some(entry) = entries.next() else { break };
+        lead = lead.max(entry);
+    }
+    lead
 }
 
 /// P10a: asking `ask` leaves every pair the team may still need as activatable as before. Only
@@ -447,3 +462,7 @@ fn action(ctx: &Ctx, legal: &[GameAction], reach: &Reach) -> Option<Decision> {
 #[cfg(test)]
 #[path = "../tests/internal/activation_resources.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/internal/reach_saturation.rs"]
+mod saturation_tests;

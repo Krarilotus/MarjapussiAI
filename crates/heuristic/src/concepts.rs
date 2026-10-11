@@ -27,6 +27,20 @@ impl Default for Reads {
     }
 }
 
+#[cfg(test)]
+impl Reads {
+    pub(crate) fn cap_for_test(&mut self, remaining: usize) {
+        self.remaining = self.remaining.min(remaining);
+    }
+
+    pub(crate) fn snapshot(&self) -> (usize, Vec<(ConceptQuery, Option<u32>)>) {
+        (
+            self.remaining,
+            self.results.iter().map(|(q, p)| (q.clone(), p.map(f32::to_bits))).collect(),
+        )
+    }
+}
+
 impl Ctx<'_> {
     pub(crate) fn joint_probability(&self, query: &ConceptQuery) -> Option<f32> {
         let _timing = beliefs::profile::scope("concept.joint");
