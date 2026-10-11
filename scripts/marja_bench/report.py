@@ -12,7 +12,15 @@ import statistics
 def compact_game(game):
     """Keep report inputs only; full hands, actions and explanations stay on disk."""
     row = {k: game[k] for k in ("index", "deal_index", "deal_seed", "rotation", "lineup", "metrics")}
+    row.update({k: game[k] for k in ("rotation_mode", "games_per_deal", "hands_turned") if k in game})
+    if "policies" in game:
+        row["policy_seeds"] = [p.get("policy_seed", p.get("stream_seed")) for p in game["policies"]]
     row["decisions"] = [{**{k: d[k] for k in ("seat", "ms", "phase", "rule")},
+                         "assessment_recorded": d.get("assessment_recorded"),
+                         "assessment_present": (d.get("assessment") is not None or d.get("assessment_present", False)),
+                         "assessment_matches_chosen_action": d.get("assessment_matches_chosen_action"),
+                         "capture_ms": d.get("capture_ms", 0),
+                         "assessment_serialization_ms": d.get("assessment_serialization_ms", 0),
                          "facts": [f for f in d["facts"] if f["key"] in
                                    ("forecast_complete", "forecast_decisions", "forecast_reused_decisions")]}
                         for d in game["decisions"]]
@@ -67,11 +75,25 @@ def summarize(games, manifest):
         raise ValueError("No finished games to report")
     if len({g["index"] for g in games}) != len(games):
         raise ValueError("Duplicate game indices in input")
+    mode = manifest.get("rotation_mode", "teams-and-seats")
+    if mode not in ("teams", "teams-and-seats"):
+        raise ValueError("Unknown rotation mode")
+    size = 2 if mode == "teams" else 4
+    if manifest.get("games_per_deal", size) != size:
+        raise ValueError("Manifest rotation block size mismatch")
     for g in games:
         if not 0 <= g["index"] < manifest["games"]:
             raise ValueError("Game index outside requested sample")
-        if g["index"] != 4 * g["deal_index"] + g["rotation"] or not 0 <= g["rotation"] < 4:
+        if g["index"] != size * g["deal_index"] + g["rotation"] or not 0 <= g["rotation"] < size:
             raise ValueError("Invalid deal/rotation identity")
+        if g.get("rotation_mode", "teams-and-seats") != mode or g.get("games_per_deal", size) != size:
+            raise ValueError("Worker/manifest rotation mismatch")
+        if "hands_turned" in g and g["hands_turned"] != (mode == "teams-and-seats" and g["rotation"] >= 2):
+            raise ValueError("Incorrect hand rotation")
+        if manifest.get("policy_seed") is not None:
+            seeds = g.get("policy_seeds") or [p.get("policy_seed") for p in g.get("policies", [])]
+            if seeds != [manifest["policy_seed"]] * 4:
+                raise ValueError("Worker/manifest policy seed mismatch")
         if g["lineup"] != [(s + 4 - g["rotation"]) % 4 for s in range(4)]:
             raise ValueError("Incorrect policy-slot rotation")
         m = g["metrics"]
@@ -82,6 +104,7 @@ def summarize(games, manifest):
     n = len(games)
     teams = []
     for team in (0, 1):
+        team_decisions = [d for g in games for d in g["decisions"] if g["lineup"][d["seat"]] % 2 == team]
         score = lambda g: team_value(g, g["metrics"]["scores"], team)
         outcome = lambda g: (score(g) > team_value(g, g["metrics"]["scores"], 1 - team)) - (score(g) < team_value(g, g["metrics"]["scores"], 1 - team))
         declared = [g for g in games if (c := g["metrics"]["contract"]) and team_index(g, c["team"]) == team]
@@ -108,6 +131,7 @@ def summarize(games, manifest):
             "wins": sum(outcome(g) > 0 for g in games), "losses": sum(outcome(g) < 0 for g in games),
             "draws": sum(outcome(g) == 0 for g in games),
             "win_rate": sum(outcome(g) > 0 for g in games) / n,
+            "decision_time": latency([d["ms"] for d in team_decisions]),
             "card_points_per_game": cards / n, "pair_points_per_game": pairs / n,
             "card_ceiling_share": cards / sum(g["metrics"]["card_point_ceiling"] for g in games),
             "pair_ceiling_share": pairs / sum(g["metrics"]["pair_point_ceiling"] for g in games),
@@ -152,12 +176,33 @@ def summarize(games, manifest):
                       "phases": {p: latency(v) for p, v in phases.items()},
                       "rules": {p: latency(v) for p, v in rules.items()},
                       "complete_forecasts": complete, "incomplete_forecasts": incomplete,
+                      "assessments": {
+                          "instrumented_decisions": sum(d.get("assessment_recorded") is True for d in decisions),
+                          "completed_assessments": sum(d.get("assessment_present", d.get("assessment") is not None) for d in decisions),
+                          "selected_action_matches": sum(d.get("assessment_matches_chosen_action") is True for d in decisions),
+                          "selected_action_differs": sum(d.get("assessment_matches_chosen_action") is False for d in decisions),
+                          "capture_seconds": sum(d.get("capture_ms", 0) for d in decisions) / 1000,
+                          "serialization_seconds": sum(d.get("assessment_serialization_ms", 0) for d in decisions) / 1000},
                       "forecast_reuse": {"recorded_forecasts": recorded,
                                          "evaluated_decisions": evaluated, "reused_decisions": reused,
                                          "hit_rate": ratio(reused, evaluated + reused)}})
     delta = clustered_mean(games, lambda g: team_value(g, g["metrics"]["scores"], 0) - team_value(g, g["metrics"]["scores"], 1))
+    complete = n == manifest["games"] and manifest.get("status") == "complete"
+    # Whole-sample selection, independent of changed decisions. These are review
+    # priorities and favorable/close controls, never assertions of bad/good play.
+    groups = defaultdict(list)
+    for g in games:
+        groups[g["deal_index"]].append(g)
+    blocks = [{"deal_index": d, "indices": sorted(g["index"] for g in rows),
+               "score_difference_per_game": mean([team_value(g, g["metrics"]["scores"], 0) -
+                                                  team_value(g, g["metrics"]["scores"], 1) for g in rows])}
+              for d, rows in groups.items() if len(rows) == size] if complete else []
+    review = {"selection": "complete blocks; engine margin only, not decision quality",
+              "lowest_margin": sorted(blocks, key=lambda b: (b["score_difference_per_game"], b["deal_index"]))[:6],
+              "highest_margin": sorted(blocks, key=lambda b: (-b["score_difference_per_game"], b["deal_index"]))[:6],
+              "close_controls": sorted(blocks, key=lambda b: (abs(b["score_difference_per_game"]), b["deal_index"]))[:6]}
     return {"schema": "marjapussi.benchmark-report/1", "games": n,
-            "requested_games": manifest["games"], "complete": n == manifest["games"] and manifest.get("status") == "complete",
+            "requested_games": manifest["games"], "complete": complete, "review_deals": review,
             "distinct_deals": len({g["deal_index"] for g in games}),
             "all_pass_games": sum(g["metrics"]["contract"] is None for g in games),
             "schwarz_games": sum(g["metrics"]["schwarz"] for g in games),
@@ -197,6 +242,9 @@ def markdown(report):
              ("Games raised after exchange", "raised_games", str), ("Raised contracts made", "raised_contracts_made", str),
              ("Success after raising", "raise_success_rate", percent), ("Average raise when raised", "mean_raise", number)]
     lines += [f"| {label} | {fmt(a[key])} | {fmt(b[key])} |" for label, key, fmt in specs]
+    for label, key, fmt in [("Decision count (both teammates)", "count", str),
+                            ("Average decision ms", "mean_ms", number), ("Decision p95 ms", "p95_ms", number)]:
+        lines.append(f"| {label} | {fmt(a['decision_time'][key])} | {fmt(b['decision_time'][key])} |")
     lines += ["", "## Decision time", "", "| Slot / policy | Decisions | Average ms | Median ms | p95 ms | Maximum ms | Incomplete forecasts |",
               "|---|---:|---:|---:|---:|---:|---:|"]
     for slot in report["slots"]:
@@ -222,7 +270,9 @@ def markdown(report):
               "- Engine score follows the contract and Schwarz rules; it differs from raw card/pair points.",
               "- The 140/280/420 denominators are scoring ceilings, not points provably attainable from these hands.",
               "- Contract margins describe the played outcomes; surplus is not proof a higher bid would have been safe.",
-              "- Four rotations of the same deal form one uncertainty cluster. A final partial block has less seat balance.",
+              f"- {report['manifest'].get('games_per_deal', 4)} games of the same deal form one uncertainty cluster. A final partial block has less seat balance.",
+              "- Current assessment traces are retained from actual act calls; historical policies lack that instrumentation. No second strategy evaluator fills the gap.",
+              "- With recording enabled, decision ms measures inner policy act; capture/serialization costs are separate and included in total job time.",
               "- Forecast completion reports the policy’s recorded flag; a completed forecast is not a proof of correct play.",
               "- Results compare these lineups and resource settings; they do not establish absolute playing strength.", ""]
     if not report["complete"]:

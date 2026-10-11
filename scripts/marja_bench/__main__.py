@@ -128,6 +128,26 @@ def report_existing(directory, lock):
         generate_reports(directory, manifest, final_status)
 
 
+def rotation_metadata(games, rotation):
+    size = 2 if rotation == "teams" else 4
+    return {"rotation_mode": rotation, "games_per_deal": size,
+            "distinct_deals": (games + size - 1) // size,
+            "full_rotation_blocks": games // size, "partial_block_games": games % size,
+            "rotation": ("slots_clockwise_0_1; original_hands_unchanged" if size == 2 else
+                         "slots_clockwise_0_1_2_3; hands_turned_two_seats_for_2_3")}
+
+
+def worker_command(binary, options, worker):
+    command = [str(binary), "--games", str(options.games), "--seed", str(options.seed),
+               "--worker-index", str(worker), "--workers", str(options.workers),
+               "--rotation", options.rotation]
+    if options.policy_seed is not None:
+        command += ["--policy-seed", str(options.policy_seed)]
+    for seat, policy in enumerate(options.policies):
+        command += [f"--seat{seat}", policy]
+    return command
+
+
 def run_workers(binary, options, resources, directory, manifest):
     events = queue.Queue()
     processes, threads, rows = [], [], []
@@ -151,10 +171,7 @@ def run_workers(binary, options, resources, directory, manifest):
     failure = None
     try:
         for worker in range(options.workers):
-            command = [str(binary), "--games", str(options.games), "--seed", str(options.seed),
-                       "--worker-index", str(worker), "--workers", str(options.workers)]
-            for seat, policy in enumerate(options.policies):
-                command += [f"--seat{seat}", policy]
+            command = worker_command(binary, options, worker)
             with (directory / f"worker-{worker}.stderr.log").open("xb") as stderr:
                 process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=stderr,
                                            text=True, encoding="utf-8", cwd=ROOT,
@@ -230,6 +247,9 @@ def main():
                                 epilog="Example: marja-bench new old new old 4000 --workers 8 --cpus 16")
     p.add_argument("lineup", nargs="*", metavar="POLICY0 POLICY1 POLICY2 POLICY3 GAMES")
     p.add_argument("--seed", type=int, default=20261011)
+    p.add_argument("--rotation", choices=("teams", "teams-and-seats"), default="teams-and-seats",
+                   help="teams: two games per original deal; teams-and-seats: four (compatible default)")
+    p.add_argument("--policy-seed", type=int, help="Fixed policy seed for every agent; 0 matches the live defaults. Omit for derived deal/slot streams.")
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--cpus", type=int, default=2, help="Logical CPU limit for the whole job (default: shared-PC limit 2)")
     p.add_argument("--memory-gib", type=int, default=4)
@@ -263,8 +283,11 @@ def main():
         p.error("games must be 1..10000000 and seed 0..2^63-1")
     if not 1 <= a.workers <= a.cpus or a.memory_gib < 1:
         p.error("workers must be between 1 and --cpus; memory must be positive")
-    if a.workers > (a.games + 3) // 4:
-        p.error("use no more workers than distinct deals (ceil(games/4))")
+    if a.policy_seed is not None and not 0 <= a.policy_seed < 2**64:
+        p.error("policy-seed must be 0..2^64-1")
+    rotations = rotation_metadata(a.games, a.rotation)
+    if a.workers > rotations["distinct_deals"]:
+        p.error("use no more workers than distinct deals")
     unknown = set(a.policies) - set(POLICIES) - {"hp1"}
     if unknown:
         p.error(f"unknown policies: {', '.join(sorted(unknown))}; use --list-policies")
@@ -279,8 +302,10 @@ def main():
         binary, build = prepare(ROOT, a.cache, a.policies, a.out / "build.log")
         manifest = {"schema": "marjapussi.benchmark/1", "status": "prepared", "policies": a.policies,
                     "games": a.games, "seed": a.seed, "workers": a.workers,
-                    "distinct_deals": (a.games + 3) // 4, "full_rotation_blocks": a.games // 4,
-                    "partial_block_games": a.games % 4, "rotation": "slots_clockwise_0_1_2_3; hands_turned_two_seats_for_2_3",
+                    **rotations, "policy_seed": a.policy_seed,
+                    "policy_seed_mode": "fixed" if a.policy_seed is not None else "derived_per_deal_slot",
+                    "diagnostics": "current act-call assessment; historical assessment unavailable; no second evaluator",
+                    "decision_timing": "inner policy act; capture/serialization overhead separate; total job time includes both",
                     "started_utc": datetime.now(timezone.utc).isoformat(), "resources": resources.describe(),
                     "build": build, "command": sys.argv, "sequential_stopping": False,
                     "primary_metric": "engine score difference per game, team slots0/2 minus slots1/3",

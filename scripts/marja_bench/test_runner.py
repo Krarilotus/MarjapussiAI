@@ -41,7 +41,8 @@ class RunnerTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.directory = Path(temporary.name)
         self.manifest = {"status": "complete", "games": 1, "writers_stopped": True}
-        self.options = SimpleNamespace(workers=1, games=1, seed=1, policies=["new", "old", "new", "old"])
+        self.options = SimpleNamespace(workers=1, games=1, seed=1, rotation="teams-and-seats", policy_seed=None,
+                                       policies=["new", "old", "new", "old"])
         self.resources = Mock()
         self.resources.describe.return_value = {}
 
@@ -90,6 +91,22 @@ class RunnerTests(unittest.TestCase):
         with patch.object(runner, "load_games", side_effect=checked_load):
             self.run_worker(process, make_thread)
         self.assertEqual(self.stored_manifest()["status"], "complete")
+
+    def test_team_job_is_128_blocks_and_forwards_zero_without_dropping_it(self):
+        options = SimpleNamespace(workers=2, games=256, seed=20261013, rotation="teams", policy_seed=0,
+                                  policies=["new", "previous", "new", "previous"])
+        metadata = runner.rotation_metadata(options.games, options.rotation)
+        self.assertEqual((metadata["distinct_deals"], metadata["full_rotation_blocks"],
+                          metadata["games_per_deal"], metadata["partial_block_games"]), (128, 128, 2, 0))
+        command = runner.worker_command(Path("worker.exe"), options, 1)
+        self.assertEqual(command[command.index("--rotation") + 1], "teams")
+        self.assertEqual(command[command.index("--policy-seed") + 1], "0")
+        self.assertEqual(command[command.index("--worker-index") + 1], "1")
+        for seat, policy in enumerate(options.policies):
+            self.assertEqual(command[command.index(f"--seat{seat}") + 1], policy)
+        options.policy_seed = None
+        self.assertNotIn("--policy-seed", runner.worker_command(Path("worker.exe"), options, 0))
+        self.assertEqual(runner.rotation_metadata(256, "teams-and-seats")["distinct_deals"], 64)
 
     def test_stuck_writer_skips_raw_reread_and_report(self):
         process, thread, make_thread = self.worker(writer_alive=True)

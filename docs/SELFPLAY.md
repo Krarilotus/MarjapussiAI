@@ -22,40 +22,76 @@ marja-bench new previous new previous 4000 --seed 20261012
 | Name | Policy |
 |---|---|
 | `new`, `hp1` | Current checkout's default HP1. |
-| `previous` | `b3abdaf`: the full-game continuation policy before conditional concepts. |
+| `previous` | `b3abdaf`: verified live HP1, including its frozen solver. |
 | `old` | `1632af8`: the earlier deployed policy. |
 | `hp1-fast` | Current HP1 with return, continuation and endgame search disabled. |
 | `hp1-facts` | Current HP1 with convention signals disabled. |
 | `random` | Uniform random legal actions. |
 
-Historical heuristic and belief sources are extracted from their exact Git
-revisions into the build cache. Their shared core must pass the compatibility
-guard. Run manifests record source, compiler, dependency-lock and binary hashes,
-parameters and per-slot random seeds. Keep the checkout unchanged during a build.
+Historical heuristic, belief and solver sources are extracted from their exact Git
+revisions into a separate versioned build cache. Their package names are isolated;
+the old heuristic imports its own frozen solver, including its search deadlines.
+Only engine, observation, knowledge and agent are shared and must pass the existing
+compatibility guard. No new shared-core anchor replaces the historical solver.
+Run manifests retain per-file historical source proofs, compiler, dependency-lock,
+generated-harness and binary hashes, parameters and effective policy seeds.
+Keep the checkout unchanged during a build and retain the cache for reproduction.
 
 ## Games and reports
 
-Every deal has four arrangements. Partnerships switch seat parity, and the last
+By default every deal has four arrangements (`--rotation teams-and-seats`). Partnerships switch seat parity, and the last
 two arrangements turn the hands by two seats. A team of identical bots plays
 both hand pairs and both opening-hand roles. Different teammate policies receive
 two starting hands each. A count divisible by four gives complete blocks.
+
+`--rotation teams` plays each original deal twice, switching policy partnerships
+between seats 0/2 and 1/3 without turning the hands. Thus 256 games means 128
+deals in this mode, compared with 64 deals in the compatible four-game mode.
+Workers receive whole deal blocks; output identity is `index = games_per_deal *
+deal_index + rotation`. The second lineup is `[3,0,1,2]`; `policies[]` is always in
+slot order, so use `lineup[physical_seat]` for attribution and effective seed lookup.
 
 The output folder contains:
 
 - `report.html`: readable tables with expandable time breakdowns.
 - `summary.json`: aggregate scores, contracts, raises, communication and timings.
 - `games.csv`: per-game team scores, card/pair points and outcomes.
-- `worker-*.ndjson`: full deals, actions, explanations and decision timings.
+- `worker-*.ndjson`: full deals, actions, explanations, decision timings and actual
+  current-policy assessment traces. Historical policies have no typed assessment trace.
 - `manifest.json`, `build.log`: configuration, provenance and completion status.
 
 The main comparison is **engine score difference per game**. The approximate
-95% interval clusters all four arrangements by their original deal. Draws stay
+95% interval clusters all arrangements by their original deal. Draws stay
 separate from wins. Contract success and raise success are conditional on taking
 those actions. Timing measures the agent call, including forced choices;
 nonforced, phase and rule breakdowns explain where time goes.
 Forecast reuse counters include interrupted comparisons when the policy records
 them. They show how many decisions were evaluated and how many came from an
 identical visible state; older policies may omit these counters.
+
+Current recording wraps `HeuristicAgent::act` in tools, captures its existing
+`last_assessment()` immediately, and checks the acting seat, honest context,
+event count and returned action against the pre-apply engine hook. `step` indexes
+non-START record actions. No diagnostic evaluator or extra policy call supplies
+the trace. A recorded null assessment means no completed assessment was retained
+for that act; `assessment_recorded=false` means the policy was not instrumented.
+`assessment_matches_chosen_action` exposes any difference between the assessment
+winner and the returned action instead of silently claiming they match.
+
+Decision `ms` measures inner policy act. `capture_ms` includes copying its result;
+`assessment_serialization_ms` records serialization outside the policy call.
+Total job time includes these costs. Only one game's serialized diagnostics is
+retained by a worker; Python compacts report inputs and keeps full NDJSON on disk.
+Trace refs are decision-local, with actual operators, dependencies, values,
+candidates, provenance and observer context. The assessment `extensions` object
+is the integration point for actual future sequence receipts/traces; it is empty
+at this checkpoint. Do not fill it with reconstructed or imagined reasoning.
+
+For a complete run, `summary.json.review_deals` deterministically ranks full
+blocks by lowest/highest engine margin and closest-to-zero controls. It considers
+all completed decisions, not only changed choices. Rankings prioritize inspection;
+they do not establish that a loss was a bad choice or a favorable result an improvement.
+Partial reports leave these lists empty.
 
 Captured card points use a ceiling of 140, including the last trick. Pair points
 use 280; their combined ceiling is 420. These describe scoring capacity. Contract
@@ -78,6 +114,44 @@ marja-bench --report-only /path/to/result-folder
 The default is one worker, two logical CPUs, below-normal priority and a 4 GiB
 commit limit for the complete process tree. The job owns and stops its child
 processes. Result files and reusable build caches remain on disk.
+
+## Prepared live-baseline smoke (not run)
+
+Only run after the required strategy, targeted correctness and performance
+validation is complete and the candidate source/config is frozen. The requested
+Windows job uses at most two workers within one shared two-CPU/4-GiB resource job:
+
+```sh
+python -X utf8 scripts/marja_bench new previous new previous 256 \
+  --rotation teams --policy-seed 0 --seed 20261013 \
+  --workers 2 --cpus 2 --memory-gib 4 \
+  --lock /path/to/shared/validation.lock \
+  --out ../benchmark-data/live-baseline-smoke-20261013
+```
+
+This is 256 complete games, 128 original deals and 128 uncertainty clusters;
+each policy partnership plays 256 games, on each physical team 128 times.
+There are 1,024 fresh seat agents (512 per policy). All agents receive effective
+seed zero, preserving live defaults. Without `--policy-seed`, the original
+deal/slot-derived seed behavior remains available; raw records retain both
+`stream_seed` and actual `policy_seed`.
+
+Read-only deployment checks on 2026-10-11 identified live AI
+`b3abdaf1f5e47111904db442ce36db7dc4ae9e0b`, testbed
+`cd553cc0beb03887c319aa3c9348b1190151b32f` and native module SHA256
+`e2f9c1ab90afe3082a599d098bd792a7f342f7f75bb59a627e4c986a4a17c960`.
+The running module version and image agree, and the live site adapter matches
+its Git source byte-for-byte: newly created HP1 seats use empty/default params.
+Existing individual-game overrides were not inspected. `old` is the earlier
+`1632af8` rollback, not this live baseline. The Windows worker reproduces frozen
+policy source/config; it is not the identical Linux native deployment artifact.
+Live defaults use seed 0, plan/return worlds 8/8, endgame 4 tricks/64 worlds,
+argmax, full signals, uniform exchange and no fitted calibration.
+
+Both policy teams see the same original hands in each pair. Fixed seeds determine
+deals/streams, but wall-limited historical searches can still vary with contention.
+Freeze worker count, affinity, compiler and resource configuration in the receipt.
+This preparation has no build/test/smoke evidence; root owns those checks.
 
 For an expressly allocated eight-core run:
 

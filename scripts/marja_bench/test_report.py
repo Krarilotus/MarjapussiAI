@@ -5,15 +5,16 @@ import unittest
 from report import clustered_mean, compact_game, summarize
 
 
-def game(index, delta=20, raised=False):
-    rotation = index % 4
+def game(index, delta=20, raised=False, size=4):
+    rotation = index % size
     lineup = [(s + 4 - rotation) % 4 for s in range(4)]
     # Team A always wins, although its physical seat parity alternates.
     a_team = next(t for t in (0, 1) if lineup[t] % 2 == 0)
     ordered = lambda a, b: [a, b] if a_team == 0 else [b, a]
     seats = [{"auction_bids": 1, "auction_passes": 1, "raise_opportunities": 0,
               "raises": 0, "raise_amount": 0, "questions": 0, "melds": 0, "negative_answers": 0} for _ in range(4)]
-    return {"index": index, "deal_index": index // 4, "deal_seed": 17 + index // 4,
+    return {"index": index, "deal_index": index // size, "deal_seed": 17 + index // size,
+            **({"rotation_mode": "teams", "games_per_deal": 2, "hands_turned": False} if size == 2 else {}),
             "rotation": rotation, "lineup": lineup, "decisions": [
                 {"seat": s, "ms": lineup[s] + 1.0, "phase": "play", "rule": "test",
                  "facts": [{"key": "forecast_complete", "value": int(lineup[s] != 0)}]} for s in range(4)],
@@ -31,6 +32,47 @@ def game(index, delta=20, raised=False):
 
 
 class ReportTest(unittest.TestCase):
+    def test_two_game_blocks_preserve_denominators_and_cluster_uncertainty(self):
+        rows = [game(i, delta=(i // 2 % 2) * 40 - 20, size=2) for i in range(256)]
+        for row in rows:
+            row["policy_seeds"] = [0] * 4
+        manifest = {"policies": ["new", "previous", "new", "previous"], "games": 256,
+                    "rotation_mode": "teams", "games_per_deal": 2, "policy_seed": 0,
+                    "status": "complete", "workers": 2}
+        report = summarize(rows, manifest)
+        self.assertTrue(report["complete"])
+        self.assertEqual(report["distinct_deals"], 128)
+        self.assertEqual(report["score_difference_per_game"]["deal_clusters"], 128)
+        self.assertEqual(report["score_difference_per_game"]["mean"], 0)
+        self.assertEqual(report["teams"][0]["wins"], 128)
+        self.assertEqual(report["teams"][0]["losses"], 128)
+        self.assertEqual(report["teams"][0]["contracts"], 256)
+        independent = [{"deal_index": i, "x": (i % 2) * 40 - 20} for i in range(128)]
+        self.assertEqual(report["score_difference_per_game"], clustered_mean(independent, lambda g: g["x"]))
+        self.assertEqual(report["review_deals"]["lowest_margin"][0]["indices"], [0, 1])
+        self.assertEqual(report["review_deals"]["highest_margin"][0]["indices"], [2, 3])
+        partial = summarize(rows[:2], dict(manifest, status="interrupted_or_failed"))
+        self.assertEqual(partial["review_deals"]["lowest_margin"], [])
+        for field, value in (("hands_turned", True), ("rotation_mode", "teams-and-seats"),
+                             ("policy_seeds", [1] * 4)):
+            bad = copy.deepcopy(rows)
+            bad[0][field] = value
+            with self.assertRaises(ValueError):
+                summarize(bad, manifest)
+
+    def test_assessment_presence_survives_compaction_without_retaining_large_traces(self):
+        row = game(0)
+        row["decisions"][0].update(assessment_recorded=True, assessment={"trace": ["actual"]},
+                                   assessment_matches_chosen_action=True, capture_ms=2,
+                                   assessment_serialization_ms=3)
+        compact = compact_game(row)
+        self.assertNotIn("assessment", compact["decisions"][0])
+        report = summarize([compact], {"policies": ["a", "b", "c", "d"], "games": 1})
+        a = report["slots"][0]["assessments"]
+        self.assertEqual((a["instrumented_decisions"], a["completed_assessments"], a["selected_action_matches"]), (1, 1, 1))
+        self.assertEqual(a["capture_seconds"], .002)
+        self.assertEqual(a["serialization_seconds"], .003)
+
     def test_rotations_preserve_team_and_individual_attribution(self):
         rows = [game(i, raised=True) for i in range(8)]
         report = summarize(rows, {"policies": ["a", "b", "c", "d"], "games": 8, "workers": 2})
