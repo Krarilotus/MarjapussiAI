@@ -215,7 +215,7 @@ fn sibling_tail_keeps_every_value_tie_and_edge_evidence() {
                 .collect();
             assert_eq!(without_choice, expected.consumed);
         }
-        assert_eq!(shared.work.accounting(), "sibling-tail-dag-v1");
+        assert_eq!(shared.work.accounting(), "sibling-frontier-dag-v2");
         assert_eq!(shared.work.tail_aliases, order.len() - 1);
         assert_eq!(
             shared.work.represented_transitions * order.len(),

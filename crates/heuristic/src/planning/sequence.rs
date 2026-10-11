@@ -11,6 +11,7 @@ use beliefs::Mind;
 use engine::{GameAction, GameFinishedInfo, GameOutcome, PlayPhase, PublicState};
 use std::time::Instant;
 
+mod frontier;
 mod normalization;
 mod reuse;
 pub use reuse::CompletedCache;
@@ -51,7 +52,7 @@ pub struct Context {
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     /// Logical work under Work::accounting(), including completed memo hits.
-    /// Identical sibling tail dependencies are charged once, with caches on/off.
+    /// Equal eligible sibling dependencies are charged once, with caches on/off.
     pub transitions: usize,
     pub comparisons: usize,
     /// Canonical completed-response solver work; None imposes no node cap.
@@ -137,13 +138,20 @@ pub struct Work {
     /// Expansion work avoided by those edges, not additional serving allowance.
     pub tail_alias_transitions: usize,
     pub tail_alias_solver_nodes: u64,
+    /// Actual pure-inspection Choice/multi-Action sibling projections. A cached
+    /// parent may skip constructing them; these are diagnostics, not allowances.
+    pub frontier_aliases: usize,
+    /// Represented expansion avoided by those projections, summed saturating.
+    pub frontier_alias_transitions: usize,
+    pub frontier_alias_comparisons: usize,
+    pub frontier_alias_solver_nodes: u64,
     pub retained_bytes: usize,
     pub completed_candidates: usize,
 }
 impl Work {
     /// Deterministic bounded-work policy, independent of optional memo capacity.
     pub const fn accounting(&self) -> &'static str {
-        "sibling-tail-dag-v1"
+        "sibling-frontier-dag-v2"
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1492,14 +1500,15 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
         let mut outcomes = Vec::new();
         let mut records = Vec::new();
         // Mandatory local DAG sharing, not an optional memo: no engine action
-        // may occur between this group's input and a shared tail frontier.
+        // may occur between this group's input and a shared eligible frontier.
         let mut tail_dependency = None;
+        let mut frontier_dependencies = Vec::new();
         let support = group
             .iter()
             .map(|waiting| (waiting.branch.origin, waiting.branch.weight))
             .collect();
-        // Lazy depth-first demand. Equal no-action tail frontiers share one
-        // dependency; other suffixes use optional finish memo. Every original
+        // Lazy depth-first demand. Equal no-action Tail or eligible typed
+        // Choice/multi-Action frontiers share one dependency. Every original
         // alternative still has complete values and retains its ordered edge.
         for index in 0..alternatives.len() {
             let children = {
@@ -1544,6 +1553,14 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
                     });
                     terminals
                 }
+            } else if matches!(group[0].alternatives[index], Alternative::Stage(_)) {
+                self.finish_frontier_child(
+                    children,
+                    &mut frontier_dependencies,
+                    &outcomes,
+                    &records,
+                    &mut child_records,
+                )?
             } else {
                 self.finish(children, &mut child_records)?
             };

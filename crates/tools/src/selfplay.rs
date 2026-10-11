@@ -37,6 +37,18 @@ pub const SEQUENCE_SOLVER_EFFORT_MEANING: &str = "Canonical response-solver sear
 
 pub const SEQUENCE_WORK_ACCOUNTING_MEANING: &str = "sibling-tail-dag-v1 shares only one unchanged joint cohort's sibling alternatives resolving through guards or empty legal domains to the same Tail before any engine action. Original alternative order, values and per-edge consumed/interrupted evidence remain separate. Unique tail dependency effort is charged once with optional caches off/cold/warm; memo hits still charge represented dependency effort. This is versioned bounded-work accounting, not general DAG/CPU accounting, probability or concept quality. An absent model in an older capture remains unknown.";
 
+/// Meaning of the recorded accounting model, never an inferred version upgrade.
+/// Alias diagnostics count projections actually attached, not every possible alias.
+/// Parent memo hits may skip constructing them; these are not total CPU savings.
+pub fn sequence_work_accounting_meaning(model: Option<&str>) -> &'static str {
+    match model {
+        Some("sibling-tail-dag-v1") => SEQUENCE_WORK_ACCOUNTING_MEANING,
+        Some("sibling-frontier-dag-v2") => "sibling-frontier-dag-v2 includes Tail V1 and shares equal Choice or multi-offer Actions frontiers only within one unchanged joint cohort's sibling comparison, after pure guard inspection and before any engine action. Singleton Actions stay on the ordinary path. Exact ordered domains, original alternatives, weights, first-action ownership and per-edge authorization/consumed evidence are preserved; failed projection checks use ordinary evaluation. Unique dependency effort is charged once with optional caches off/cold/warm; memo hits still charge represented dependency effort. Saturating frontier diagnostics count aliases actually projected and their avoided expansion; parent memo hits may skip constructing them. They are not total CPU savings. This is versioned bounded-work accounting, not general DAG/CPU accounting, probability or concept quality.",
+        None => "Accounting model was not recorded; no current model or logical charging semantics are inferred.",
+        Some(_) => "Unrecognized recorded accounting model; its logical charging semantics are not interpreted by this exporter.",
+    }
+}
+
 /// Structured recorded stopping reason; this does not reconstruct the full Limits.
 pub fn deferred_limit_json(limit: heuristic::sequence_evaluation::DeferredLimit) -> Value {
     use heuristic::sequence_evaluation::DeferredLimit;
@@ -582,6 +594,10 @@ pub fn sequence_json(trace: &SequenceTrace, value_assessment: Option<&PlanningAs
         "work": {"accounting": work.accounting(),
             "tail_aliases": work.tail_aliases, "tail_alias_transitions": work.tail_alias_transitions,
             "tail_alias_solver_nodes": work.tail_alias_solver_nodes,
+            "frontier_aliases": work.frontier_aliases,
+            "frontier_alias_transitions": work.frontier_alias_transitions,
+            "frontier_alias_comparisons": work.frontier_alias_comparisons,
+            "frontier_alias_solver_nodes": work.frontier_alias_solver_nodes,
             "transitions": work.transitions, "represented_transitions": work.represented_transitions,
             "comparisons": work.comparisons, "represented_comparisons": work.represented_comparisons, "response_calls": work.response_calls,
             "actual_solver_nodes": work.actual_solver_nodes, "represented_solver_nodes": work.represented_solver_nodes,
@@ -1700,7 +1716,20 @@ mod tests {
         let row = sequence_json(&trace, None);
         assert_eq!(row["work"]["actual_solver_nodes"].as_u64(), Some(3));
         assert_eq!(row["work"]["represented_solver_nodes"].as_u64(), Some(u64::MAX));
-        assert_eq!(row["work"]["accounting"], "sibling-tail-dag-v1");
+        assert_eq!(row["work"]["accounting"], trace.work.accounting());
+        assert_eq!(trace.work.accounting(), "sibling-frontier-dag-v2");
+        assert_eq!(row["work"]["frontier_aliases"], 0);
+        trace.work.frontier_aliases = 2;
+        trace.work.frontier_alias_transitions = 19;
+        trace.work.frontier_alias_comparisons = 7;
+        trace.work.frontier_alias_solver_nodes = u64::MAX;
+        let frontier = sequence_json(&trace, None);
+        assert_eq!(frontier["work"]["frontier_aliases"], 2);
+        assert_eq!(frontier["work"]["frontier_alias_transitions"], 19);
+        assert_eq!(frontier["work"]["frontier_alias_comparisons"], 7);
+        assert_eq!(frontier["work"]["frontier_alias_solver_nodes"].as_u64(), Some(u64::MAX));
+        assert_eq!(frontier["work"]["actual_solver_nodes"], row["work"]["actual_solver_nodes"]);
+        assert_eq!(frontier["work"]["represented_solver_nodes"], row["work"]["represented_solver_nodes"]);
         trace.work.tail_aliases = 3;
         trace.work.tail_alias_transitions = 17;
         trace.work.tail_alias_solver_nodes = u64::MAX;

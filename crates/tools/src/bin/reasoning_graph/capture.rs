@@ -904,7 +904,7 @@ pub(super) fn export(input: &Value, index: Option<u64>, step: Option<u64>) -> Re
         "action": action, "event_count": decision.map(|d| &d["event_count"]).unwrap_or(&sequence_data["identity"]["event_count"])});
     let operations = json!({"mode": sequence_data["mode"], "failure": sequence_data["failure"], "work": sequence_data["work"],
         "work_accounting_model": sequence_data["work"]["accounting"],
-        "work_accounting_meaning": tools::selfplay::SEQUENCE_WORK_ACCOUNTING_MEANING,
+        "work_accounting_meaning": tools::selfplay::sequence_work_accounting_meaning(sequence_data["work"]["accounting"].as_str()),
         "solver_effort_meaning": tools::selfplay::SEQUENCE_SOLVER_EFFORT_MEANING,
         "solver_node_limit": {"status": "not recorded by SequenceTrace",
             "meaning": "Limits::solver_nodes is optional; neither a configured ceiling nor None/uncapped can be inferred from these counters. Recorded deferral details describe only the stopping lane."},
@@ -1414,6 +1414,34 @@ mod tests {
         assert_eq!(details["work"]["tail_alias_transitions"], 17);
         assert!(original["views"][0]["operational_details"]["work_accounting_model"].is_null(),
             "older captures must not inherit the current model label");
+        assert!(original["views"][0]["operational_details"]["work_accounting_meaning"]
+            .as_str().unwrap().contains("not recorded"));
+        assert!(details["work_accounting_meaning"].as_str().unwrap().contains("same Tail"));
+        let mut v2_input = input.clone();
+        v2_input["assessment"]["extensions"]["sequence"]["work"]["accounting"] = json!("sibling-frontier-dag-v2");
+        let v2_work = &mut v2_input["assessment"]["extensions"]["sequence"]["work"];
+        v2_work["frontier_aliases"] = json!(2);
+        v2_work["frontier_alias_transitions"] = json!(19);
+        v2_work["frontier_alias_comparisons"] = json!(7);
+        v2_work["frontier_alias_solver_nodes"] = json!(u64::MAX);
+        let v2 = export(&v2_input, None, None).unwrap();
+        assert_eq!(semantic_nodes(&v2), semantic_nodes(&output));
+        let v2_details = &v2["views"][0]["operational_details"];
+        assert_eq!(v2_details["work_accounting_model"], "sibling-frontier-dag-v2");
+        assert_eq!(v2_details["work"]["frontier_aliases"], 2);
+        assert_eq!(v2_details["work"]["frontier_alias_transitions"], 19);
+        assert_eq!(v2_details["work"]["frontier_alias_comparisons"], 7);
+        assert_eq!(v2_details["work"]["frontier_alias_solver_nodes"].as_u64(), Some(u64::MAX));
+        assert!(details["work"].get("frontier_aliases").is_none(),
+            "V1 capture must not acquire V2 counters");
+        assert!(v2_details["work_accounting_meaning"].as_str().unwrap().contains("Singleton Actions stay on the ordinary path"));
+        let mut unknown_input = input.clone();
+        unknown_input["assessment"]["extensions"]["sequence"]["work"]["accounting"] = json!("future-model");
+        let unknown = export(&unknown_input, None, None).unwrap();
+        assert_eq!(semantic_nodes(&unknown), semantic_nodes(&output));
+        assert_eq!(unknown["views"][0]["operational_details"]["work_accounting_model"], "future-model");
+        assert!(unknown["views"][0]["operational_details"]["work_accounting_meaning"]
+            .as_str().unwrap().contains("Unrecognized"));
         assert_eq!(details["work"]["represented_solver_nodes"].as_u64(), Some(u64::MAX));
         assert_eq!(details["solver_node_limit"]["status"], "not recorded by SequenceTrace");
         assert!(details["solver_effort_meaning"]

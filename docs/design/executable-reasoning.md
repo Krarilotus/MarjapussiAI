@@ -375,3 +375,25 @@ are operational evidence, not probability, concept quality, total CPU or general
 DAG uniqueness. Older captures without a label remain unknown. Apply the adapter
 only alongside C's new charging implementation; it does not establish old-policy
 cache equivalence or measured speed improvement.
+
+
+The `sibling-frontier-dag-v2` model includes Tail V1 and also shares equal
+Choice or multi-offer Actions frontiers among one immutable comparison's siblings,
+after pure guard inspection and before any engine action. Singleton Actions are
+excluded. Typed ordered domains, alternatives and their unnormalised weights remain
+unchanged. The evaluator rebuilds each alias's validated Local entry certificate
+and exact consumed prefix, preserves independent descendants and original first
+owner, and falls back to ordinary evaluation when projection checks fail. The
+tools layer records counters; it does not reconstruct that proof. `Work::accounting()`
+remains the runtime label producer. The inspector describes the recorded version:
+V1 remains V1, absent stays unknown, and an unrecognized version is uninterpreted.
+These are operational charging semantics, not additional concept nodes or a
+measured performance/strategy improvement. Companion tests check that
+changing operational metadata leaves semantic node identities and edges unchanged.
+
+V2 adds `frontier_aliases: usize`, `frontier_alias_transitions: usize`,
+`frontier_alias_comparisons: usize` and `frontier_alias_solver_nodes: u64` alongside
+the separate Tail V1 diagnostics. These saturating counters record aliases actually
+projected and their avoided expansion; parent memo hits may skip constructing them.
+They do not count all possible shared frontiers or total CPU savings. Actual and
+represented solver effort remain separate lanes, with the original integer widths.
