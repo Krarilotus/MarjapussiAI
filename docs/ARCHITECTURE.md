@@ -100,3 +100,24 @@ in its application-owned Rust service, independently of browser connections.
 
 See [solver limits](design/solver.md), [passing](PASSING.md),
 [evaluation provenance](EVALUATION.md) and [next steps](NEXT_STEPS.md).
+
+## Strategic value queries
+
+`heuristic::value_concepts` evaluates a finite dependency graph over completed
+conditional outcomes. Shared branch weights and engine scores feed expected team
+scores, their difference, declaring/make events and the best/runner-up comparison.
+The evaluator memoizes consumed nodes within an immutable comparison context.
+Changing inputs creates a new context; forecast outcomes still reuse the existing
+candidate/cohort cache. Expected values retain model provenance, including whether
+allocation support was enumerated, sampled or resampled.
+
+`HeuristicAgent::last_assessment()` returns the original comparison, candidate
+actions, observer context, response settings and consumed dependency trace. The
+flat explanation fields are projections of that same result. Forced actions and
+incomplete forecast fallbacks have no completed assessment. `reasoning_graph`
+exports an example from these executable definitions for the portable review.
+
+The continuation generator remains a declared legacy policy approximation. Its
+sequence choices, legal candidate coverage and timed endgame responses have not
+become authored strategic concepts merely because value integration has migrated.
+The next boundary is joint trick outcomes and conditional next-leader plans.

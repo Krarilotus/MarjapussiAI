@@ -6,9 +6,12 @@ use beliefs::{ConceptBudget, ConceptQuery};
 
 use crate::Ctx;
 
+pub mod value;
+
 pub(crate) struct Reads {
     remaining: usize,
     results: Vec<(ConceptQuery, Option<f32>)>,
+    pub assessment: Option<crate::planning::PlanningAssessment>,
 }
 
 impl Default for Reads {
@@ -16,6 +19,7 @@ impl Default for Reads {
         Self {
             remaining: 2048,
             results: vec![],
+            assessment: None,
         }
     }
 }
@@ -77,6 +81,7 @@ mod tests {
             concepts: RefCell::new(Reads {
                 remaining: 700,
                 results: vec![],
+                assessment: None,
             }),
             series: crate::SeriesScore::default(),
         };

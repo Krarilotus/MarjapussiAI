@@ -5,8 +5,12 @@ system has exact knowledge, correlated holding queries, actor-specific views,
 simulation and caching. It does not have an authored strategic graph that answers
 “what should I do next?” through those dependencies.
 
-This audit describes source revision `8ea7a6a` (strategic source from the
-`4acefbb` iteration). It is not a claim about a newly deployed build.
+The strategic audit describes source revision `8ea7a6a` (from `4acefbb`). The
+subsequent value-store slice moves score integration, contract-event estimates
+and candidate ranking into executable typed dependencies. The continuation leaf
+still runs the legacy response approximation, so the strategic gaps below remain.
+The implemented value graph is exported from the evaluator on a synthetic fixture;
+its numbers illustrate the calculation and are not live-game estimates.
 
 ## The mismatch in our work
 

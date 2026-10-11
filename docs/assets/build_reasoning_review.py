@@ -41,6 +41,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--worked-example", type=Path,
                         help="Optional private worked-example narrative; remains outside the repository")
+    parser.add_argument("--runtime-graph", type=Path,
+                        help="Graph exported by the executable value evaluator")
     args = parser.parse_args()
     docs = Path(__file__).resolve().parents[1]
     output = args.output.resolve()
@@ -61,6 +63,11 @@ def main():
         (output / target).write_text(text, encoding="utf-8", newline="\n")
         contents[target] = text
     model = json.loads(contents["reasoning-graph.json"])
+    if args.runtime_graph:
+        runtime = json.loads(args.runtime_graph.read_text(encoding="utf-8"))
+        model["views"].extend(runtime["views"])
+        (output / "reasoning-graph.json").write_text(
+            json.dumps(model, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     validate_graph(model)
     for view in model["views"]:
         geometry = layout_view(view)
@@ -88,7 +95,8 @@ def main():
         "@@VALIDATION@@": (
             "Review-only · source 8ea7a6a · 11 October 2026. "
             "The worked example distinguishes retained replay evidence from illustrative beliefs. "
-            "No new policy, benchmark or deployment is claimed."
+            "The implemented value view is exported from runtime evaluation on a synthetic fixture. "
+            "The trick-continuation graph remains a proposal; no deployment or playing-strength result is claimed."
         ),
     }
     for token, replacement in fields.items():

@@ -2,30 +2,6 @@ use super::*;
 use crate::Params;
 
 #[test]
-fn explanation_compares_the_best_rejected_action_even_when_candidate_one_wins() {
-    let mut comparison = Comparison {
-        means: [10.0, 40.0, 30.0]
-            .map(|score| Outcome {
-                score,
-                ..Outcome::default()
-            })
-            .to_vec(),
-        terminals: vec![],
-    };
-    assert_eq!(comparison.best(), 1);
-    assert_eq!(comparison.alternative(comparison.best()), Some(2));
-    comparison.means.truncate(1);
-    assert_eq!(comparison.alternative(0), None);
-    let outcome = Outcome {
-        declaring: 0.25,
-        made: 0.125,
-        ..Outcome::default()
-    };
-    assert_eq!(outcome.made_given_declaring(), Some(0.5));
-    assert_eq!(Outcome::default().made_given_declaring(), None);
-}
-
-#[test]
 fn reused_forecast_actors_match_fresh_actors_across_hypothesis_forks() {
     let params = Params {
         plan_worlds: 0,

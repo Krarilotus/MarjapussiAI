@@ -30,7 +30,9 @@ use engine::{ActionType, CardSet, GameAction};
 use knowledge::Knowledge;
 use observation::{Seat, SeatEvent};
 
+pub use concepts::value as value_concepts;
 pub use params::{Params, Selection};
+pub use planning::{PlanningAssessment, PlanningContext};
 pub use rules::{Phase, Rule, RuleId, RULES};
 
 pub(crate) fn fact(key: &'static str, value: impl Into<f64>) -> Fact {
@@ -166,6 +168,7 @@ pub struct HeuristicAgent {
     pub params: Params,
     mind: Option<Synced>,
     solver: RefCell<Option<solver::Solver>>,
+    assessment: Option<PlanningAssessment>,
 }
 
 impl Clone for HeuristicAgent {
@@ -191,6 +194,7 @@ impl HeuristicAgent {
             params,
             mind: None,
             solver: RefCell::new(None),
+            assessment: None,
         }
     }
 
@@ -199,10 +203,16 @@ impl HeuristicAgent {
     pub fn mind(&mut self, view: &SeatView) -> &Mind {
         sync(&mut self.mind, &self.params, view)
     }
+
+    /// The completed forecast assessment used by the last decision, if any.
+    /// Uses the original decision context, not hindsight or another evaluation.
+    pub fn last_assessment(&self) -> Option<&PlanningAssessment> {
+        self.assessment.as_ref()
+    }
 }
 
 fn sync<'a>(slot: &'a mut Option<Synced>, params: &Params, view: &SeatView) -> &'a Mind {
-        let _timing = beliefs::profile::scope("policy.sync");
+    let _timing = beliefs::profile::scope("policy.sync");
     let start = view.knowledge.dealt_certain(view.seat);
     let continues = slot.as_ref().is_some_and(|m| {
         m.mind.seat() == view.seat
@@ -249,6 +259,7 @@ impl HeuristicAgent {
     /// The decision with its typed rule ID (`rules.rs`).
     pub fn decide(&mut self, view: &SeatView, legal: &[GameAction]) -> Decision {
         let _timing = beliefs::profile::scope("policy.decide");
+        self.assessment = None;
         let legal: Vec<GameAction> = legal
             .iter()
             .filter(|a| a.action_type != ActionType::UndoRequest)
@@ -274,31 +285,35 @@ impl HeuristicAgent {
             concepts: RefCell::new(concepts::Reads::default()),
             series: view.series,
         };
-        let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));
-        if has(|t| matches!(t, ActionType::Pass(_))) {
-            return passing::decide(&ctx, &legal);
-        }
-        if let Some(d) = raising::follow(&ctx, &legal) {
-            return d;
-        }
-        if has(|t| matches!(t, ActionType::NewBid(_))) {
-            if has(|t| matches!(t, ActionType::CardPlayed(_))) {
-                let cards: Vec<GameAction> = legal
-                    .iter()
-                    .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
-                    .cloned()
-                    .collect();
-                let baseline = raising::decide(&ctx, &legal, &cards);
+        let decision = (|| {
+            let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));
+            if has(|t| matches!(t, ActionType::Pass(_))) {
+                return passing::decide(&ctx, &legal);
+            }
+            if let Some(d) = raising::follow(&ctx, &legal) {
+                return d;
+            }
+            if has(|t| matches!(t, ActionType::NewBid(_))) {
+                if has(|t| matches!(t, ActionType::CardPlayed(_))) {
+                    let cards: Vec<GameAction> = legal
+                        .iter()
+                        .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+                        .cloned()
+                        .collect();
+                    let baseline = raising::decide(&ctx, &legal, &cards);
+                    return planning::choose(&ctx, &legal, baseline);
+                }
+                let baseline = bidding::decide(&ctx, &legal);
                 return planning::choose(&ctx, &legal, baseline);
             }
-            let baseline = bidding::decide(&ctx, &legal);
-            return planning::choose(&ctx, &legal, baseline);
-        }
-        if has(|t| matches!(t, ActionType::Answer(_))) {
-            let baseline = play::answer(&ctx, &legal);
-            return planning::choose(&ctx, &legal, baseline);
-        }
-        let baseline = play::decide(&ctx, &legal);
-        planning::choose(&ctx, &legal, baseline)
+            if has(|t| matches!(t, ActionType::Answer(_))) {
+                let baseline = play::answer(&ctx, &legal);
+                return planning::choose(&ctx, &legal, baseline);
+            }
+            let baseline = play::decide(&ctx, &legal);
+            planning::choose(&ctx, &legal, baseline)
+        })();
+        self.assessment = ctx.concepts.borrow_mut().assessment.take();
+        decision
     }
 }

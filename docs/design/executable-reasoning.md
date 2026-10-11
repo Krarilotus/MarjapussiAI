@@ -1,14 +1,16 @@
 # Executable strategic reasoning
 
 Status: **contract proposal for review**, based on `8ea7a6a`. The current policy
-still selects through procedural helpers and bounded forecasts. This contract
-defines the replacement boundary; it introduces no playing-strength claim.
+uses procedural continuation helpers and bounded forecasts. The score-estimate
+and comparison slice is executable in `heuristic::value_concepts`; the remaining
+contract defines its expansion through authored strategic continuations.
 
 Review with the [worked decision](worked-decision.md),
 [current-system audit](reasoning-boundary-review.md) and
 [graph definitions](reasoning-graph.json). Build the portable HTML with
 `python docs/assets/build_reasoning_review.py --output <review-folder>`
-(requires `markdown-it-py` and Graphviz).
+(requires `markdown-it-py` and Graphviz). Add `--runtime-graph <export.json>` to
+include the `reasoning_graph` tool’s executable value trace.
 
 The agent asks: **which legal next action has the greatest expected final game score
 difference, given my information and the stated continuation model?** The same

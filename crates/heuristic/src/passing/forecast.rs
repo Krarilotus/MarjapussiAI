@@ -242,7 +242,7 @@ fn choose_until(
         baseline.why.extend(forecast.work_facts());
         return incomplete(baseline);
     };
-    let best = compared.best();
+    let best = compared.assessment.selected;
     if best != 0 {
         baseline.action = options[best];
         let ActionType::Pass(cards) = baseline.action.action_type else {
@@ -266,6 +266,7 @@ fn choose_until(
         fact("forecast_target", ctx.k.value()),
         fact("forecast_opening", chosen.opening),
     ]);
+    forecast.record(ctx, &options, compared.assessment);
     baseline
 }
 

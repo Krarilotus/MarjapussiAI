@@ -26,10 +26,12 @@ Each layer has one job:
 
 The **concept store** provides typed holding and perspective queries over exact
 facts and uncertain beliefs. Queries are computed when needed and cached until
-their inputs change. Strategic composition still lives in procedural policy
-helpers. The [reasoning contract](docs/design/executable-reasoning.md) proposes
-authored dependencies for entries, pair activation and control, evaluated by
-expected game score difference. See the [architecture](docs/ARCHITECTURE.md)
+their inputs change. The strategic value store evaluates conditional scores,
+expected team scores, joint contract events and move rankings through explicit
+shared dependencies. `HeuristicAgent::last_assessment()` exposes the same results
+used for selection. Continuations still use the existing policy approximation;
+the [reasoning contract](docs/design/executable-reasoning.md) defines their migration
+to authored trick outcomes, lead opportunities and subsequent choices. See the [architecture](docs/ARCHITECTURE.md)
 and [current concept boundaries](docs/design/concept-store.md).
 
 The Game Solver is separate from the rules engine. It solves an exposed deal

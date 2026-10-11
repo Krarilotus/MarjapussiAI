@@ -14,16 +14,39 @@ use agent::{SeatView, Table};
 use engine::{ActionType, CardSet, GameAction, GameFinishedInfo, GameOutcome, QuestionType};
 use knowledge::World;
 
+use crate::concepts::value::{Assessment, CohortMethod, Provenance, ValueStore};
 use crate::{fact, Ctx, Decision, Fact, HeuristicAgent, Rng, RuleId};
 
 pub(crate) const BUDGET: Duration = Duration::from_millis(2_000);
 
+/// Inputs of the original forecast. These are observer-visible context and
+/// model settings, never another actual player's private Mind or intentions.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlanningContext {
+    pub observer: u8,
+    pub knowledge: knowledge::Knowledge,
+    pub events: Vec<observation::SeatEvent>,
+    pub kinds: [agent::SeatKind; 4],
+    pub series: agent::SeriesScore,
+    pub response_params: crate::Params,
+    pub seed: u64,
+    pub possible_allocations: u64,
+    pub requested_worlds: usize,
+    pub proposal_draws: usize,
+}
+
+/// The same stored values select the move and supply its explanation.
+/// Candidate scope and the legacy response approximation remain explicit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlanningAssessment {
+    pub actions: Vec<GameAction>,
+    pub values: Assessment,
+    pub context: PlanningContext,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Outcome {
-    pub score: f64,
     pub points: f64,
-    pub made: f64,
-    declaring: f64,
     pub shortfall: f64,
     pub tricks: f64,
     pub pairs: f64,
@@ -37,10 +60,7 @@ pub(crate) struct Outcome {
 impl Default for Outcome {
     fn default() -> Self {
         Self {
-            score: 0.0,
             points: 0.0,
-            made: 0.0,
-            declaring: 0.0,
             shortfall: 0.0,
             tricks: 0.0,
             pairs: 0.0,
@@ -54,10 +74,6 @@ impl Default for Outcome {
 }
 
 impl Outcome {
-    fn made_given_declaring(&self) -> Option<f64> {
-        (self.declaring > 0.0).then(|| self.made / self.declaring)
-    }
-
     /// Expected tricks won by these allocated cards, before normalizing sample mass.
     pub fn wins(&self, cards: CardSet) -> f64 {
         cards.iter().map(|c| self.winners[c as usize]).sum()
@@ -71,10 +87,7 @@ impl Outcome {
     }
 
     pub(crate) fn add(&mut self, other: &Self, weight: f64) {
-        self.score += weight * other.score;
         self.points += weight * other.points;
-        self.made += weight * other.made;
-        self.declaring += weight * other.declaring;
         self.shortfall += weight * other.shortfall;
         self.tricks += weight * other.tricks;
         self.pairs += weight * other.pairs;
@@ -127,7 +140,6 @@ fn rollout(
         return None;
     }
     let info = GameFinishedInfo::from(table.game);
-    let scores = info.scores();
     let outcome = info.outcome();
     let card_points: i32 = info
         .tricks
@@ -150,10 +162,7 @@ fn rollout(
         played |= CardSet::from_cards(&trick.cards);
     }
     Some(Outcome {
-        score: (scores[team] - scores[1 - team]) as f64,
         points: info.team_points[team] as f64,
-        declaring: f64::from(outcome.playing_team == Some(team as u8)),
-        made: f64::from(outcome.playing_team == Some(team as u8) && info.team_points[team] >= info.game_value.0),
         shortfall: if outcome.playing_team == Some(team as u8) {
             (info.game_value.0 - info.team_points[team]).max(0) as f64
         } else {
@@ -181,6 +190,8 @@ pub(crate) struct Forecast {
     pub ess: f64,
     decisions: RefCell<cache::Decisions>,
     outcomes: RefCell<Vec<Vec<(GameAction, Outcome)>>>,
+    provenance: Provenance,
+    context: PlanningContext,
 }
 
 impl Forecast {
@@ -197,10 +208,11 @@ impl Forecast {
             return None;
         }
         let mut rng = Rng::new(ctx.seed);
-        let mut pool = {
+        let (mut pool, allocation_count, proposal_draws) = {
             let model = ctx.mind.deal_model();
             let (space, weights) = (model.space(), model.weights());
-            if space.count() <= n as u64 {
+            let count = space.count();
+            if count <= n as u64 {
                 use knowledge::Belief;
                 let mut pool = Vec::new();
                 space.for_each_deal(|hands| {
@@ -209,17 +221,33 @@ impl Forecast {
                         weight: weights.weight(hands),
                     })
                 });
-                pool
+                (pool, count, 0)
             } else {
-                space.sample_worlds(&mut rng, n * 256, weights)
+                (space.sample_worlds(&mut rng, n * 256, weights), count, n * 256)
             }
         };
-        pool.retain(|w| w.weight.is_finite() && w.weight > 0.0);
+        if pool.iter().any(|w| !w.weight.is_finite() || w.weight < 0.0) {
+            return None;
+        }
+        pool.retain(|w| w.weight > 0.0);
         let mass: f64 = pool.iter().map(|w| w.weight).sum();
-        if mass <= 0.0 {
+        if !mass.is_finite() || mass <= 0.0 {
             return None;
         }
         let ess = mass * mass / pool.iter().map(|w| w.weight * w.weight).sum::<f64>();
+        let cohort = if allocation_count <= n as u64 {
+            CohortMethod::Enumerated
+        } else if pool.len() <= n {
+            CohortMethod::ImportanceSampled {
+                draws: proposal_draws,
+                proposal_ess: ess,
+            }
+        } else {
+            CohortMethod::Resampled {
+                draws: proposal_draws,
+                proposal_ess: ess,
+            }
+        };
         let worlds = if pool.len() <= n {
             for w in &mut pool {
                 w.weight /= mass;
@@ -266,6 +294,18 @@ impl Forecast {
         params.endgame_worlds = params.endgame_worlds.min(8);
         let tables = tables?;
         let outcomes = (0..tables.len()).map(|_| Vec::new()).collect();
+        let context = PlanningContext {
+            observer: ctx.me,
+            knowledge: *ctx.k,
+            events: ctx.mind.events().to_vec(),
+            kinds: ctx.mind.kinds(),
+            series: ctx.series,
+            response_params: params.clone(),
+            seed: ctx.seed,
+            possible_allocations: allocation_count,
+            requested_worlds: n,
+            proposal_draws,
+        };
         Some(Self {
             tables,
             players: RefCell::new(std::array::from_fn(|_| HeuristicAgent::new(params.clone()))),
@@ -273,6 +313,12 @@ impl Forecast {
             ess,
             decisions: RefCell::new(cache::Decisions::default()),
             outcomes: RefCell::new(outcomes),
+            provenance: Provenance {
+                belief_model: "joint-deal-model-v1",
+                response_model: "legacy-seat-policy-no-forecast-v1",
+                cohort,
+            },
+            context,
         })
     }
 
@@ -297,7 +343,16 @@ impl Forecast {
                 means[i].add(result, *weight);
             }
         }
-        Some(Comparison { means, terminals })
+        let slices: Vec<_> = terminals.iter().map(Vec::as_slice).collect();
+        let assessment = ValueStore::new(&slices, self.context.observer as usize % 2, self.provenance)
+            .ok()?
+            .assess()
+            .ok()?;
+        Some(Comparison {
+            means,
+            terminals,
+            assessment,
+        })
     }
 
     pub fn work_facts(&self) -> [Fact; 2] {
@@ -310,45 +365,51 @@ impl Forecast {
 
     pub fn facts(&self, comparison: &Comparison, best: usize) -> Vec<Fact> {
         let chosen = &comparison.means[best];
+        let estimate = &comparison.assessment.candidates[best];
         let mut facts = vec![
             fact("forecast_complete", 1),
             fact("forecast_worlds", self.tables.len() as u32),
             fact("forecast_candidates", comparison.means.len() as u32),
             fact("forecast_proposal_ess", self.ess),
-            fact("forecast_score", chosen.score),
+            fact("forecast_score", estimate.difference),
+            fact("forecast_our_score", estimate.our_score),
+            fact("forecast_opponent_score", estimate.opponent_score),
+            fact("forecast_model_estimate", 1),
+            fact(
+                "forecast_enumerated",
+                u8::from(matches!(self.provenance.cohort, CohortMethod::Enumerated)),
+            ),
             fact("forecast_points", chosen.points),
-            fact("forecast_declaring_share", chosen.declaring),
+            fact("forecast_declaring_share", estimate.declaring),
             fact("forecast_shortfall", chosen.shortfall),
             fact("forecast_pair_points", chosen.pairs),
             fact("forecast_tricks", chosen.tricks),
             fact("forecast_last", chosen.last),
-            fact("forecast_gain", chosen.score - comparison.means[0].score),
+            fact(
+                "forecast_gain",
+                estimate.difference - comparison.assessment.candidates[0].difference,
+            ),
         ];
         facts.extend(self.work_facts());
-        if let Some(made) = chosen.made_given_declaring() {
+        if let Some(made) = estimate.made_given_declaring {
             facts.push(fact("forecast_made", made));
         }
         facts
+    }
+
+    pub(crate) fn record(self, ctx: &Ctx, actions: &[GameAction], assessment: Assessment) {
+        ctx.concepts.borrow_mut().assessment = Some(PlanningAssessment {
+            actions: actions.to_vec(),
+            values: assessment,
+            context: self.context,
+        });
     }
 }
 
 pub(crate) struct Comparison {
     pub means: Vec<Outcome>,
     terminals: Vec<Vec<(GameOutcome, f64)>>,
-}
-
-impl Comparison {
-    pub fn best(&self) -> usize {
-        (0..self.means.len())
-            .max_by(|&a, &b| self.means[a].score.total_cmp(&self.means[b].score).then(b.cmp(&a)))
-            .unwrap_or(0)
-    }
-
-    fn alternative(&self, selected: usize) -> Option<usize> {
-        (0..self.means.len())
-            .filter(|&i| i != selected)
-            .max_by(|&a, &b| self.means[a].score.total_cmp(&self.means[b].score).then(b.cmp(&a)))
-    }
+    pub assessment: Assessment,
 }
 
 fn useful(ctx: &Ctx, action: &GameAction) -> bool {
@@ -409,30 +470,40 @@ pub(crate) fn choose(ctx: &Ctx, legal: &[GameAction], mut baseline: Decision) ->
         return baseline;
     };
     if raising {
-        let team = ctx.me as usize % 2;
-        // Repricing proposes one target. It is then replayed at its actual new
-        // contract: a changed target may alter passing, play and announcements.
-        let proposal = legal
+        // Repricing is a conditional proposal. The proposed contract still
+        // requires its own continuation before it may replace the baseline.
+        let mut proposals: Vec<_> = legal
             .iter()
             .filter(|a| matches!(a.action_type, ActionType::NewBid(_)) && **a != baseline.action)
-            .map(|a| {
-                let ActionType::NewBid(value) = a.action_type else {
+            .copied()
+            .collect();
+        // Preserve the former last-equal repricing preference.
+        proposals.reverse();
+        let repriced: Vec<Vec<_>> = proposals
+            .iter()
+            .map(|action| {
+                let ActionType::NewBid(value) = action.action_type else {
                     unreachable!()
                 };
-                let score = compared.terminals[0]
+                compared.terminals[0]
                     .iter()
-                    .map(|(outcome, w)| {
+                    .map(|(outcome, weight)| {
                         let mut outcome = *outcome;
                         outcome.game_value = value;
-                        let scores = engine::game_scores(&outcome, engine::SCHWARZ_FACTOR_FIFTHS);
-                        w * (scores[team] - scores[1 - team]) as f64
+                        (outcome, *weight)
                     })
-                    .sum::<f64>();
-                (a, score)
+                    .collect()
             })
-            .max_by(|a, b| a.1.total_cmp(&b.1));
-        if let Some((a, score)) = proposal.filter(|(_, score)| *score > compared.means[0].score) {
-            options.push(*a);
+            .collect();
+        let slices: Vec<_> = repriced.iter().map(Vec::as_slice).collect();
+        let proposed = ValueStore::new(&slices, ctx.me as usize % 2, forecast.provenance)
+            .and_then(|mut store| store.assess())
+            .ok();
+        let proposal = proposed
+            .as_ref()
+            .map(|value| (proposals[value.selected], value.candidates[value.selected].difference));
+        if let Some((a, score)) = proposal.filter(|(_, score)| *score > compared.assessment.candidates[0].difference) {
+            options.push(a);
             let Some(verified) = forecast.compare(&options) else {
                 baseline.why.push(fact("forecast_complete", 0));
                 baseline.why.extend(forecast.work_facts());
@@ -442,25 +513,26 @@ pub(crate) fn choose(ctx: &Ctx, legal: &[GameAction], mut baseline: Decision) ->
             baseline.why.push(fact("forecast_proposed_score", score));
         }
     }
-    let best = compared.best();
+    let best = compared.assessment.selected;
     if best != 0 {
         baseline.action = options[best];
         baseline.rule = RuleId::HP1;
         baseline.why.clear();
     }
     baseline.why.extend(forecast.facts(&compared, best));
-    if let Some(index) = compared.alternative(best) {
+    if let Some(index) = compared.assessment.alternative {
         let other = &compared.means[index];
+        let estimate = &compared.assessment.candidates[index];
         baseline.why.extend([
             fact("forecast_selected_index", best as u32),
             fact("forecast_alternative_index", index as u32),
-            fact("forecast_alternative_score", other.score),
+            fact("forecast_alternative_score", estimate.difference),
             fact("forecast_alternative_points", other.points),
-            fact("forecast_alternative_declaring_share", other.declaring),
-            fact("forecast_alternative_joint_made", other.made),
+            fact("forecast_alternative_declaring_share", estimate.declaring),
+            fact("forecast_alternative_joint_made", estimate.joint_made),
             fact("forecast_alternative_pairs", other.pairs),
         ]);
-        if let Some(made) = other.made_given_declaring() {
+        if let Some(made) = estimate.made_given_declaring {
             baseline.why.push(fact("forecast_alternative_made", made));
         }
         let identity = match options[index].action_type {
@@ -474,6 +546,7 @@ pub(crate) fn choose(ctx: &Ctx, legal: &[GameAction], mut baseline: Decision) ->
         };
         baseline.why.extend(identity);
     }
+    forecast.record(ctx, &options, compared.assessment);
     baseline
 }
 
@@ -521,14 +594,40 @@ mod tests {
                 .unwrap(),
             *legal.iter().find(|a| a.action_type == ActionType::NewBid(125)).unwrap(),
         ];
-        let forecast = Forecast {
-            tables: vec![(table, 1.0)],
-            players: RefCell::new(std::array::from_fn(|_| HeuristicAgent::new(Params {
+        let view = table.view(actions[0].player.0);
+        let context = PlanningContext {
+            observer: view.seat,
+            knowledge: *view.knowledge,
+            events: view.events.to_vec(),
+            kinds: view.kinds,
+            series: view.series,
+            response_params: Params {
                 plan_worlds: 0,
                 return_worlds: 0,
                 endgame_tricks: 0,
                 ..Params::default()
-            }))),
+            },
+            seed: 0,
+            possible_allocations: 1,
+            requested_worlds: 1,
+            proposal_draws: 0,
+        };
+        let forecast = Forecast {
+            provenance: Provenance {
+                belief_model: "fixture",
+                response_model: "fixture-base-policy",
+                cohort: CohortMethod::Enumerated,
+            },
+            context,
+            tables: vec![(table, 1.0)],
+            players: RefCell::new(std::array::from_fn(|_| {
+                HeuristicAgent::new(Params {
+                    plan_worlds: 0,
+                    return_worlds: 0,
+                    endgame_tricks: 0,
+                    ..Params::default()
+                })
+            })),
             deadline: Instant::now() + Duration::from_secs(30),
             ess: 1.0,
             decisions: RefCell::new(cache::Decisions::default()),
@@ -537,16 +636,48 @@ mod tests {
         let first = forecast.compare(&actions[..1]).unwrap();
         let work = (forecast.decisions.borrow().evaluated, forecast.decisions.borrow().hits);
         let repeated = forecast.compare(&actions[..1]).unwrap();
-        assert_eq!(repeated.means[0].score, first.means[0].score);
+        assert_eq!(
+            repeated.assessment.candidates[0].difference,
+            first.assessment.candidates[0].difference
+        );
         assert_eq!(
             (forecast.decisions.borrow().evaluated, forecast.decisions.borrow().hits),
             work
         );
         let expanded = forecast.compare(&actions).unwrap();
-        assert_eq!(expanded.means[0].score, first.means[0].score);
+        assert_eq!(
+            expanded.assessment.candidates[0].difference,
+            first.assessment.candidates[0].difference
+        );
         assert_eq!(expanded.terminals[0][0].0.game_value, 120);
         assert_eq!(expanded.terminals[1][0].0.game_value, 125);
         assert_eq!(forecast.outcomes.borrow()[0].len(), 2);
+
+        let table = &forecast.tables[0].0;
+        let (seat, legal) = table.to_act().unwrap();
+        let view = table.view(seat);
+        let mut agent = HeuristicAgent::new(Params {
+            plan_worlds: 1,
+            return_worlds: 0,
+            endgame_tricks: 0,
+            ..Params::default()
+        });
+        let selected = agent.decide(&view, legal);
+        let recorded = agent.last_assessment().expect("completed one-world decision");
+        assert_eq!(recorded.actions[recorded.values.selected], selected.action);
+        assert_eq!(recorded.context.observer, seat);
+        assert_eq!(recorded.context.events, view.events);
+        assert_eq!(recorded.context.knowledge, *view.knowledge);
+        assert!(recorded
+            .values
+            .trace
+            .iter()
+            .any(|n| n.reference == recorded.values.root));
+        agent.decide(&view, &[selected.action]);
+        assert!(
+            agent.last_assessment().is_none(),
+            "forced decisions clear prior estimates"
+        );
     }
 }
 

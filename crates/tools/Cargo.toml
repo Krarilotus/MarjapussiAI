@@ -60,6 +60,11 @@ name = "selfplay"
 test = false
 bench = false
 
+[[bin]]
+name = "reasoning_graph"
+test = false
+bench = false
+
 [features]
 profile = ["heuristic/profile", "beliefs/profile"]
 
