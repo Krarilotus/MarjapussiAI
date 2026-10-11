@@ -2,15 +2,16 @@
 //! Nomination belongs to the caller. This bridge neither resamples after an
 //! intervention nor selects a separate best future in each hidden deal.
 
-use std::{sync::Arc, time::Instant};
+use std::time::Instant;
 
 use engine::GameAction;
 
-use super::retained::{view, PlanMode, RetainedPlan, SequenceTrace};
-use super::sequence::{self, Candidate, Context, Deferred, Limits, Work};
-use super::{BeliefScope, Forecast, PlanningAssessment};
-use crate::concepts::sequence::{Actions, Guard, Information, Node, Program, SequenceError, Stage, MAX_BOUNDARY_DEPTH};
-use crate::{fact, Ctx, Decision, RuleId};
+use super::common::{self, Allowance, Failure, Mode};
+use super::retained::RetainedPlan;
+use super::sequence::{self, Candidate};
+use super::Forecast;
+use crate::concepts::sequence::{Actions, Guard, Node, Program, SequenceError, Stage, MAX_BOUNDARY_DEPTH};
+use crate::{Ctx, Decision, RuleId};
 
 /// Finite coverage, not a claim that every legal auction ends within this many
 /// root decisions. Nonroot transitions also consume the evaluator's allowance.
@@ -115,45 +116,13 @@ pub(crate) fn choose(
     mut baseline: Decision,
 ) -> Decision {
     let deadline = ctx.deadline.map_or(deadline, |outer| outer.min(deadline));
-    let initial = view(ctx);
-    let defer = |baseline: &mut Decision, failure: Deferred| {
-        ctx.concepts.borrow_mut().sequence = Some(SequenceTrace {
-            mode: PlanMode::Deferred,
-            information: Information::of(&initial),
-            scope: BeliefScope::CurrentInformation,
-            program: None,
-            choices: Vec::new(),
-            terminals: Arc::new(Vec::new()),
-            work: failure.work,
-            failure: Some(failure.reason),
-            deferred_limit: failure.limit,
-            total_candidates: Some(actions.len()),
-        });
-        if let Some(plan) = ctx.intent.borrow_mut().as_mut() {
-            plan.review_pending = true;
-            plan.prepared = Arc::new(Vec::new());
-            plan.receipt.pending = None;
-        }
-        baseline.why.extend([
-            fact("forecast_complete", 0),
-            fact("forecast_candidates", actions.len() as u32),
-            fact("sequence_deferred", 1),
-            fact("sequence_transitions", failure.work.transitions as u32),
-            fact(
-                "sequence_completed_candidates",
-                failure.work.completed_candidates as u32,
-            ),
-        ]);
-    };
+    let mode = Mode::Preplay { replacement_rule };
     let Some(forecast) = Forecast::new(ctx, worlds, deadline) else {
-        defer(
+        common::defer(
+            ctx,
             &mut baseline,
-            Deferred {
-                reason: SequenceError::InvalidCohort,
-                work: Work::default(),
-                total_candidates: actions.len(),
-                limit: None,
-            },
+            mode,
+            Failure::before_evaluation(SequenceError::InvalidCohort, Some(actions.len())),
         );
         return baseline;
     };
@@ -161,114 +130,13 @@ pub(crate) fn choose(
         .iter()
         .map(|&action| intervention(action, PHASE_RESPONSES))
         .collect();
-    let mut provenance = forecast.provenance;
-    provenance.response_model = "seat-policy-completed-primitives-v2";
-    let context = Context {
-        params: forecast.context.response_params.clone(),
-        seed: forecast.context.seed,
-        posterior_revision: ctx.mind.events().len() as u64,
-        provenance,
-    };
-    let limits = Limits {
-        transitions: ctx.params.plan_formation_transitions as usize,
-        memo_bytes: ctx.params.plan_memo_mib as usize * 1024 * 1024,
-        deadline: Some(deadline),
-        ..Limits::default()
-    };
-    let mut players = forecast.players.borrow_mut();
-    let mut response = |actor: &agent::SeatView<'_>, legal: &[GameAction], allowance: sequence::LeafBudget| {
-        if allowance.remaining_transitions == 0 || allowance.deadline.is_some_and(|end| Instant::now() >= end) {
-            return Err(SequenceError::Budget);
-        }
-        let decision = players[actor.seat as usize]
-            .completed_response_before(actor, legal, allowance.deadline)
-            .ok_or(SequenceError::Budget)?;
-        if allowance.deadline.is_some_and(|end| Instant::now() >= end) {
-            return Err(SequenceError::Budget);
-        }
-        Ok(decision.action)
-    };
-    let compared = match sequence::evaluate_with_cache(
-        &candidates,
-        &forecast.tables,
-        ctx.me,
-        provenance,
-        &context,
-        limits,
-        &mut ctx.completed.borrow_mut(),
-        &mut response,
-    ) {
-        Ok(compared) => compared,
+    match forecast.evaluate_programs(ctx, &candidates, Allowance::Formation) {
+        Ok(evaluated) => forecast.install(ctx, evaluated, mode, baseline),
         Err(failure) => {
-            defer(&mut baseline, failure);
-            return baseline;
+            common::defer(ctx, &mut baseline, mode, failure.into());
+            baseline
         }
-    };
-    let selected = compared.values.selected;
-    let execution = &compared.executions[selected];
-    let estimate = &compared.values.candidates[selected];
-    if baseline.action != execution.first.action {
-        baseline.action = execution.first.action;
-        baseline.rule = replacement_rule;
-        baseline.why.clear();
     }
-    baseline.why.extend([
-        fact("forecast_complete", 1),
-        fact("forecast_candidates", actions.len() as u32),
-        fact("forecast_worlds", forecast.tables.len() as u32),
-        fact("forecast_score", estimate.difference),
-        fact("forecast_our_score", estimate.our_score),
-        fact("forecast_opponent_score", estimate.opponent_score),
-        fact(
-            "forecast_gain",
-            estimate.difference - compared.values.candidates[0].difference,
-        ),
-        fact("forecast_model_estimate", 1),
-        fact("sequence_complete", 1),
-        fact("sequence_preplay", 1),
-        fact("sequence_transitions", compared.work.transitions as u32),
-        fact(
-            "sequence_represented_transitions",
-            compared.work.represented_transitions as u32,
-        ),
-        fact("sequence_response_hits", compared.work.response_hits as u32),
-        fact("sequence_suffix_hits", compared.work.suffix_hits as u32),
-        fact("sequence_difference", estimate.difference),
-    ]);
-    let trace = SequenceTrace {
-        mode: PlanMode::Formation,
-        information: Information::of(&initial),
-        scope: BeliefScope::CurrentInformation,
-        program: compared.receipt.program.suffix(compared.receipt.stage).ok(),
-        choices: compared
-            .prepared
-            .iter()
-            .filter(|choice| choice.information.matches(&initial))
-            .cloned()
-            .collect(),
-        terminals: Arc::new(execution.terminals.clone()),
-        work: compared.work,
-        failure: None,
-        deferred_limit: None,
-        total_candidates: Some(actions.len()),
-    };
-    *ctx.intent.borrow_mut() = Some(RetainedPlan {
-        receipt: compared.receipt,
-        prepared: Arc::new(compared.prepared),
-        parameters: ctx.params.clone(),
-        origin: forecast.context.clone(),
-        context,
-        review_pending: false,
-        raw_events: ctx.raw_events.to_vec(),
-    });
-    let mut reads = ctx.concepts.borrow_mut();
-    reads.assessment = Some(PlanningAssessment {
-        actions: actions.to_vec(),
-        values: compared.values,
-        context: forecast.context.clone(),
-    });
-    reads.sequence = Some(trace);
-    baseline
 }
 
 #[cfg(test)]

@@ -84,6 +84,9 @@ mod tests {
             raw_events: mind.events(),
             routes: RefCell::new(None),
             intent: &RefCell::new(None),
+            completed: &RefCell::default(),
+            formation_attempted: &std::cell::Cell::new(false),
+            response_completion: None,
             concepts: RefCell::new(Reads {
                 remaining: 700,
                 results: vec![],

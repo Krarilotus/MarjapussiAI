@@ -16,20 +16,20 @@ struct Scope {
 /// MUST return a semantically completed, deterministic response for its exact
 /// information/legal inputs and configured model. Eligible but incomplete,
 /// timed-partial or timed-fallback responses must return an error: they cannot
-/// populate this cache. A bare GameAction result cannot enforce that contract;
-/// the owner supplies the strict completed-response wrapper. Never serialize
-/// or share this cache as another real player's knowledge or intent.
+/// populate this cache. The typed result reports canonical solver effort; the
+/// owner supplies the strict completed-response wrapper. Never serialize or
+/// share this cache as another real player's knowledge or intent.
 ///
 /// Posterior weights, cohort ids, sampling seed, prepared choices and weighted
 /// optimums are NOT persistent. `Context.params` must include the actual leaf
-/// configuration/RNG seed; version `response_model` when the callback changes.
+/// configuration/RNG seed; version `response_model` when callback semantics or
+/// the canonical solver-effort algorithm changes.
 /// Current Forecast's `Context.seed` generates the cohort, not actor responses.
 /// Fork/model reset belongs to the caller via `clear`; equality is also checked
 /// here. Bounds changes reset the completed-response scope between comparisons.
-/// Solver effort is not in the present GameAction API. Represented engine
-/// transitions/comparisons are debited on hits; canonical leaf/solver effort
-/// needs the next additive action-plus-effort interface before exact logical
-/// solver-budget parity can be qualified.
+/// Canonical solver work, engine transitions and comparisons are debited on
+/// completed hits. Responses may be evicted/recomputed under the same strict
+/// deterministic callback contract. Cache capacity zero performs uncached work.
 #[derive(Default)]
 pub struct CompletedCache {
     scope: Option<Scope>,
@@ -38,7 +38,7 @@ pub struct CompletedCache {
 
 #[derive(Default)]
 pub(super) struct Inputs {
-    pub responses: Vec<(ResponseKey, GameAction)>,
+    pub responses: Vec<(ResponseKey, LeafResponse)>,
     pub hard_reads: Vec<(Information, beliefs::ConceptQuery, Option<bool>)>,
     pub tails: Vec<TailRun>,
     pub canonical: Vec<CanonicalProgram>,

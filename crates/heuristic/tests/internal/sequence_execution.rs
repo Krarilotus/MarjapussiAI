@@ -18,20 +18,22 @@ fn context() -> Context {
         provenance: provenance(),
     }
 }
-fn leaf(_: &SeatView<'_>, legal: &[GameAction], budget: LeafBudget) -> Result<GameAction, SequenceError> {
+fn leaf(_: &SeatView<'_>, legal: &[GameAction], budget: LeafBudget) -> Result<LeafResponse, LeafFailure> {
     if budget.remaining_transitions == 0 || budget.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-        return Err(SequenceError::Budget);
+        return Err(LeafFailure::unit(SequenceError::Budget));
     }
-    Ok(*legal
-        .iter()
-        .find(|a| matches!(a.action_type, ActionType::Answer(_)))
-        .or_else(|| {
-            legal
-                .iter()
-                .find(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
-        })
-        .or_else(|| legal.iter().find(|a| a.action_type == ActionType::StopBidding))
-        .unwrap_or(&legal[0]))
+    Ok(LeafResponse::unit(
+        *legal
+            .iter()
+            .find(|a| matches!(a.action_type, ActionType::Answer(_)))
+            .or_else(|| {
+                legal
+                    .iter()
+                    .find(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+            })
+            .or_else(|| legal.iter().find(|a| a.action_type == ActionType::StopBidding))
+            .unwrap_or(&legal[0]),
+    ))
 }
 fn at_lead_with(hands: [Vec<Card>; 4]) -> Table {
     let mut table = Table::new(&hands);
@@ -64,9 +66,11 @@ fn at_lead_with(hands: [Vec<Card>; 4]) -> Table {
             LeafBudget {
                 deadline: None,
                 remaining_transitions: 100,
+                remaining_solver_nodes: None,
             },
         )
-        .unwrap();
+        .unwrap()
+        .action;
         table.apply(action);
     }
     assert_eq!(table.to_act().unwrap().0, 0);

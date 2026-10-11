@@ -16,6 +16,7 @@ pub mod passing;
 mod planning;
 mod play;
 mod raising;
+mod response;
 mod routes;
 mod rules;
 mod stakes;
@@ -23,7 +24,7 @@ mod trump_plan;
 mod valuation;
 
 pub use agent::{Agent, Explanation, Fact, SeatKind, SeatView, SeriesScore};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use beliefs::Mind;
 use engine::{ActionType, CardSet, GameAction};
@@ -36,6 +37,7 @@ pub use params::{Params, Selection};
 pub use planning::retained::{PlanMode, SequenceTrace};
 pub use planning::sequence as sequence_evaluation;
 pub use planning::{BeliefScope, PlanningAssessment, PlanningContext};
+pub use response::{CompletedResponse, ResponseFailure, ResponseFailureReason};
 pub use rules::{Phase, Rule, RuleId, RULES};
 
 pub(crate) fn fact(key: &'static str, value: impl Into<f64>) -> Fact {
@@ -99,6 +101,11 @@ pub(crate) struct Ctx<'a> {
     pub routes: RefCell<Option<routes::Routes>>,
     pub concepts: RefCell<concepts::Reads>,
     pub intent: &'a RefCell<Option<planning::retained::RetainedPlan>>,
+    pub completed: &'a RefCell<planning::sequence::CompletedCache>,
+    pub formation_attempted: &'a Cell<bool>,
+    /// A continuation response may publish only a completed primitive result.
+    /// Actual play keeps its existing bounded fallback policy.
+    pub response_completion: Option<&'a response::ResponseState>,
     pub series: SeriesScore,
 }
 
@@ -170,6 +177,16 @@ struct Synced {
     mind: Mind,
 }
 
+impl Synced {
+    fn continues(&self, params: &Params, view: &SeatView<'_>) -> bool {
+        self.mind.seat() == view.seat
+            && self.start == view.knowledge.dealt_certain(view.seat)
+            && self.mind.kinds() == view.kinds
+            && self.mind.params() == &params.beliefs
+            && view.events.starts_with(&self.history)
+    }
+}
+
 /// Transaction retry state, distinct from a strategic plan step. A fallback
 /// can be retried without advancing or certifying the retained program.
 #[derive(Clone)]
@@ -197,6 +214,8 @@ pub struct HeuristicAgent {
     sequence: Option<std::sync::Arc<SequenceTrace>>,
     pending_decision: Option<PendingDecision>,
     intent: RefCell<Option<planning::retained::RetainedPlan>>,
+    completed: RefCell<planning::sequence::CompletedCache>,
+    formation_attempted: Cell<bool>,
 }
 
 impl Clone for HeuristicAgent {
@@ -207,6 +226,7 @@ impl Clone for HeuristicAgent {
         let mut cloned = HeuristicAgent::new(self.params.clone());
         cloned.intent = RefCell::new(self.intent.borrow().clone());
         cloned.pending_decision = self.pending_decision.clone();
+        cloned.formation_attempted = self.formation_attempted.clone();
         cloned
     }
 }
@@ -231,6 +251,8 @@ impl HeuristicAgent {
             sequence: None,
             pending_decision: None,
             intent: RefCell::new(None),
+            completed: RefCell::default(),
+            formation_attempted: Cell::new(false),
         }
     }
 
@@ -254,13 +276,7 @@ impl HeuristicAgent {
 fn sync<'a>(slot: &'a mut Option<Synced>, params: &Params, view: &SeatView) -> &'a Mind {
     let _timing = beliefs::profile::scope("policy.sync");
     let start = view.knowledge.dealt_certain(view.seat);
-    let continues = slot.as_ref().is_some_and(|m| {
-        m.mind.seat() == view.seat
-            && m.start == start
-            && m.mind.kinds() == view.kinds
-            && m.mind.params() == &params.beliefs
-            && view.events.starts_with(&m.history)
-    });
+    let continues = slot.as_ref().is_some_and(|m| m.continues(params, view));
     if !continues {
         *slot = Some(Synced {
             start,
@@ -298,7 +314,7 @@ impl Agent for HeuristicAgent {
 impl HeuristicAgent {
     /// The decision with its typed rule ID (`rules.rs`).
     pub fn decide(&mut self, view: &SeatView, legal: &[GameAction]) -> Decision {
-        self.decide_scoped(view, legal, None, true)
+        self.decide_scoped(view, legal, None, true, None)
     }
 
     pub(crate) fn decide_before(
@@ -307,7 +323,53 @@ impl HeuristicAgent {
         legal: &[GameAction],
         deadline: Option<std::time::Instant>,
     ) -> Decision {
-        self.decide_scoped(view, legal, deadline, false)
+        self.decide_scoped(view, legal, deadline, false, None)
+    }
+
+    pub(crate) fn completed_response_before(
+        &mut self,
+        view: &SeatView,
+        legal: &[GameAction],
+        deadline: Option<std::time::Instant>,
+    ) -> Option<Decision> {
+        self.completed_response_with_effort_before(view, legal, deadline, None)
+            .ok()
+            .map(|completed| completed.decision)
+    }
+
+    /// A completed response plus canonical endgame search effort, or failure
+    /// with the effort already consumed. The optional caller-owned node budget
+    /// applies across eligible solver calls; no default cap is introduced.
+    /// Other belief/valuation kernels are not counted by this node metric.
+    /// This is a soft-deadline API, not a total CPU-work/preemption guarantee.
+    /// Requires `plan_worlds == 0`, `return_worlds == 0` and no retained intent,
+    /// as supplied by Forecast's private actors. Otherwise returns NonIsolated
+    /// before touching evidence, diagnostics or intent; configuration is unchanged.
+    pub fn completed_response_with_effort_before(
+        &mut self,
+        view: &SeatView,
+        legal: &[GameAction],
+        deadline: Option<std::time::Instant>,
+        remaining_solver_nodes: Option<u64>,
+    ) -> Result<CompletedResponse, ResponseFailure> {
+        let retained_intent = self.intent.borrow().is_some();
+        if self.params.plan_worlds != 0 || self.params.return_worlds != 0 || retained_intent {
+            return Err(ResponseFailure {
+                reason: ResponseFailureReason::NonIsolated {
+                    plan_worlds: self.params.plan_worlds,
+                    return_worlds: self.params.return_worlds,
+                    retained_intent,
+                },
+                canonical_solver_nodes: 0,
+            });
+        }
+        let state = response::ResponseState::new(remaining_solver_nodes);
+        if deadline.is_some_and(|until| std::time::Instant::now() >= until) {
+            state.fail(ResponseFailureReason::DeadlineElapsed);
+            return Err(state.failure().expect("expired deadline recorded"));
+        }
+        let decision = self.decide_scoped(view, legal, deadline, false, Some(&state));
+        state.finish(decision, deadline)
     }
 
     fn decide_scoped(
@@ -316,15 +378,12 @@ impl HeuristicAgent {
         legal: &[GameAction],
         deadline: Option<std::time::Instant>,
         retain_retry: bool,
+        response_completion: Option<&response::ResponseState>,
     ) -> Decision {
         let _timing = beliefs::profile::scope("policy.decide");
+        let started = std::time::Instant::now();
         self.assessment = None;
         self.sequence = None;
-        // Ordinary play shares one soft lane across its solver and plan repair.
-        let deadline = deadline.or_else(|| {
-            (!view.knowledge.played().is_empty() || self.intent.borrow().is_some())
-                .then(|| std::time::Instant::now() + std::time::Duration::from_millis(50))
-        });
         let legal: Vec<GameAction> = legal
             .iter()
             .filter(|a| a.action_type != ActionType::UndoRequest)
@@ -333,6 +392,17 @@ impl HeuristicAgent {
         assert!(!legal.is_empty(), "no legal action for seat {}", view.seat);
         // Forced actions also accept the current observation prefix. Intent and
         // cached evidence must never lag merely because this turn has no choice.
+        let extends_cache_scope = self.mind.as_ref().is_some_and(|reader| {
+            reader.continues(&self.params, view) && !view.events[reader.history.len()..].contains(&SeatEvent::Undone)
+        });
+        if !extends_cache_scope {
+            self.completed.get_mut().clear();
+            // A clone may reconstruct its reader while preserving this private
+            // transaction's planning allowance. Genuine forks reset it below.
+            if self.mind.is_some() {
+                self.formation_attempted.set(false);
+            }
+        }
         let mind = sync(&mut self.mind, &self.params, view);
         let canonical_view = SeatView {
             seat: view.seat,
@@ -350,6 +420,7 @@ impl HeuristicAgent {
             // Rewind, rejected/forked history or changed configuration requires
             // explicit recovery. Previous values cannot justify today's move.
             *self.intent.get_mut() = None;
+            self.completed.get_mut().clear();
         }
         if let Some(pending) = self
             .pending_decision
@@ -361,6 +432,13 @@ impl HeuristicAgent {
             return pending.decision.clone();
         }
         let seed = self.params.seed ^ (view.seat as u64) << 56 ^ view.events.len() as u64;
+        // Include synchronization in the same ordinary-play allowance. Decide
+        // the lane after detecting a new game/fork, so stale work does not turn
+        // a new opening into a repair or grant a repeated opening allowance.
+        let deadline = deadline.or_else(|| {
+            (!view.knowledge.played().is_empty() || self.intent.borrow().is_some() || self.formation_attempted.get())
+                .then(|| started + std::time::Duration::from_millis(50))
+        });
         let ctx = Ctx {
             me: view.seat,
             k: mind.knowledge(),
@@ -373,6 +451,9 @@ impl HeuristicAgent {
             routes: RefCell::new(None),
             concepts: RefCell::new(concepts::Reads::default()),
             intent: &self.intent,
+            completed: &self.completed,
+            formation_attempted: &self.formation_attempted,
+            response_completion,
             series: view.series,
         };
         let mut decision = (|| {
@@ -391,11 +472,7 @@ impl HeuristicAgent {
                 return passing::decide(&ctx, &legal);
             }
             if let Some(d) = raising::follow(&ctx, &legal) {
-                return if ctx.intent.borrow().is_some() {
-                    planning::choose(&ctx, &legal, d)
-                } else {
-                    d
-                };
+                return planning::choose(&ctx, &legal, d);
             }
             if has(|t| matches!(t, ActionType::NewBid(_))) {
                 if has(|t| matches!(t, ActionType::CardPlayed(_))) {
@@ -468,6 +545,41 @@ mod evidence_tests {
         assert_eq!(synced.history, view.events);
         assert_eq!(synced.mind.knowledge(), view.knowledge);
         assert!(policy.last_assessment().is_none());
+
+        let action = legal[0];
+        // Keep the live-policy synchronization assertion above; strict modeled
+        // calls use an explicitly isolated clone, just like Forecast actors.
+        let mut response = policy.clone();
+        response.params.plan_worlds = 0;
+        response.params.return_worlds = 0;
+        let expired = std::time::Instant::now() - std::time::Duration::from_millis(1);
+        assert!(response
+            .completed_response_before(&view, &[action], Some(expired))
+            .is_none());
+        assert_eq!(
+            response
+                .completed_response_before(&view, &[action], None)
+                .unwrap()
+                .action,
+            action,
+            "an applicable completed forced response needs no solver approximation"
+        );
+
+        policy.formation_attempted.set(true);
+        let mut cloned = policy.clone();
+        cloned.decide(&view, &[action]);
+        assert!(
+            cloned.formation_attempted.get(),
+            "cloning the same observation cannot grant a new formation"
+        );
+        table.apply(action);
+        let (other_seat, other_legal) = table.to_act().unwrap();
+        assert_ne!(other_seat, seat);
+        cloned.decide(&table.view(other_seat), &other_legal[..1]);
+        assert!(
+            !cloned.formation_attempted.get(),
+            "a genuine seat/context change starts a new planning scope"
+        );
     }
 }
 

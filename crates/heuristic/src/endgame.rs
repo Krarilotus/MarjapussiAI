@@ -13,7 +13,7 @@
 //!   standing ace that wins either now or later is kept, as the future-trick value says).
 
 use engine::{CardSet, GameAction, Move, PlayPhase, QuestionType};
-use solver::{evaluate_limited, Limits, Objective, Solver};
+use solver::{evaluate_complete, evaluate_limited, Limits, Objective, Solver};
 use std::time::{Duration, Instant};
 
 use crate::rules::RuleId;
@@ -25,14 +25,23 @@ const TT_BITS: u32 = 16;
 
 pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option<Decision> {
     let _timing = beliefs::profile::scope("endgame");
-    let own_deadline = Instant::now() + Duration::from_millis(45);
-    let deadline = ctx.deadline.map_or(own_deadline, |outer| outer.min(own_deadline));
-    if Instant::now() >= deadline {
-        return None;
-    }
     let k = ctx.k;
     let tricks_left = k.hand_len(ctx.me) as u32;
     if tricks_left == 0 || tricks_left > ctx.params.endgame_tricks {
+        return None;
+    }
+    let own_deadline = Instant::now() + Duration::from_millis(45);
+    let deadline = if ctx.response_completion.is_some() {
+        // A modeled response is one completed deterministic unit. It shares
+        // the enclosing planning lane instead of returning a timed world prefix.
+        ctx.deadline.unwrap_or(own_deadline)
+    } else {
+        ctx.deadline.map_or(own_deadline, |outer| outer.min(own_deadline))
+    };
+    if Instant::now() >= deadline {
+        if let Some(response) = ctx.response_completion {
+            response.fail(crate::ResponseFailureReason::DeadlineElapsed);
+        }
         return None;
     }
     let table = k.public_state(ctx.me, PlayPhase::from_actions(legal));
@@ -46,23 +55,43 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
     let mut slot = ctx.solver.borrow_mut();
     let solver = slot.get_or_insert_with(|| Solver::with_tt_bits(TT_BITS));
     let mut rng = Rng::new(ctx.seed);
-    let mut d = {
+    let evaluated = {
         let model = ctx.mind.deal_model();
-        evaluate_limited(
-            solver,
-            k,
-            &table,
-            objective,
-            ctx.params.endgame_worlds as usize,
-            model.weights(),
-            &mut rng,
-            Limits {
-                deadline: Some(deadline),
-                nodes: None,
-            },
-        )
-    }
-    .ok()?;
+        let limits = Limits {
+            deadline: Some(deadline),
+            nodes: ctx
+                .response_completion
+                .and_then(|response| response.remaining_solver_nodes()),
+        };
+        if let Some(response) = ctx.response_completion {
+            if response.failure().is_some() {
+                return None;
+            }
+            response.record_solver(evaluate_complete(
+                solver,
+                k,
+                &table,
+                objective,
+                ctx.params.endgame_worlds as usize,
+                model.weights(),
+                &mut rng,
+                limits,
+            ))
+        } else {
+            evaluate_limited(
+                solver,
+                k,
+                &table,
+                objective,
+                ctx.params.endgame_worlds as usize,
+                model.weights(),
+                &mut rng,
+                limits,
+            )
+            .ok()
+        }
+    };
+    let mut d = evaluated?;
     // A called suit cannot become trump again; known answers without activation add no information.
     // This root policy filter does not change the engine's legal question list.
     let mate = engine::partner(ctx.me);
@@ -78,9 +107,15 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
         }
         _ => true,
     });
-    let mut best = d.best()?;
+    let unavailable = || {
+        if let Some(response) = ctx.response_completion {
+            response.fail(crate::ResponseFailureReason::NoLegalEndgameDecision);
+        }
+        None
+    };
+    let Some(mut best) = d.best() else { return unavailable() };
     let means = |m: Move| d.moves.iter().find(|v| v.mv == m).map(|v| v.means.clone());
-    let top = means(best)?;
+    let Some(top) = means(best) else { return unavailable() };
     if matches!(best, Move::Card(_)) {
         let choice = Choice::new(ctx);
         let leading = k.trick().is_empty();
@@ -97,7 +132,9 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
             best = Move::Card(c);
         }
     }
-    let action = legal.iter().find(|a| Move::from_action(&a.action_type) == Some(best))?;
+    let Some(action) = legal.iter().find(|a| Move::from_action(&a.action_type) == Some(best)) else {
+        return unavailable();
+    };
     let mean = top[0];
     Some(decision(
         action,

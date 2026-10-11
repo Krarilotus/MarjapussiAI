@@ -261,3 +261,149 @@ fn undo_repair_uses_canonical_events_but_detects_each_new_raw_undo_once() {
     repaired.decide(&table.view(seat), &[next]);
     assert_eq!(repaired.intent.borrow().as_ref().unwrap().receipt.stage, Stage(2));
 }
+
+#[test]
+fn an_observed_global_choice_does_not_certify_an_unrecorded_tail_action() {
+    use crate::concepts::sequence::with_reconsideration;
+    use crate::planning::sequence::{evaluate, Candidate, LeafBudget, LeafResponse, Limits};
+    let hands = std::array::from_fn(|seat| (0..9).map(|c| engine::Card::from_index((9 * seat + c) as u8)).collect());
+    let mut table = Table::new(&hands);
+    for kind in [
+        ActionType::NewBid(120),
+        ActionType::StopBidding,
+        ActionType::StopBidding,
+        ActionType::StopBidding,
+    ] {
+        let action = *table
+            .to_act()
+            .unwrap()
+            .1
+            .iter()
+            .find(|a| a.action_type == kind)
+            .unwrap();
+        table.apply(action);
+    }
+    let mut received = None;
+    while table.game.state.phase != engine::GamePhase::PassingBack {
+        let action = table.to_act().unwrap().1[0];
+        if let ActionType::Pass(cards) = action.action_type {
+            received = Some(engine::CardSet::from_cards(&cards));
+        }
+        table.apply(action);
+    }
+    let returned = *table.to_act().unwrap().1.iter().find(|a| {
+        matches!(a.action_type, ActionType::Pass(cards) if Some(engine::CardSet::from_cards(&cards)) == received)
+    }).unwrap();
+    table.apply(returned);
+    let mut leaf = |_: &SeatView<'_>, legal: &[GameAction], _: LeafBudget| {
+        Ok(LeafResponse::unit(
+            *legal
+                .iter()
+                .find(|a| matches!(a.action_type, ActionType::Answer(_)))
+                .or_else(|| {
+                    legal
+                        .iter()
+                        .find(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+                })
+                .unwrap(),
+        ))
+    };
+    // Keep the pair until the last two cards. Every suit is held by a single
+    // seat, so either remaining green card wins; the response-tail tie is real.
+    while table.view(0).knowledge.hand_len(0) > 2 || table.to_act().unwrap().0 != 0 {
+        let (seat, legal) = table.to_act().unwrap();
+        let action = if seat == 0 {
+            *legal
+                .iter()
+                .find(|action| {
+                    matches!(action.action_type,
+                ActionType::CardPlayed(card) if !engine::CardSet::HALVES.contains(card.index()))
+                })
+                .unwrap()
+        } else {
+            leaf(
+                &table.view(seat),
+                legal,
+                LeafBudget {
+                    deadline: None,
+                    remaining_transitions: 100,
+                    remaining_solver_nodes: None,
+                },
+            )
+            .unwrap()
+            .action
+        };
+        table.apply(action);
+    }
+    let (seat, legal) = table.to_act().unwrap();
+    let announce = *legal
+        .iter()
+        .find(|a| matches!(a.action_type, ActionType::AnnounceTrump(_)))
+        .unwrap();
+    let params = Params {
+        plan_worlds: 1,
+        return_worlds: 0,
+        endgame_tricks: 0,
+        ..Params::default()
+    };
+    let (mut policy, _) = planned(&table);
+    let (origin, context) = {
+        let plan = policy.intent.borrow();
+        let plan = plan.as_ref().unwrap();
+        (plan.origin.clone(), plan.context.clone())
+    };
+    policy.params = params.clone();
+    let program = with_reconsideration(
+        &Program {
+            name: "activate-then-global-choice",
+            version: 1,
+            start: Stage(1),
+            nodes: vec![
+                Node::Tail,
+                Node::Action {
+                    actions: Actions::Exact(announce.action_type),
+                    next: Stage(0),
+                },
+            ],
+        },
+        1,
+    )
+    .unwrap();
+    let compared = evaluate(
+        &[Candidate::new(program)],
+        &[(table.clone(), 1.0)],
+        seat,
+        context.provenance,
+        &context,
+        Limits {
+            transitions: 1_000_000,
+            comparisons: 4096,
+            memo_bytes: 64 * 1024 * 1024,
+            ..Limits::default()
+        },
+        &mut leaf,
+    )
+    .unwrap();
+    assert_eq!(compared.executions[0].first.action, announce);
+    *policy.intent.get_mut() = Some(RetainedPlan {
+        receipt: compared.receipt,
+        prepared: std::sync::Arc::new(compared.prepared),
+        parameters: params,
+        origin,
+        context,
+        review_pending: false,
+        raw_events: table.view(seat).events.to_vec(),
+    });
+    table.apply(announce);
+    let (seat, legal) = table.to_act().unwrap();
+    let view = table.view(seat);
+    let choice = policy.decide(&view, legal);
+    assert!(
+        !matches!(
+            policy.last_sequence().map(|trace| trace.mode),
+            Some(PlanMode::Prepared | PlanMode::Retry)
+        ),
+        "a ranked tail without a recorded first response requires review"
+    );
+    assert!(legal.contains(&choice.action));
+}

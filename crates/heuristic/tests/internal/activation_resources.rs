@@ -32,6 +32,9 @@ fn access(mind: &Mind, suit: Suit, own: f32, partner: f32) -> f32 {
         raw_events: mind.events(),
         routes: RefCell::new(None),
         intent: &RefCell::new(None),
+        completed: &RefCell::default(),
+        formation_attempted: &std::cell::Cell::new(false),
+        response_completion: None,
         concepts: RefCell::new(crate::concepts::Reads::default()),
         series: crate::SeriesScore::default(),
     };

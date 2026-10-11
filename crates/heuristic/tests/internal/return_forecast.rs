@@ -36,6 +36,9 @@ fn combined_shortlist_keeps_pair_and_control_together_without_a_score_bonus() {
         raw_events: mind.events(),
         routes: RefCell::new(None),
         intent: &RefCell::new(None),
+        completed: &RefCell::default(),
+        formation_attempted: &std::cell::Cell::new(false),
+        response_completion: None,
         concepts: RefCell::new(crate::concepts::Reads::default()),
         series: crate::SeriesScore::default(),
     };
@@ -112,6 +115,9 @@ fn shortlist_preserves_a_joint_partner_known_resource_only_when_missing() {
             raw_events: mind.events(),
             routes: RefCell::new(None),
             intent: &RefCell::new(None),
+            completed: &RefCell::default(),
+            formation_attempted: &std::cell::Cell::new(false),
+            response_completion: None,
             concepts: RefCell::new(crate::concepts::Reads::default()),
             series: crate::SeriesScore::default(),
         };
@@ -167,6 +173,9 @@ fn expired_comparison_retains_c42_without_publishing_partial_outcomes() {
         raw_events: mind.events(),
         routes: RefCell::new(None),
         intent: &RefCell::new(None),
+        completed: &RefCell::default(),
+        formation_attempted: &std::cell::Cell::new(false),
+        response_completion: None,
         concepts: RefCell::new(crate::concepts::Reads::default()),
         series: view.series,
     };

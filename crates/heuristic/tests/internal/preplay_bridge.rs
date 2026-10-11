@@ -1,18 +1,18 @@
+use super::super::{
+    sequence::{Context, Limits},
+    BeliefScope,
+};
 use super::*;
-use crate::concepts::sequence::{inspect, Frontier, Offer, Receipt};
+use crate::concepts::sequence::{inspect, Frontier, Information, Offer, Receipt};
 use crate::concepts::value::{CohortMethod, Provenance};
 use agent::{SeatView, Table};
 use beliefs::{BeliefParams, Mind};
 use engine::{ActionType, Card, CardSet, GamePhase};
+use std::sync::Arc;
 
-fn table(swapped: bool) -> Table {
-    let mut hands: [Vec<Card>; 4] =
+fn table() -> Table {
+    let hands: [Vec<Card>; 4] =
         std::array::from_fn(|seat| (0..9).map(|card| Card::from_index((seat * 9 + card) as u8)).collect());
-    if swapped {
-        let old = hands[1][8];
-        hands[1][8] = hands[3][8];
-        hands[3][8] = old;
-    }
     Table::new(&hands)
 }
 
@@ -30,17 +30,23 @@ fn reader(view: &SeatView<'_>) -> Mind {
     mind
 }
 
-fn response(_: &SeatView<'_>, legal: &[GameAction], _: sequence::LeafBudget) -> Result<GameAction, SequenceError> {
-    Ok(*legal
-        .iter()
-        .find(|a| a.action_type == ActionType::StopBidding)
-        .or_else(|| legal.iter().find(|a| matches!(a.action_type, ActionType::Pass(_))))
-        .or_else(|| {
-            legal
-                .iter()
-                .find(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
-        })
-        .unwrap_or(&legal[0]))
+fn response(
+    _: &SeatView<'_>,
+    legal: &[GameAction],
+    _: sequence::LeafBudget,
+) -> Result<sequence::LeafResponse, sequence::LeafFailure> {
+    Ok(sequence::LeafResponse::unit(
+        *legal
+            .iter()
+            .find(|a| a.action_type == ActionType::StopBidding)
+            .or_else(|| legal.iter().find(|a| matches!(a.action_type, ActionType::Pass(_))))
+            .or_else(|| {
+                legal
+                    .iter()
+                    .find(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+            })
+            .unwrap_or(&legal[0]),
+    ))
 }
 
 fn respond(table: &mut Table) {
@@ -51,10 +57,11 @@ fn respond(table: &mut Table) {
         sequence::LeafBudget {
             deadline: None,
             remaining_transitions: 1000,
+            remaining_solver_nodes: None,
         },
     )
     .unwrap();
-    table.apply(action);
+    table.apply(action.action);
 }
 
 fn minimum_bid(table: &Table) -> GameAction {
@@ -72,7 +79,7 @@ fn minimum_bid(table: &Table) -> GameAction {
 }
 
 fn at_return() -> Table {
-    let mut table = table(false);
+    let mut table = table();
     table.apply(minimum_bid(&table));
     for _ in 0..16 {
         if table.game.state.phase == GamePhase::PassingBack {
@@ -98,7 +105,7 @@ fn context() -> Context {
 
 #[test]
 fn auction_receipt_waits_through_exchange_before_binding_play() {
-    let mut live = table(false);
+    let mut live = table();
     let bid = minimum_bid(&live);
     let root = bid.player.0;
     let candidate = intervention(bid, PHASE_RESPONSES);
@@ -216,7 +223,7 @@ fn return_receipt_spends_exact_cards_before_formation_and_rejects_another_alloca
 
 #[test]
 fn an_exhausted_phase_gate_defers_instead_of_finishing_a_tail() {
-    let initial = table(false);
+    let initial = table();
     let bid = minimum_bid(&initial);
     let context = context();
     let result = sequence::evaluate(
@@ -235,13 +242,52 @@ fn an_exhausted_phase_gate_defers_instead_of_finishing_a_tail() {
 
 #[test]
 fn post_exchange_root_choices_keep_the_joint_hidden_cohort() {
-    let first = table(false);
-    let second = table(true);
+    // Two root Aces survive the first return. A single Ace would force the
+    // opening lead and therefore produce no strategic choice assessment.
+    let mut hands: [Vec<Card>; 4] =
+        std::array::from_fn(|seat| (0..9).map(|card| Card::from_index((seat * 9 + card) as u8)).collect());
+    hands[0][0] = Card::from_index(17);
+    hands[1][8] = Card::from_index(0);
+    for hand in &mut hands {
+        hand.sort();
+    }
+    let first = Table::new(&hands);
+    // Only opponents' cards vary. Partner's observed pass and root's return
+    // remain identical, so the choice cannot be split by hidden hindsight.
+    let hidden = hands[1][1];
+    hands[1][1] = hands[3][1];
+    hands[3][1] = hidden;
+    let second = Table::new(&hands);
     let mut live = first.clone();
     let bid = minimum_bid(&first);
     assert_eq!(
         Information::of(&first.view(bid.player.0)),
         Information::of(&second.view(bid.player.0))
+    );
+    let openings = [first.clone(), second.clone()].map(|mut table| {
+        table.apply(bid);
+        for _ in 0..16 {
+            let (actor, legal) = table.to_act().unwrap();
+            if actor == bid.player.0 && legal.iter().any(|a| matches!(a.action_type, ActionType::CardPlayed(_))) {
+                let leads: Vec<_> = legal
+                    .iter()
+                    .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+                    .copied()
+                    .collect();
+                assert_eq!(leads.len(), 2, "a real post-exchange root choice");
+                return (Information::of(&table.view(actor)), leads);
+            }
+            respond(&mut table);
+        }
+        panic!("fixture did not reach its opening choice");
+    });
+    assert_eq!(
+        openings[0], openings[1],
+        "joint information survives the actual exchanges"
+    );
+    assert_ne!(
+        first.game.info.player_start_cards[1],
+        second.game.info.player_start_cards[1]
     );
     let mut candidate = intervention(bid, PHASE_RESPONSES);
     // Isolate the bridge from catalogue breadth: every legal lead is compared

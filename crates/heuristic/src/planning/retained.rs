@@ -73,6 +73,8 @@ pub struct SequenceTrace {
     pub terminals: std::sync::Arc<Vec<Terminal>>,
     pub work: Work,
     pub failure: Option<SequenceError>,
+    pub deferred_limit: Option<super::sequence::DeferredLimit>,
+    pub total_candidates: Option<usize>,
 }
 
 pub(super) fn view<'a>(ctx: &'a crate::Ctx<'_>) -> SeatView<'a> {
@@ -88,7 +90,7 @@ pub(super) fn view<'a>(ctx: &'a crate::Ctx<'_>) -> SeatView<'a> {
 /// Retry and exact predicted-observation reuse do no continuation search. A
 /// changed catalogue or unrepresented observation falls through to repair.
 pub(crate) fn prepared(ctx: &crate::Ctx<'_>, legal: &[GameAction]) -> Option<crate::Decision> {
-    if ctx.params.plan_worlds == 0 {
+    if ctx.params.plan_worlds == 0 && ctx.intent.borrow().is_none() {
         return None;
     }
     let view = view(ctx);
@@ -99,12 +101,44 @@ pub(crate) fn prepared(ctx: &crate::Ctx<'_>, legal: &[GameAction]) -> Option<cra
     }
     let (mode, offer) = if let Some(offer) = plan.pending(&view, legal) {
         (PlanMode::Retry, offer)
+    } else if let Some(offer) = super::preplay::prepared_response(plan, &view, legal, ctx.mind) {
+        (PlanMode::Prepared, offer)
     } else {
+        use crate::concepts::sequence::{bind_reconsideration, inspect, Frontier};
+        // Binding discovers today's complete opportunity domain. It does not
+        // choose a route or advance the live receipt. Only a matching recorded
+        // joint comparison below can authorize the installed continuation.
+        let mut required_retained = None;
+        let mut boundary_membership = None;
+        let reconsidered = match inspect(&plan.receipt.program, plan.receipt.stage, &view, legal, ctx.mind)
+            .ok()?
+            .frontier
+        {
+            Frontier::Reconsider { stage, .. } => {
+                let binding = bind_reconsideration(&plan.receipt.program, stage, &view, legal).ok()?;
+                required_retained = Some(binding.program.suffix(binding.retained).ok()?);
+                boundary_membership = Some(super::sequence::Membership {
+                    legal: legal.to_vec(),
+                    programs: binding
+                        .alternatives
+                        .iter()
+                        .map(|stage| binding.program.suffix(*stage))
+                        .collect::<Result<_, _>>()
+                        .ok()?,
+                });
+                let mut receipt = plan.receipt.clone();
+                receipt.install_reconsideration(&binding, &view, legal, ctx.mind).ok()?;
+                Some(receipt)
+            }
+            _ => None,
+        };
+        let receipt = reconsidered.as_ref().unwrap_or(&plan.receipt);
         let membership = super::sequence::Membership::authored(&view, legal).ok()?;
-        let retained_suffix = plan.receipt.program.suffix(plan.receipt.stage).ok()?;
+        let retained_suffix = receipt.program.suffix(receipt.stage).ok()?;
         let mut required = membership.programs.clone();
-        if !required.contains(&retained_suffix) {
-            required.push(retained_suffix.clone());
+        let retained_alternative = required_retained.as_ref().unwrap_or(&retained_suffix);
+        if !required.contains(retained_alternative) {
+            required.push(retained_alternative.clone());
         }
         // A generated catalogue records availability, not comparison coverage.
         // Only alternatives actually ranked on this same conditional support
@@ -132,16 +166,20 @@ pub(crate) fn prepared(ctx: &crate::Ctx<'_>, legal: &[GameAction]) -> Option<cra
                 })
                 .map(|(_, choice)| choice.clone()),
         );
-        let offer = super::sequence::prepared_lookup(
-            &plan.receipt,
+        let offer = super::sequence::prepared_lookup_with_boundary(
+            receipt,
             &view,
             legal,
             ctx.mind,
             &plan.context,
             &membership,
+            boundary_membership.as_ref(),
             &certified_path,
         )
         .ok()?;
+        if let Some(receipt) = reconsidered {
+            plan.receipt = receipt;
+        }
         (PlanMode::Prepared, offer)
     };
     plan.receipt.propose(offer.clone(), &view, legal).ok()?;
@@ -168,6 +206,8 @@ pub(crate) fn prepared(ctx: &crate::Ctx<'_>, legal: &[GameAction]) -> Option<cra
         terminals: std::sync::Arc::new(Vec::new()),
         work: Work::default(),
         failure: None,
+        deferred_limit: None,
+        total_candidates: None,
     });
     Some(crate::decision(
         &offer.action,
@@ -196,6 +236,7 @@ pub(crate) fn forced(ctx: &crate::Ctx<'_>, legal: &[GameAction]) {
             .ok()
             .and_then(|inspection| match inspection.frontier {
                 Frontier::Actions(offers) if offers.len() == 1 => offers.into_iter().next(),
+                Frontier::Response { next } if legal.len() == 1 => Some(Offer { action: legal[0], next }),
                 _ => None,
             })
     };
@@ -219,6 +260,8 @@ pub(crate) fn forced(ctx: &crate::Ctx<'_>, legal: &[GameAction]) {
         terminals: std::sync::Arc::new(Vec::new()),
         work: Work::default(),
         failure: Some(SequenceError::WrongContext),
+        deferred_limit: None,
+        total_candidates: None,
     });
 }
 
@@ -373,6 +416,35 @@ mod tests {
         assert_eq!(
             choice.selected, 1,
             "the newly compared route improves engine score difference"
+        );
+        // A composed global choice is not evidence that its retained child was
+        // evaluated. Its wrapper may be present while that child was omitted.
+        let global = Program {
+            name: "global-choice",
+            version: 1,
+            start: Stage(2),
+            nodes: vec![
+                Node::Tail,
+                Node::Action {
+                    actions: Actions::Exact(action.action_type),
+                    next: Stage(0),
+                },
+                Node::Choice(vec![Stage(0), Stage(1)]),
+            ],
+        }
+        .suffix(Stage(2))
+        .unwrap();
+        choice.semantic_suffix = global;
+        choice.alternatives.truncate(1);
+        choice.assessment = Some(
+            ValueStore::new(&[old.as_slice()], 0, provenance)
+                .unwrap()
+                .assess()
+                .unwrap(),
+        );
+        assert!(
+            !covers(&choice, &required),
+            "the retained child needs its own completed comparison"
         );
     }
 }

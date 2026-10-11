@@ -1,30 +1,14 @@
-//! Policy integration for the authored continuation definitions.
-use super::retained::{view, PlanMode, RetainedPlan, SequenceTrace};
-use super::sequence::{self, Candidate, Context, Limits, Work};
-use super::{BeliefScope, Forecast, PlanningAssessment};
-use crate::concepts::sequence::{authored_programs, Information, SequenceError};
-use crate::{fact, Ctx, Decision, RuleId};
+//! Phase nomination and scheduling for authored play continuations.
+use super::common::{self, Allowance, Failure, Mode};
+use super::retained::view;
+use super::sequence::Candidate;
+use super::Forecast;
+use crate::concepts::sequence::{authored_programs_with_reconsideration, SequenceError, MAX_RECONSIDERATIONS};
+use crate::{Ctx, Decision};
 use engine::GameAction;
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-fn evidence(ctx: &Ctx<'_>, mode: PlanMode, work: Work, failure: SequenceError) {
-    ctx.concepts.borrow_mut().sequence = Some(SequenceTrace {
-        mode,
-        information: Information::of(&view(ctx)),
-        scope: BeliefScope::CurrentInformation,
-        program: None,
-        choices: Vec::new(),
-        terminals: Arc::new(Vec::new()),
-        work,
-        failure: Some(failure),
-    });
-}
-
-/// This path owns selection in its declared finite family. An unfinished
-/// comparison is reported and leaves the supplied outside-scope fallback intact.
+/// Preserve the existing play catalogue, retained alternative and budget lane.
 pub(super) fn choose(ctx: &Ctx<'_>, legal: &[GameAction], mut fallback: Decision) -> Decision {
     let retained = ctx
         .intent
@@ -32,7 +16,10 @@ pub(super) fn choose(ctx: &Ctx<'_>, legal: &[GameAction], mut fallback: Decision
         .as_ref()
         .map(|plan| Candidate::suffix(&plan.receipt));
     let repairing = retained.is_some();
-    let full_formation = !repairing && ctx.k.played().is_empty();
+    let full_formation = !repairing && ctx.k.played().is_empty() && !ctx.formation_attempted.get();
+    if full_formation {
+        ctx.formation_attempted.set(true);
+    }
     let budget = if full_formation {
         super::BUDGET
     } else {
@@ -40,145 +27,51 @@ pub(super) fn choose(ctx: &Ctx<'_>, legal: &[GameAction], mut fallback: Decision
     };
     let own_deadline = Instant::now() + budget;
     let deadline = ctx.deadline.map_or(own_deadline, |outer| outer.min(own_deadline));
-    let defer = |fallback: &mut Decision, work: Work, error: SequenceError| {
-        evidence(ctx, PlanMode::Deferred, work, error);
-        if let Some(plan) = ctx.intent.borrow_mut().as_mut() {
-            // Keep semantic intent available for later repair, but invalidate
-            // its old predictions. The fallback is not a confirmed plan step.
-            plan.review_pending = true;
-            plan.prepared = Arc::new(Vec::new());
-            plan.receipt.pending = None;
-        }
-        fallback.why.extend([
-            fact("sequence_deferred", 1),
-            fact("sequence_transitions", work.transitions as u32),
-            fact("sequence_completed_candidates", work.completed_candidates as u32),
-        ]);
+    let mode = if repairing { Mode::Repair } else { Mode::Formation };
+    let requested_worlds = if ctx.params.plan_worlds > 0 {
+        ctx.params.plan_worlds as usize
+    } else {
+        // A return-only planner still owns the continuation it selected. Its
+        // repair preserves that declared cohort size instead of abandoning it.
+        ctx.intent
+            .borrow()
+            .as_ref()
+            .map_or(0, |plan| plan.origin.requested_worlds)
     };
-    let Some(forecast) = Forecast::new(ctx, ctx.params.plan_worlds as usize, deadline) else {
-        defer(&mut fallback, Work::default(), SequenceError::InvalidCohort);
+    let Some(forecast) = Forecast::new(ctx, requested_worlds, deadline) else {
+        common::defer(
+            ctx,
+            &mut fallback,
+            mode,
+            Failure::before_evaluation(SequenceError::InvalidCohort, None),
+        );
         return fallback;
     };
     let initial = view(ctx);
-    let mut candidates: Vec<_> = authored_programs(&initial, legal)
-        .into_iter()
-        .map(Candidate::new)
-        .collect();
+    let programs = match authored_programs_with_reconsideration(&initial, legal, MAX_RECONSIDERATIONS) {
+        Ok(programs) => programs,
+        Err(error) => {
+            common::defer(ctx, &mut fallback, mode, Failure::before_evaluation(error, None));
+            return fallback;
+        }
+    };
+    let mut candidates: Vec<_> = programs.into_iter().map(Candidate::new).collect();
     if let Some(retained) = retained {
         let suffix = retained.program.suffix(retained.stage).ok();
         if !candidates.iter().any(|c| c.program.suffix(c.stage).ok() == suffix) {
             candidates.push(retained);
         }
     }
-    let context = Context {
-        params: forecast.context.response_params.clone(),
-        seed: forecast.context.seed,
-        posterior_revision: ctx.mind.events().len() as u64,
-        provenance: forecast.provenance,
-    };
-    let limits = Limits {
-        transitions: if full_formation {
-            ctx.params.plan_formation_transitions as usize
-        } else {
-            ctx.params.plan_repair_transitions as usize
-        },
-        memo_bytes: ctx.params.plan_memo_mib as usize * 1024 * 1024,
-        deadline: Some(deadline),
-        ..Limits::default()
-    };
-    let mut players = forecast.players.borrow_mut();
-    let mut leaf = |actor: &agent::SeatView<'_>, actions: &[GameAction], allowance: sequence::LeafBudget| {
-        if allowance.remaining_transitions == 0 || allowance.deadline.is_some_and(|until| Instant::now() >= until) {
-            return Err(SequenceError::Budget);
-        }
-        // Fresh private hypothetical actors never receive a real player's plan.
-        // Their bounded search shares the caller's remaining soft deadline.
-        let action = players[actor.seat as usize]
-            .decide_before(actor, actions, allowance.deadline)
-            .action;
-        if allowance.deadline.is_some_and(|until| Instant::now() >= until) {
-            return Err(SequenceError::Budget);
-        }
-        Ok(action)
-    };
-    let compared = match sequence::evaluate(
-        &candidates,
-        &forecast.tables,
-        ctx.me,
-        forecast.provenance,
-        &context,
-        limits,
-        &mut leaf,
-    ) {
-        Ok(value) => value,
-        Err(deferred) => {
-            defer(&mut fallback, deferred.work, deferred.reason);
-            return fallback;
-        }
-    };
-    let selected = &compared.executions[compared.values.selected];
-    let action = selected.first.action;
-    let program = selected.candidate.program.suffix(selected.candidate.stage).ok();
-    let terminals = Arc::new(selected.terminals.clone());
-    let mode = if repairing {
-        PlanMode::Repair
+    let allowance = if full_formation {
+        Allowance::Formation
     } else {
-        PlanMode::Formation
+        Allowance::Repair
     };
-    let choices = compared
-        .prepared
-        .iter()
-        .filter(|choice| choice.information.matches(&initial))
-        .cloned()
-        .collect();
-    let trace = SequenceTrace {
-        mode,
-        information: Information::of(&initial),
-        scope: BeliefScope::CurrentInformation,
-        program,
-        choices,
-        terminals,
-        work: compared.work,
-        failure: None,
-    };
-    let actions = compared
-        .executions
-        .iter()
-        .map(|execution| execution.first.action)
-        .collect();
-    let value = &compared.values.candidates[compared.values.selected];
-    let decision = crate::decision(
-        &action,
-        RuleId::HP1,
-        vec![
-            fact("sequence_complete", 1),
-            fact("sequence_repaired", u8::from(repairing)),
-            fact("sequence_candidates", compared.executions.len() as u32),
-            fact("sequence_transitions", compared.work.transitions as u32),
-            fact(
-                "sequence_represented_transitions",
-                compared.work.represented_transitions as u32,
-            ),
-            fact("sequence_response_hits", compared.work.response_hits as u32),
-            fact("sequence_suffix_hits", compared.work.suffix_hits as u32),
-            fact("sequence_difference", value.difference),
-        ],
-    );
-    *ctx.intent.borrow_mut() = Some(RetainedPlan {
-        receipt: compared.receipt,
-        prepared: Arc::new(compared.prepared),
-        parameters: ctx.params.clone(),
-        origin: forecast.context.clone(),
-        context,
-        review_pending: false,
-        raw_events: ctx.raw_events.to_vec(),
-    });
-    let mut reads = ctx.concepts.borrow_mut();
-    reads.assessment = Some(PlanningAssessment {
-        actions,
-        values: compared.values,
-        context: forecast.context.clone(),
-    });
-    reads.sequence = Some(trace);
-    decision
+    match forecast.evaluate_programs(ctx, &candidates, allowance) {
+        Ok(evaluated) => forecast.install(ctx, evaluated, mode, fallback),
+        Err(failure) => {
+            common::defer(ctx, &mut fallback, mode, failure.into());
+            fallback
+        }
+    }
 }
