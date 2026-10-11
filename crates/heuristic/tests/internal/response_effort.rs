@@ -79,10 +79,6 @@ fn response_reports_equal_canonical_effort_after_solver_reuse_and_honors_cap() {
             .unwrap(),
         full
     );
-    assert_eq!(
-        policy.completed_response_before(&view, legal, deadline()).unwrap(),
-        full.decision
-    );
 }
 
 #[test]
@@ -124,7 +120,7 @@ fn solver_failure_cannot_publish_fallback_and_forced_action_needs_zero_nodes() {
         }
     );
     // Actual play still selects its bounded policy action after a strict failure.
-    assert!(legal.contains(&policy.decide_before(&view, legal, expired).action));
+    assert!(legal.contains(&policy.decide_scoped(&view, legal, expired, false, None).action));
 }
 
 #[test]
@@ -178,7 +174,7 @@ fn strict_response_rejects_recursive_forecasts_before_touching_actor_state() {
             assert!(policy.pending_decision.is_none());
             assert_eq!(policy.params, parameters, "no silent parameter changes");
         }
-        assert!(policy.completed_response_before(&view, legal, deadline()).is_none());
+
         // The ordinary live entry point retains its original policy contract.
         assert_eq!(policy.decide(&view, &legal[..1]).action, legal[0]);
     }
@@ -216,6 +212,7 @@ fn strict_response_rejects_retained_intent_without_consuming_or_clearing_it() {
     };
     let plan = RetainedPlan {
         receipt: Receipt::new(program, &view).unwrap(),
+        pending_legal: Vec::new(),
         prepared: std::sync::Arc::new(Vec::new()),
         parameters: params.clone(),
         origin: PlanningContext {

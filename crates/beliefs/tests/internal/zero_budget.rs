@@ -45,6 +45,88 @@ fn assert_no_model(mind: &Mind) {
 }
 
 #[test]
+fn direct_hard_reads_preserve_constraints_unknowns_and_conditional_semantics() {
+    let mut mind = mind();
+    mind.apply(&SeatEvent::Bid { seat: 2, value: 130 }).unwrap();
+    mind.apply(&SeatEvent::NoPair { seat: 2 }).unwrap();
+    let own = ConceptQuery::new(Concept::Card {
+        seat: 0,
+        card: card("g-6"),
+    });
+    let unknown = ConceptQuery::new(Concept::Card {
+        seat: 1,
+        card: card("g-A"),
+    });
+    let pair = ConceptQuery::new(Concept::Pair {
+        seat: 2,
+        suit: Suit::Green,
+    });
+    let absent = ConceptQuery::new(Concept::Card {
+        seat: 0,
+        card: card("g-A"),
+    });
+    assert_eq!(own.hard(mind.knowledge()).unwrap().known, Some(true));
+    assert_eq!(pair.hard(mind.knowledge()).unwrap().known, Some(false));
+    assert_eq!(unknown.hard(mind.knowledge()).unwrap().known, None);
+    let contradiction = ConceptQuery {
+        event: vec![
+            unknown.event[0],
+            Literal {
+                value: false,
+                ..unknown.event[0]
+            },
+        ],
+        given: vec![],
+    };
+    assert_eq!(contradiction.hard(mind.knowledge()).unwrap().known, Some(false));
+    let impossible = ConceptQuery {
+        given: absent.event.clone(),
+        ..own.clone()
+    };
+    assert_eq!(impossible.hard(mind.knowledge()).unwrap().bounds, None);
+    let conditional = ConceptQuery {
+        given: unknown.event.clone(),
+        ..own.clone()
+    };
+    let unresolved = conditional.hard(mind.knowledge()).unwrap();
+    assert_eq!(unresolved.known, Some(true));
+    assert_eq!(unresolved.conditional_fact, None);
+    assert!(!unresolved.complete);
+    for query in [own, unknown, pair, absent, contradiction, impossible, conditional] {
+        assert_eq!(query.hard(mind.knowledge()), mind.concept(&query, ZERO));
+        assert_no_model(&mind);
+    }
+    let invalid = ConceptQuery::new(Concept::Card { seat: 4, card: 0 });
+    assert_eq!(invalid.hard(mind.knowledge()), Err(ConceptError::InvalidConcept));
+    let oversized = ConceptQuery {
+        event: vec![Concept::Card { seat: 0, card: 0 }.into(); 33],
+        given: vec![],
+    };
+    assert_eq!(oversized.hard(mind.knowledge()), Err(ConceptError::QueryLimit));
+    assert_no_model(&mind);
+}
+
+#[test]
+fn direct_hard_reads_use_only_the_supplied_seat_knowledge() {
+    let root = mind();
+    let partner = Mind::new(
+        2,
+        cards("g-A g-K g-O e-A e-K e-O s-A s-K s-O"),
+        [SeatKind::Human; 4],
+        BeliefParams::default(),
+    );
+    let private = ConceptQuery::new(Concept::Card {
+        seat: 0,
+        card: card("g-6"),
+    });
+    assert_eq!(private.hard(root.knowledge()).unwrap().known, Some(true));
+    assert_eq!(private.hard(partner.knowledge()).unwrap().known, None);
+    assert_eq!(private.hard(partner.knowledge()), partner.concept(&private, ZERO));
+    assert_no_model(&root);
+    assert_no_model(&partner);
+}
+
+#[test]
 fn zero_concept_keeps_hard_truth_separate_from_unresolved_conditions() {
     let mut mind = mind();
     mind.apply(&SeatEvent::Bid { seat: 2, value: 130 }).unwrap();

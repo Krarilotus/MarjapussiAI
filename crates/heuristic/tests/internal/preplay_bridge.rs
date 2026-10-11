@@ -8,7 +8,10 @@ use crate::concepts::value::{CohortMethod, Provenance};
 use agent::{SeatView, Table};
 use beliefs::{BeliefParams, Mind};
 use engine::{ActionType, Card, CardSet, GamePhase};
-use std::sync::Arc;
+use std::{
+    cell::{Cell, RefCell},
+    sync::Arc,
+};
 
 fn table() -> Table {
     let hands: [Vec<Card>; 4] =
@@ -349,6 +352,7 @@ fn post_exchange_root_choices_keep_the_joint_hidden_cohort() {
     };
     let mut plan = RetainedPlan {
         receipt: result.receipt,
+        pending_legal: crate::legal_actions::eligible(live.to_act().unwrap().1),
         prepared: Arc::new(result.prepared),
         parameters: context.params.clone(),
         origin,
@@ -371,4 +375,213 @@ fn post_exchange_root_choices_keep_the_joint_hidden_cohort() {
     assert!(matches!(response.action.action_type, ActionType::Pass(_)));
     plan.context.seed += 1;
     assert!(prepared_response(&plan, &current, legal, &reader(&current)).is_none());
+}
+
+/// Exercise the actual live retained entry point, including acceptance and
+/// canonical eligible-domain identity, without starting a fallback comparison.
+fn prepared_turn(plan: &mut RetainedPlan, table: &Table) -> (Decision, super::super::retained::SequenceTrace) {
+    let (seat, raw_legal) = table.to_act().unwrap();
+    let legal = crate::legal_actions::eligible(raw_legal);
+    let view = table.view(seat);
+    let params = plan.parameters.clone();
+    plan.synchronize(&view, &view, &params).unwrap();
+    assert!(plan.receipt.pending.is_none());
+    assert!(plan.pending_legal.is_empty());
+    let mind = reader(&view);
+    let intent = RefCell::new(Some(plan.clone()));
+    let ctx = Ctx {
+        me: seat,
+        k: mind.knowledge(),
+        mind: &mind,
+        params: &params,
+        solver: &RefCell::new(None),
+        seed: plan.context.seed,
+        deadline: None,
+        raw_events: view.events,
+        routes: RefCell::new(None),
+        concepts: RefCell::new(crate::concepts::Reads::default()),
+        intent: &intent,
+        completed: &RefCell::new(sequence::CompletedCache::default()),
+        formation_attempted: &Cell::new(false),
+        response_completion: None,
+        series: view.series,
+    };
+    let decision = super::super::retained::prepared(&ctx, &legal)
+        .expect("an exactly represented live continuation must reach Prepared");
+    let trace = ctx.concepts.into_inner().sequence.unwrap();
+    assert_eq!(trace.mode, super::super::retained::PlanMode::Prepared);
+    assert!(matches!(trace.scope, BeliefScope::PreparedConditional { .. }));
+    assert_eq!(
+        trace.work,
+        sequence::Work::default(),
+        "live reuse does no evaluation work"
+    );
+    *plan = intent.into_inner().unwrap();
+    assert_eq!(plan.pending_legal, legal);
+    (decision, trace)
+}
+
+#[test]
+fn auction_and_return_reuse_the_real_depth_two_boundary_with_joint_support() {
+    let mut hands: [Vec<Card>; 4] =
+        std::array::from_fn(|seat| (0..9).map(|card| Card::from_index((seat * 9 + card) as u8)).collect());
+    // Two root opening Aces, a surviving own pair, and an opponent's high
+    // response suit. The response tail spends the pair; authored continuation
+    // can preserve activation/control instead. No production catalogue edits.
+    hands[0][0] = Card::from_index(17);
+    hands[1][8] = Card::from_index(0);
+    hands[1][1] = Card::from_index(26);
+    hands[2][8] = Card::from_index(10);
+    for hand in &mut hands {
+        hand.sort();
+    }
+    let first = Table::new(&hands);
+    // Opponents differ; both partnership hands and observed exchanges agree.
+    let hidden = hands[1][1];
+    hands[1][1] = hands[3][1];
+    hands[3][1] = hidden;
+    let second = Table::new(&hands);
+    let bid = *first
+        .to_act()
+        .unwrap()
+        .1
+        .iter()
+        .filter(|a| matches!(a.action_type, ActionType::NewBid(_)))
+        .max_by_key(|a| match a.action_type {
+            ActionType::NewBid(value) => value,
+            _ => unreachable!(),
+        })
+        .unwrap();
+    let root = bid.player.0;
+    let auction = [(first, 0.4), (second, 0.6)];
+    let returns = auction.clone().map(|(mut table, weight)| {
+        table.apply(bid);
+        for _ in 0..16 {
+            if table.to_act().unwrap().0 == root
+                && table
+                    .to_act()
+                    .unwrap()
+                    .1
+                    .iter()
+                    .any(|a| matches!(a.action_type, ActionType::Pass(_)))
+            {
+                return (table, weight);
+            }
+            respond(&mut table);
+        }
+        panic!("fixture did not reach return");
+    });
+    let returned = response(
+        &returns[0].0.view(root),
+        &crate::legal_actions::eligible(returns[0].0.to_act().unwrap().1),
+        sequence::LeafBudget {
+            deadline: None,
+            remaining_transitions: 1000,
+            remaining_solver_nodes: None,
+        },
+    )
+    .unwrap()
+    .action;
+    for (cohort, action) in [(auction, bid), (returns, returned)] {
+        let mut live = cohort[0].0.clone();
+        assert_eq!(
+            Information::of(&live.view(root)),
+            Information::of(&cohort[1].0.view(root))
+        );
+        let context = context();
+        let candidate = intervention(action, PHASE_RESPONSES);
+        assert!(candidate.program.nodes.iter().any(|node| matches!(
+            node,
+            Node::Reconsider {
+                remaining: MAX_BOUNDARY_DEPTH,
+                ..
+            }
+        )));
+        let result = sequence::evaluate(
+            &[candidate],
+            &cohort,
+            root,
+            context.provenance,
+            &context,
+            Limits {
+                transitions: 2_000_000,
+                comparisons: 131_072,
+                memo_bytes: 64 * 1024 * 1024,
+                ..Limits::default()
+            },
+            &mut response,
+        )
+        .unwrap();
+        assert_eq!(result.executions[0].terminals.len(), 2);
+        let initial = live.view(root);
+        let mut plan = RetainedPlan {
+            receipt: result.receipt,
+            pending_legal: crate::legal_actions::eligible(live.to_act().unwrap().1),
+            prepared: Arc::new(result.prepared),
+            parameters: context.params.clone(),
+            origin: super::super::PlanningContext {
+                observer: root,
+                belief_scope: BeliefScope::CurrentInformation,
+                knowledge: *initial.knowledge,
+                events: initial.events.to_vec(),
+                kinds: initial.kinds,
+                series: initial.series,
+                response_params: context.params.clone(),
+                seed: context.seed,
+                possible_allocations: 2,
+                requested_worlds: 2,
+                proposal_draws: 0,
+            },
+            context,
+            review_pending: false,
+            raw_events: initial.events.to_vec(),
+        };
+        live.apply(action);
+        if matches!(action.action_type, ActionType::NewBid(_)) {
+            while live.to_act().unwrap().0 != root {
+                respond(&mut live);
+            }
+            let (decision, trace) = prepared_turn(&mut plan, &live);
+            assert!(matches!(decision.action.action_type, ActionType::Pass(_)));
+            assert!(trace
+                .choices
+                .iter()
+                .any(|choice| choice.assessment.is_none() && choice.support == vec![(0, 0.4), (1, 0.6)]));
+            live.apply(decision.action);
+        }
+        let view = live.view(root);
+        let legal = crate::legal_actions::eligible(live.to_act().unwrap().1);
+        plan.synchronize(&view, &view, &plan.parameters.clone()).unwrap();
+        let Frontier::Reconsider { stage, remaining, .. } =
+            inspect(&plan.receipt.program, plan.receipt.stage, &view, &legal, &reader(&view))
+                .unwrap()
+                .frontier
+        else {
+            panic!("real post-exchange formation boundary");
+        };
+        assert_eq!(remaining, MAX_BOUNDARY_DEPTH);
+        let binding =
+            crate::concepts::sequence::bind_reconsideration(&plan.receipt.program, stage, &view, &legal).unwrap();
+        let boundary = binding.program.suffix(binding.program.start).unwrap();
+        let expected = plan
+            .prepared
+            .iter()
+            .find(|choice| choice.information.matches(&view) && choice.semantic_suffix == boundary)
+            .unwrap();
+        assert_eq!(expected.support, vec![(0, 0.4), (1, 0.6)]);
+        let assessment = expected.assessment.as_ref().unwrap();
+        assert!(assessment.cohort_complete);
+        assert!(
+            assessment.candidates[assessment.selected].difference > assessment.candidates[0].difference,
+            "fixture must select an authored continuation over the unrecorded response tail"
+        );
+        let expected = expected.clone();
+        let (decision, trace) = prepared_turn(&mut plan, &live);
+        assert!(legal.contains(&decision.action));
+        assert!(
+            trace.choices.contains(&expected),
+            "publish the actual jointly assessed boundary certificate"
+        );
+        assert_eq!(plan.receipt.program, binding.program);
+    }
 }

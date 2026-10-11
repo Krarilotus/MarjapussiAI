@@ -1,6 +1,7 @@
 use super::*;
 use crate::concepts::sequence::{Actions, Guard, Node};
 use crate::concepts::value::CohortMethod;
+use beliefs::BeliefParams;
 use engine::{ActionType, AnswerType, Card, CardSet, GamePhase, QuestionType, Suit};
 
 fn provenance() -> Provenance {

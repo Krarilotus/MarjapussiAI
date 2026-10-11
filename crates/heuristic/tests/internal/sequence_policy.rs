@@ -115,6 +115,7 @@ fn planned(table: &Table) -> (HeuristicAgent, GameAction) {
         .unwrap();
     *policy.intent.get_mut() = Some(RetainedPlan {
         receipt,
+        pending_legal: crate::legal_actions::eligible(legal),
         prepared: std::sync::Arc::new(Vec::new()),
         parameters: params,
         origin,
@@ -146,6 +147,71 @@ fn retry_and_clone_preserve_private_intent_without_spending_cards_or_replanning(
     *policy.solver.get_mut() = None;
     assert_eq!(policy.decide(&view, legal).action, expected);
     assert_eq!(policy.intent.borrow().as_ref().unwrap().receipt, before);
+}
+
+#[test]
+fn retained_retry_requires_the_complete_original_eligible_domain() {
+    let table = table();
+    let (seat, raw_legal) = table.to_act().unwrap();
+    let legal = crate::legal_actions::eligible(raw_legal);
+    let view = table.view(seat);
+    let (mut policy, action) = planned(&table);
+    let plan = policy.intent.get_mut().as_mut().unwrap();
+    assert!(legal.len() > 1);
+    assert_eq!(plan.pending(&view, &legal).unwrap().action, action);
+    let singleton = [action];
+    assert!(
+        plan.pending(&view, &singleton).is_none(),
+        "a narrowed domain is not a retry"
+    );
+    // A proposal initially authorized in a restricted domain must not hide a
+    // newly available alternative merely because its old action remains legal.
+    plan.pending_legal = singleton.to_vec();
+    assert_eq!(plan.pending(&view, &singleton).unwrap().action, action);
+    assert!(plan.pending(&view, &legal).is_none(), "an expanded domain needs review");
+    // Eligible-domain normalization is shared with live/model policy. Undo is
+    // not an alternative and input permutation does not change that domain.
+    plan.pending_legal = legal.clone();
+    let mut reordered = raw_legal.to_vec();
+    reordered.reverse();
+    assert_eq!(plan.pending(&view, &reordered).unwrap().action, action);
+}
+
+#[test]
+fn accepted_and_forced_proposals_clear_and_replace_the_pending_domain() {
+    let mut table = table();
+    let seat = table.to_act().unwrap().0;
+    let (mut policy, first) = planned(&table);
+    let params = policy.params.clone();
+    table.apply(first);
+    loop {
+        let (actor, legal) = table.to_act().unwrap();
+        if actor == seat {
+            break;
+        }
+        let action = *legal
+            .iter()
+            .find(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+            .unwrap();
+        table.apply(action);
+    }
+    let view = table.view(seat);
+    let plan = policy.intent.get_mut().as_mut().unwrap();
+    plan.synchronize(&view, &view, &params).unwrap();
+    assert!(plan.receipt.pending.is_none());
+    assert!(plan.pending_legal.is_empty(), "accepted proposals have no retry domain");
+    let next = *table
+        .to_act()
+        .unwrap()
+        .1
+        .iter()
+        .find(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+        .unwrap();
+    policy.decide(&view, &[next]);
+    let plan = policy.intent.borrow();
+    let plan = plan.as_ref().unwrap();
+    assert_eq!(plan.pending_legal, vec![next]);
+    assert_eq!(plan.pending(&view, &[next]).unwrap().action, next);
 }
 #[test]
 fn forced_actions_confirm_the_previous_step_and_propose_the_next_exactly_once() {
@@ -387,6 +453,7 @@ fn an_observed_global_choice_does_not_certify_an_unrecorded_tail_action() {
     assert_eq!(compared.executions[0].first.action, announce);
     *policy.intent.get_mut() = Some(RetainedPlan {
         receipt: compared.receipt,
+        pending_legal: crate::legal_actions::eligible(legal),
         prepared: std::sync::Arc::new(compared.prepared),
         parameters: params,
         origin,

@@ -12,6 +12,9 @@ use super::PlanningContext;
 #[derive(Clone, Debug, PartialEq)]
 pub struct RetainedPlan {
     pub receipt: Receipt,
+    /// Complete eligible domain that authorized the outstanding proposal.
+    /// Empty once accepted or invalidated; never inferred from the chosen move.
+    pub pending_legal: Vec<GameAction>,
     pub prepared: std::sync::Arc<Vec<PreparedChoice>>,
     pub parameters: Params,
     pub origin: PlanningContext,
@@ -40,6 +43,9 @@ impl RetainedPlan {
             return Err(SequenceError::HistoryChanged);
         }
         self.receipt.synchronize(canonical)?;
+        if self.receipt.pending.is_none() {
+            self.pending_legal.clear();
+        }
         self.raw_events = raw.events.to_vec();
         Ok(())
     }
@@ -48,7 +54,18 @@ impl RetainedPlan {
     /// and does not rerun the planning search. Changed context cannot hit here.
     pub fn pending(&self, view: &SeatView<'_>, legal: &[GameAction]) -> Option<Offer> {
         let offer = self.receipt.pending.as_ref()?;
-        (self.receipt.accepted.matches(view) && legal.contains(&offer.action)).then(|| offer.clone())
+        (self.receipt.accepted.matches(view)
+            && self.pending_legal == crate::legal_actions::eligible(legal)
+            && legal.contains(&offer.action))
+        .then(|| offer.clone())
+    }
+
+    /// Publish a proposal and its full comparison domain together. This also
+    /// covers forced moves, whose eligible singleton is the complete domain.
+    fn propose(&mut self, offer: Offer, view: &SeatView<'_>, legal: &[GameAction]) -> Result<(), SequenceError> {
+        self.receipt.propose(offer, view, legal)?;
+        self.pending_legal = crate::legal_actions::eligible(legal);
+        Ok(())
     }
 }
 
@@ -108,7 +125,6 @@ pub(crate) fn prepared(ctx: &crate::Ctx<'_>, legal: &[GameAction]) -> Option<cra
         // Binding discovers today's complete opportunity domain. It does not
         // choose a route or advance the live receipt. Only a matching recorded
         // joint comparison below can authorize the installed continuation.
-        let mut required_retained = None;
         let mut boundary_membership = None;
         let reconsidered = match inspect(&plan.receipt.program, plan.receipt.stage, &view, legal, ctx.mind)
             .ok()?
@@ -116,9 +132,8 @@ pub(crate) fn prepared(ctx: &crate::Ctx<'_>, legal: &[GameAction]) -> Option<cra
         {
             Frontier::Reconsider { stage, .. } => {
                 let binding = bind_reconsideration(&plan.receipt.program, stage, &view, legal).ok()?;
-                required_retained = Some(binding.program.suffix(binding.retained).ok()?);
                 boundary_membership = Some(super::sequence::Membership {
-                    legal: legal.to_vec(),
+                    legal: crate::legal_actions::eligible(legal),
                     programs: binding
                         .alternatives
                         .iter()
@@ -135,11 +150,18 @@ pub(crate) fn prepared(ctx: &crate::Ctx<'_>, legal: &[GameAction]) -> Option<cra
         let receipt = reconsidered.as_ref().unwrap_or(&plan.receipt);
         let membership = super::sequence::Membership::authored(&view, legal).ok()?;
         let retained_suffix = receipt.program.suffix(receipt.stage).ok()?;
-        let mut required = membership.programs.clone();
-        let retained_alternative = required_retained.as_ref().unwrap_or(&retained_suffix);
-        if !required.contains(retained_alternative) {
-            required.push(retained_alternative.clone());
-        }
+        let required = if let Some(boundary) = &boundary_membership {
+            // The boundary evaluated exactly this horizon-adjusted domain,
+            // including its retained child. Plain authored routes are different
+            // semantic suffixes and cannot substitute for these alternatives.
+            boundary.programs.clone()
+        } else {
+            let mut required = membership.programs.clone();
+            if !required.contains(&retained_suffix) {
+                required.push(retained_suffix.clone());
+            }
+            required
+        };
         // A generated catalogue records availability, not comparison coverage.
         // Only alternatives actually ranked on this same conditional support
         // can certify warm selection against today's authored routes.
@@ -182,7 +204,7 @@ pub(crate) fn prepared(ctx: &crate::Ctx<'_>, legal: &[GameAction]) -> Option<cra
         }
         (PlanMode::Prepared, offer)
     };
-    plan.receipt.propose(offer.clone(), &view, legal).ok()?;
+    plan.propose(offer.clone(), &view, legal).ok()?;
     let scope = super::BeliefScope::PreparedConditional {
         origin: crate::concepts::sequence::Information {
             seat: plan.origin.observer,
@@ -241,7 +263,7 @@ pub(crate) fn forced(ctx: &crate::Ctx<'_>, legal: &[GameAction]) {
             })
     };
     if let Some(offer) = offered {
-        if plan.receipt.propose(offer, &view, legal).is_ok() {
+        if plan.propose(offer, &view, legal).is_ok() {
             return;
         }
     }
@@ -251,6 +273,7 @@ pub(crate) fn forced(ctx: &crate::Ctx<'_>, legal: &[GameAction]) {
     plan.review_pending = true;
     plan.prepared = std::sync::Arc::new(Vec::new());
     plan.receipt.pending = None;
+    plan.pending_legal.clear();
     ctx.concepts.borrow_mut().sequence = Some(SequenceTrace {
         mode: PlanMode::Deferred,
         information: Information::of(&view),

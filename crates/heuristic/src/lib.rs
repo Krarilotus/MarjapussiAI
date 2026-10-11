@@ -11,6 +11,7 @@ mod concepts;
 mod endgame;
 mod hand;
 mod leads;
+mod legal_actions;
 mod params;
 pub mod passing;
 mod planning;
@@ -317,26 +318,6 @@ impl HeuristicAgent {
         self.decide_scoped(view, legal, None, true, None)
     }
 
-    pub(crate) fn decide_before(
-        &mut self,
-        view: &SeatView,
-        legal: &[GameAction],
-        deadline: Option<std::time::Instant>,
-    ) -> Decision {
-        self.decide_scoped(view, legal, deadline, false, None)
-    }
-
-    pub(crate) fn completed_response_before(
-        &mut self,
-        view: &SeatView,
-        legal: &[GameAction],
-        deadline: Option<std::time::Instant>,
-    ) -> Option<Decision> {
-        self.completed_response_with_effort_before(view, legal, deadline, None)
-            .ok()
-            .map(|completed| completed.decision)
-    }
-
     /// A completed response plus canonical endgame search effort, or failure
     /// with the effort already consumed. The optional caller-owned node budget
     /// applies across eligible solver calls; no default cap is introduced.
@@ -384,11 +365,7 @@ impl HeuristicAgent {
         let started = std::time::Instant::now();
         self.assessment = None;
         self.sequence = None;
-        let legal: Vec<GameAction> = legal
-            .iter()
-            .filter(|a| a.action_type != ActionType::UndoRequest)
-            .cloned()
-            .collect();
+        let legal = legal_actions::eligible(legal);
         assert!(!legal.is_empty(), "no legal action for seat {}", view.seat);
         // Forced actions also accept the current observation prefix. Intent and
         // cached evidence must never lag merely because this turn has no choice.
@@ -553,13 +530,20 @@ mod evidence_tests {
         response.params.plan_worlds = 0;
         response.params.return_worlds = 0;
         let expired = std::time::Instant::now() - std::time::Duration::from_millis(1);
-        assert!(response
-            .completed_response_before(&view, &[action], Some(expired))
-            .is_none());
         assert_eq!(
             response
-                .completed_response_before(&view, &[action], None)
+                .completed_response_with_effort_before(&view, &[action], Some(expired), None)
+                .unwrap_err(),
+            ResponseFailure {
+                reason: ResponseFailureReason::DeadlineElapsed,
+                canonical_solver_nodes: 0,
+            }
+        );
+        assert_eq!(
+            response
+                .completed_response_with_effort_before(&view, &[action], None, None)
                 .unwrap()
+                .decision
                 .action,
             action,
             "an applicable completed forced response needs no solver approximation"

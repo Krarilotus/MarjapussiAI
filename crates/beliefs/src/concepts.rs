@@ -76,6 +76,16 @@ pub struct ConceptQuery {
 }
 
 impl ConceptQuery {
+    /// The same proof/unresolved result as `Mind::concept` with zero budget,
+    /// using only the supplied observer's already-filtered hard knowledge.
+    /// Never constructs a Mind, deal space, likelihood model or soft estimate.
+    /// Unknown stays unknown, regardless of any model's zero-weight deals.
+    /// Callers must supply the intended actor's Knowledge; this does not infer
+    /// another player's perspective from the caller's private information.
+    pub fn hard(&self, knowledge: &Knowledge) -> Result<ConceptEstimate, ConceptError> {
+        Ok(hard_estimate(knowledge, &self.canonical()?))
+    }
+
     pub fn new(concept: Concept) -> Self {
         Self {
             event: vec![concept.into()],
@@ -238,14 +248,11 @@ impl Mind {
         budget.validate()?;
         let canonical = query.canonical()?;
         let query = &canonical;
-        let known = hard_conjunction(self.knowledge(), &query.event);
-        let condition = hard_conjunction(self.knowledge(), &query.given);
-        if condition == Some(false) || (condition == Some(true) && known.is_some()) {
-            return Ok(ConceptEstimate::proof(known, condition, !query.given.is_empty()));
+        let hard = hard_estimate(self.knowledge(), query);
+        if hard.complete || budget.max_nodes == 0 {
+            return Ok(hard);
         }
-        if budget.max_nodes == 0 {
-            return Ok(ConceptEstimate::unresolved(known));
-        }
+        let known = hard.known;
         let model = self.deal_model();
         self.ensure_concepts();
         let mut cache = self.cache.borrow_mut();
@@ -308,6 +315,17 @@ impl Mind {
         }
         store.queries.push((query.clone(), budget, result));
         Ok(result)
+    }
+}
+
+/// Shared zero-budget kernel. The query must already be canonical/validated.
+fn hard_estimate(knowledge: &Knowledge, query: &ConceptQuery) -> ConceptEstimate {
+    let known = hard_conjunction(knowledge, &query.event);
+    let condition = hard_conjunction(knowledge, &query.given);
+    if condition == Some(false) || (condition == Some(true) && known.is_some()) {
+        ConceptEstimate::proof(known, condition, !query.given.is_empty())
+    } else {
+        ConceptEstimate::unresolved(known)
     }
 }
 

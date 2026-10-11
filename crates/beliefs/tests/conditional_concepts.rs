@@ -569,6 +569,10 @@ fn zero_model_weight_counterexamples_do_not_become_hard_proofs() {
         seat: 2,
         card: c("e-8"),
     });
+    let hard = query.hard(mind.knowledge()).unwrap();
+    assert_eq!(hard, mind.concept(&query, ZERO).unwrap());
+    assert_eq!(hard.known, None);
+    assert!(!hard.complete);
     let result = mind.concept(&query, COMPLETE).unwrap();
     assert!(result.complete);
     assert!(result.resolved_condition_weight > 0.0);
@@ -577,6 +581,9 @@ fn zero_model_weight_counterexamples_do_not_become_hard_proofs() {
         result.known, None,
         "zero-weight true worlds are hard counterexamples to known-false"
     );
+    // Even after a completed model reports probability zero, the direct proof
+    // path remains unresolved and does not consume the model's cached result.
+    assert_eq!(query.hard(mind.knowledge()).unwrap(), hard);
     let conditional = ConceptQuery {
         given: vec![Concept::Card {
             seat: 2,

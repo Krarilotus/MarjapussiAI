@@ -7,12 +7,16 @@ use crate::concepts::sequence::{
 };
 use crate::concepts::value::{Assessment, Provenance, ValueStore};
 use agent::{SeatView, Table};
-use beliefs::{BeliefParams, ConceptBudget, Mind};
+use beliefs::Mind;
 use engine::{GameAction, GameFinishedInfo, GameOutcome, PlayPhase, PublicState};
 use std::time::Instant;
 
 mod reuse;
 pub use reuse::CompletedCache;
+#[cfg(test)]
+#[path = "../../tests/internal/sequence_hard_reads.rs"]
+mod hard_read_tests;
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Candidate {
@@ -166,14 +170,6 @@ pub struct Membership {
     pub legal: Vec<GameAction>,
     pub programs: Vec<Suffix>,
 }
-/// The live policy excludes takeback requests before choosing a game action.
-/// Keep that eligibility identity separate from the engine's raw legal list.
-fn policy_actions(legal: &[GameAction]) -> impl Iterator<Item = GameAction> + '_ {
-    legal
-        .iter()
-        .copied()
-        .filter(|action| action.action_type != engine::ActionType::UndoRequest)
-}
 impl Membership {
     pub fn from_candidates(legal: &[GameAction], candidates: &[Candidate]) -> Result<Self, SequenceError> {
         let mut programs = Vec::new();
@@ -184,11 +180,13 @@ impl Membership {
             }
         }
         Ok(Self {
-            legal: policy_actions(legal).collect(),
+            legal: crate::legal_actions::eligible(legal),
             programs,
         })
     }
     pub fn authored(view: &SeatView<'_>, legal: &[GameAction]) -> Result<Self, SequenceError> {
+        let eligible = crate::legal_actions::eligible(legal);
+        let legal = eligible.as_slice();
         Self::from_candidates(
             legal,
             &authored_programs(view, legal)
@@ -298,6 +296,8 @@ pub fn prepared_lookup_with_boundary(
     boundary_membership: Option<&Membership>,
     prepared: &[PreparedChoice],
 ) -> Result<Offer, NeedsReview> {
+    let eligible = crate::legal_actions::eligible(legal);
+    let legal = eligible.as_slice();
     if !receipt.accepted.matches(view) || receipt.pending.is_some() {
         return Err(NeedsReview);
     }
@@ -387,7 +387,7 @@ impl BranchKey {
         let (actor, legal) = branch
             .table
             .to_act()
-            .map(|(seat, legal)| (Some(seat), legal.to_vec()))
+            .map(|(seat, legal)| (Some(seat), crate::legal_actions::eligible(legal)))
             .unwrap_or_default();
         Self {
             views: std::array::from_fn(|seat| Information::of(&branch.table.view(seat as u8))),
@@ -554,6 +554,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         if self.responses.len() >= max_entries
             || bytes > self.limits.memo_bytes.saturating_sub(self.work.retained_bytes)
         {
+            let _timing = beliefs::profile::scope("sequence.eviction");
             // Reclaim optional traces first; drop capacities as well as elements.
             self.memo = Vec::new();
             self.tails = Vec::new();
@@ -575,9 +576,11 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         self.retain(bytes)
     }
     fn suffix(&mut self, program: &Program, stage: Stage) -> Result<Suffix, SequenceError> {
+        let _timing = beliefs::profile::scope("sequence.suffix");
         let mut cached = self.canonical.iter().position(|entry| entry.program == *program);
         if let Some(index) = cached {
             if let Some(suffix) = self.canonical[index].suffixes.get(stage.0).and_then(Option::as_ref) {
+                let _copy_timing = beliefs::profile::scope("sequence.suffix_copy");
                 return Ok(suffix.clone());
             }
         } else {
@@ -624,9 +627,14 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         Err(SequenceError::InvalidProgram)
     }
     fn membership(&mut self, view: &SeatView<'_>, legal: &[GameAction]) -> Result<Membership, SequenceError> {
-        if let Some(entry) = self.memberships.iter().find(|entry| {
-            entry.information.matches(view) && entry.membership.legal.iter().copied().eq(policy_actions(legal))
-        }) {
+        let _timing = beliefs::profile::scope("sequence.membership");
+        let eligible = crate::legal_actions::eligible(legal);
+        let legal = eligible.as_slice();
+        if let Some(entry) = self
+            .memberships
+            .iter()
+            .find(|entry| entry.information.matches(view) && entry.membership.legal == legal)
+        {
             return Ok(entry.membership.clone());
         }
         let mut programs = Vec::new();
@@ -637,7 +645,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
             }
         }
         let membership = Membership {
-            legal: policy_actions(legal).collect(),
+            legal: crate::legal_actions::eligible(legal),
             programs,
         };
         let bytes = 2
@@ -655,6 +663,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         Ok(membership)
     }
     fn response(&mut self, table: &Table) -> Result<GameAction, SequenceError> {
+        let _timing = beliefs::profile::scope("sequence.response");
         self.check()?;
         if self.work.represented_transitions >= self.limits.transitions {
             return Err(self.limited(DeferredLimit::RepresentedTransitions {
@@ -663,6 +672,8 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
             }));
         }
         let (seat, legal) = table.to_act().ok_or(SequenceError::WrongContext)?;
+        let eligible = crate::legal_actions::eligible(legal);
+        let legal = eligible.as_slice();
         let view = table.view(seat);
         if let Some((_, response)) = self
             .responses
@@ -730,6 +741,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
     }
 
     fn apply(&mut self, branch: &mut Branch, action: GameAction) -> Result<(), SequenceError> {
+        let _timing = beliefs::profile::scope("sequence.apply");
         self.check()?;
         if !branch.table.to_act().is_some_and(|(_, legal)| legal.contains(&action)) {
             return Err(SequenceError::IllegalAction);
@@ -764,11 +776,10 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         Ok(())
     }
     fn inspect(&mut self, branch: &Branch) -> Result<crate::concepts::sequence::Inspection, SequenceError> {
+        let _timing = beliefs::profile::scope("sequence.inspect");
         let view = branch.table.view(self.root);
-        let legal = branch.table.to_act().ok_or(SequenceError::WrongContext)?.1;
-        let mut mind = None;
-        let mut error = None;
-        let result = inspect_with(&branch.receipt.program, branch.receipt.stage, &view, legal, |query| {
+        let legal = crate::legal_actions::eligible(branch.table.to_act().ok_or(SequenceError::WrongContext)?.1);
+        inspect_with(&branch.receipt.program, branch.receipt.stage, &view, &legal, |query| {
             if let Some((_, _, truth)) = self
                 .hard_reads
                 .iter()
@@ -776,42 +787,17 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
             {
                 return *truth;
             }
-            // No construction for ordinary guards/bindings. Known queries build
-            // one lazy actor-local proof reader, zero DP/weights/traversal.
-            if mind.is_none() {
-                let mut reader = Mind::new(
-                    view.seat,
-                    view.knowledge.dealt_certain(view.seat),
-                    view.kinds,
-                    BeliefParams::base_only(),
-                );
-                for event in view.events {
-                    if reader.apply(event).is_err() {
-                        error = Some(SequenceError::WrongContext);
-                        return None;
-                    }
-                }
-                if reader.knowledge() != view.knowledge {
-                    error = Some(SequenceError::WrongContext);
-                    return None;
-                }
-                mind = Some(reader);
-            }
-            let truth = mind
-                .as_ref()
-                .and_then(|mind| mind.concept(query, ConceptBudget { max_nodes: 0 }).ok())
-                .and_then(|estimate| estimate.known);
+            // Table already owns the observer's filtered, tracked Knowledge.
+            // Use the same zero-budget proof kernel without replaying history
+            // or constructing a Mind; invalid queries remain unresolved here.
+            let truth = query.hard(view.knowledge).ok().and_then(|estimate| estimate.known);
             let information = Information::of(&view);
             let bytes = 2 * (info_bytes(&information) + query_bytes(query) + std::mem::size_of::<Option<bool>>());
             if self.hard_reads.len() < self.limits.memo_entries && self.retain_reusable(bytes) {
                 self.hard_reads.push((information, query.clone(), truth));
             }
             truth
-        });
-        if let Some(error) = error {
-            return Err(error);
-        }
-        result
+        })
     }
     fn drive(
         &mut self,
@@ -918,7 +904,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         branch.receipt.propose(
             offer.clone(),
             &branch.table.view(self.root),
-            branch.table.to_act().ok_or(SequenceError::WrongContext)?.1,
+            &crate::legal_actions::eligible(branch.table.to_act().ok_or(SequenceError::WrongContext)?.1),
         )?;
         self.first_step(branch, &offer)?;
         self.apply(branch, offer.action)
@@ -945,20 +931,25 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
     /// can be shared per complete hypothetical input without strategy fusion.
     /// This boundary also shares tails reached through different guard paths.
     fn tail(&mut self, mut branch: Branch, tail: Stage) -> Result<Terminal, SequenceError> {
-        let views = std::array::from_fn(|seat| Information::of(&branch.table.view(seat as u8)));
-        let legal = branch.table.to_act().ok_or(SequenceError::WrongContext)?.1.to_vec();
-        let cached = self
-            .limits
-            .reuse_suffixes
-            .then(|| {
-                self.tails
-                    .iter()
-                    .position(|run| run.views == views && run.legal == legal)
-            })
-            .flatten();
+        let (views, legal, cached) = {
+            let _timing = beliefs::profile::scope("sequence.tail_key");
+            let views = std::array::from_fn(|seat| Information::of(&branch.table.view(seat as u8)));
+            let legal = crate::legal_actions::eligible(branch.table.to_act().ok_or(SequenceError::WrongContext)?.1);
+            let cached = self
+                .limits
+                .reuse_suffixes
+                .then(|| {
+                    self.tails
+                        .iter()
+                        .position(|run| run.views == views && run.legal == legal)
+                })
+                .flatten();
+            (views, legal, cached)
+        };
         let (outcome, first, tricks, consumed) = if let Some(index) = cached {
             self.charge_work(self.tails[index].transitions, 0, self.tails[index].solver_nodes)?;
             self.work.suffix_hits += 1;
+            let _copy_timing = beliefs::profile::scope("sequence.memo_copy");
             let run = &self.tails[index];
             (run.outcome, run.first, run.tricks.clone(), run.consumed.clone())
         } else {
@@ -1001,16 +992,21 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
                 transitions: self.work.represented_transitions - before,
                 solver_nodes: self.work.represented_solver_nodes - solver_before,
             };
-            let bytes = 2
-                * (std::mem::size_of_val(&run)
-                    + run.views.iter().map(info_bytes).sum::<usize>()
-                    + vec_bytes(&run.legal)
-                    + vec_bytes(&run.tricks)
-                    + run.tricks.iter().map(|trick| info_bytes(&trick.root)).sum::<usize>()
-                    + vec_bytes(&run.consumed)
-                    + run.consumed.iter().map(consumed_bytes).sum::<usize>());
+            let bytes = {
+                let _timing = beliefs::profile::scope("sequence.tail_ledger");
+                let bytes = 2
+                    * (std::mem::size_of_val(&run)
+                        + run.views.iter().map(info_bytes).sum::<usize>()
+                        + vec_bytes(&run.legal)
+                        + vec_bytes(&run.tricks)
+                        + run.tricks.iter().map(|trick| info_bytes(&trick.root)).sum::<usize>()
+                        + vec_bytes(&run.consumed)
+                        + run.consumed.iter().map(consumed_bytes).sum::<usize>());
+                bytes
+            };
             if self.limits.reuse_suffixes && self.tails.len() < self.limits.memo_entries && self.retain_reusable(bytes)
             {
+                let _copy_timing = beliefs::profile::scope("sequence.memo_copy");
                 self.tails.push(TailRun {
                     views: run.views,
                     legal: run.legal,
@@ -1048,6 +1044,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         &mut self,
         executions: impl IntoIterator<Item = &'t [Terminal]>,
     ) -> Result<Assessment, SequenceError> {
+        let _timing = beliefs::profile::scope("sequence.values");
         self.charge(0, 1)?;
         self.work.comparisons += 1;
         let outcomes: Vec<Vec<_>> = executions
@@ -1068,34 +1065,46 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         prepared: &mut Vec<PreparedChoice>,
     ) -> Result<Vec<Terminal>, SequenceError> {
         self.check()?;
-        branches.sort_by_key(|branch| branch.origin);
-        let key = branches
-            .iter()
-            .map(|branch| {
-                let suffix = self.suffix(&branch.receipt.program, branch.receipt.stage)?;
-                let pending = branch
-                    .receipt
-                    .pending
-                    .as_ref()
-                    .map(|offer| self.selection(&branch.receipt.program, &Alternative::Offer(offer.clone())))
-                    .transpose()?;
-                Ok(BranchKey::of(branch, suffix, pending))
-            })
-            .collect::<Result<Vec<_>, SequenceError>>()?;
-        let prefixes: Vec<_> = branches
-            .iter_mut()
-            .map(|branch| {
-                (
-                    branch.origin,
-                    branch.first.take(),
-                    branch.first_program.take(),
-                    std::mem::take(&mut branch.tricks),
-                    std::mem::take(&mut branch.consumed),
-                    std::mem::take(&mut branch.interrupted),
-                )
-            })
-            .collect();
-        let cached = self.memo.iter().position(|run| run.key == key);
+        let key = {
+            let _timing = beliefs::profile::scope("sequence.joint_key");
+            branches.sort_by_key(|branch| branch.origin);
+            let key = branches
+                .iter()
+                .map(|branch| {
+                    let suffix = self.suffix(&branch.receipt.program, branch.receipt.stage)?;
+                    let pending = branch
+                        .receipt
+                        .pending
+                        .as_ref()
+                        .map(|offer| self.selection(&branch.receipt.program, &Alternative::Offer(offer.clone())))
+                        .transpose()?;
+                    Ok(BranchKey::of(branch, suffix, pending))
+                })
+                .collect::<Result<Vec<_>, SequenceError>>()?;
+            key
+        };
+        let prefixes = {
+            let _timing = beliefs::profile::scope("sequence.trace");
+            let prefixes: Vec<_> = branches
+                .iter_mut()
+                .map(|branch| {
+                    (
+                        branch.origin,
+                        branch.first.take(),
+                        branch.first_program.take(),
+                        std::mem::take(&mut branch.tricks),
+                        std::mem::take(&mut branch.consumed),
+                        std::mem::take(&mut branch.interrupted),
+                    )
+                })
+                .collect();
+            prefixes
+        };
+        let cached = {
+            let _timing = beliefs::profile::scope("sequence.memo_lookup");
+            let cached = self.memo.iter().position(|run| run.key == key);
+            cached
+        };
         let mut terminals = if let Some(index) = cached {
             self.charge_work(
                 self.memo[index].transitions,
@@ -1103,6 +1112,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
                 self.memo[index].solver_nodes,
             )?;
             self.work.suffix_hits += 1;
+            let _copy_timing = beliefs::profile::scope("sequence.memo_copy");
             prepared.extend(self.memo[index].prepared.iter().cloned());
             self.memo[index].terminals.clone()
         } else {
@@ -1115,6 +1125,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
                 && self.memo.len() < self.limits.memo_entries
                 && self.retain(run_bytes(&key, &terminals, &records))
             {
+                let _copy_timing = beliefs::profile::scope("sequence.memo_copy");
                 self.memo.push(CachedRun {
                     key,
                     terminals: terminals.clone(),
@@ -1127,6 +1138,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
             prepared.extend(records);
             terminals
         };
+        let _trace_timing = beliefs::profile::scope("sequence.trace");
         for terminal in &mut terminals {
             let (_, first, first_program, tricks, consumed, interrupted) = prefixes
                 .iter()
@@ -1200,6 +1212,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         let first = &group[0].branch;
         let view = first.table.view(self.root);
         let (actor, legal) = first.table.to_act().ok_or(SequenceError::WrongContext)?;
+        let legal = crate::legal_actions::eligible(legal);
         if actor != self.root {
             return Err(SequenceError::WrongContext);
         }
@@ -1214,11 +1227,9 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
                 return Err(SequenceError::WrongContext);
             };
             if !information.matches(&waiting.branch.table.view(self.root))
-                || !waiting
-                    .branch
-                    .table
-                    .to_act()
-                    .is_some_and(|(seat, actions)| seat == self.root && actions == legal)
+                || !waiting.branch.table.to_act().is_some_and(|(seat, actions)| {
+                    seat == self.root && crate::legal_actions::eligible(actions) == legal
+                })
                 || self.suffix(&waiting.branch.receipt.program, *next)? != next_suffix
             {
                 return Err(SequenceError::WrongContext);
@@ -1231,7 +1242,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
             context: self.context.clone(),
             // A fixed response has no strategically compared programme domain.
             // Only its exact eligible legal list and modeled input are certified.
-            membership: Membership::from_candidates(legal, &[])?,
+            membership: Membership::from_candidates(&legal, &[])?,
             alternatives: vec![Selection::Offer {
                 action,
                 next: next_suffix,
@@ -1264,37 +1275,42 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         prepared: &mut Vec<PreparedChoice>,
     ) -> Result<Vec<Terminal>, SequenceError> {
         self.check()?;
-        let first = &group[0].branch;
-        let view = first.table.view(self.root);
-        let legal = first.table.to_act().ok_or(SequenceError::WrongContext)?.1;
-        // finish_uncached grouped full root Information + canonical boundary
-        // BEFORE binding/ranking. The binder is pure data expansion, not policy.
-        let binding = match bind_reconsideration(&first.receipt.program, stage, &view, legal) {
-            Ok(binding) => binding,
-            Err(SequenceError::Budget) => return Err(self.limited(DeferredLimit::Reconsideration { remaining })),
-            Err(error) => return Err(error),
-        };
-        let membership = Membership {
-            legal: policy_actions(&binding.legal).collect(),
-            programs: binding
-                .alternatives
-                .iter()
-                .map(|stage| self.suffix(&binding.program, *stage))
-                .collect::<Result<_, _>>()?,
-        };
-        for waiting in &mut group {
-            if !matches!(waiting.alternatives.as_slice(), [Alternative::Reconsider { remaining: n, .. }] if *n == remaining)
-            {
-                return Err(SequenceError::WrongContext);
+        let membership = {
+            let _timing = beliefs::profile::scope("sequence.bind");
+            let first = &group[0].branch;
+            let view = first.table.view(self.root);
+            let legal = crate::legal_actions::eligible(first.table.to_act().ok_or(SequenceError::WrongContext)?.1);
+            // finish_uncached grouped full root Information + canonical boundary
+            // BEFORE binding/ranking. The binder is pure data expansion, not policy.
+            let binding = match bind_reconsideration(&first.receipt.program, stage, &view, &legal) {
+                Ok(binding) => binding,
+                Err(SequenceError::Budget) => return Err(self.limited(DeferredLimit::Reconsideration { remaining })),
+                Err(error) => return Err(error),
+            };
+            let membership = Membership {
+                legal: crate::legal_actions::eligible(&binding.legal),
+                programs: binding
+                    .alternatives
+                    .iter()
+                    .map(|stage| self.suffix(&binding.program, *stage))
+                    .collect::<Result<_, _>>()?,
+            };
+            for waiting in &mut group {
+                if !matches!(waiting.alternatives.as_slice(), [Alternative::Reconsider { remaining: n, .. }] if *n == remaining)
+                {
+                    return Err(SequenceError::WrongContext);
+                }
+                let view = waiting.branch.table.view(self.root);
+                let legal =
+                    crate::legal_actions::eligible(waiting.branch.table.to_act().ok_or(SequenceError::WrongContext)?.1);
+                waiting
+                    .branch
+                    .receipt
+                    .install_reconsideration_at_frontier(&binding, &view, &legal)?;
+                waiting.alternatives = binding.alternatives.iter().copied().map(Alternative::Stage).collect();
             }
-            let view = waiting.branch.table.view(self.root);
-            let legal = waiting.branch.table.to_act().ok_or(SequenceError::WrongContext)?.1;
-            waiting
-                .branch
-                .receipt
-                .install_reconsideration_at_frontier(&binding, &view, legal)?;
-            waiting.alternatives = binding.alternatives.iter().copied().map(Alternative::Stage).collect();
-        }
+            membership
+        };
         self.choose_bound(group, prepared, Some(membership))
     }
     fn choose_bound(
@@ -1336,18 +1352,22 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         // Lazy depth-first demand, one child cohort at a time. Equal semantic
         // alternatives/suffixes use finish memo; unfinished children never rank.
         for index in 0..alternatives.len() {
-            let mut children = Vec::new();
-            for waiting in &group {
-                let mut branch = waiting.branch.clone();
-                match &waiting.alternatives[index] {
-                    Alternative::Stage(stage) => branch.receipt.stage = *stage,
-                    Alternative::Offer(offer) => self.commit(&mut branch, offer.clone())?,
-                    Alternative::Reconsider { .. } | Alternative::Response { .. } => {
-                        return Err(SequenceError::InvalidProgram)
+            let children = {
+                let _timing = beliefs::profile::scope("sequence.child_cohort");
+                let mut children = Vec::new();
+                for waiting in &group {
+                    let mut branch = waiting.branch.clone();
+                    match &waiting.alternatives[index] {
+                        Alternative::Stage(stage) => branch.receipt.stage = *stage,
+                        Alternative::Offer(offer) => self.commit(&mut branch, offer.clone())?,
+                        Alternative::Reconsider { .. } | Alternative::Response { .. } => {
+                            return Err(SequenceError::InvalidProgram)
+                        }
                     }
+                    children.push(branch);
                 }
-                children.push(branch);
-            }
+                children
+            };
             let mut child_records = Vec::new();
             outcomes.push(self.finish(children, &mut child_records)?);
             records.push(child_records);
@@ -1445,6 +1465,8 @@ pub fn evaluate_with_cache<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) ->
             .to_act()
             .filter(|(seat, _)| *seat == root)
             .ok_or(SequenceError::WrongContext)?;
+        let eligible = crate::legal_actions::eligible(legal);
+        let legal = eligible.as_slice();
         let mut mass = 0.0;
         for (table, weight) in cohort {
             if !weight.is_finite()
@@ -1452,7 +1474,7 @@ pub fn evaluate_with_cache<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) ->
                 || !information.matches(&table.view(root))
                 || !table
                     .to_act()
-                    .is_some_and(|(seat, actions)| seat == root && actions == legal)
+                    .is_some_and(|(seat, actions)| seat == root && crate::legal_actions::eligible(actions) == legal)
             {
                 return Err(SequenceError::InvalidCohort);
             }
@@ -1466,20 +1488,24 @@ pub fn evaluate_with_cache<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) ->
             session.suffix(&candidate.program, candidate.stage)?;
             let mut initial_receipt = Receipt::new(candidate.program.clone(), &original)?;
             initial_receipt.stage = candidate.stage;
-            let mut branches = Vec::new();
-            for (origin, (table, weight)) in cohort.iter().enumerate() {
-                branches.push(Branch {
-                    table: table.clone(),
-                    origin,
-                    weight: *weight,
-                    receipt: initial_receipt.clone(),
-                    first: None,
-                    first_program: None,
-                    tricks: Vec::new(),
-                    consumed: Vec::new(),
-                    interrupted: false,
-                });
-            }
+            let branches = {
+                let _timing = beliefs::profile::scope("sequence.initial_cohort");
+                let mut branches = Vec::new();
+                for (origin, (table, weight)) in cohort.iter().enumerate() {
+                    branches.push(Branch {
+                        table: table.clone(),
+                        origin,
+                        weight: *weight,
+                        receipt: initial_receipt.clone(),
+                        first: None,
+                        first_program: None,
+                        tricks: Vec::new(),
+                        consumed: Vec::new(),
+                        interrupted: false,
+                    });
+                }
+                branches
+            };
             let mut prepared = Vec::new();
             let terminals = session.finish(branches, &mut prepared)?;
             if terminals.len() != cohort.len() {
@@ -1630,6 +1656,7 @@ fn prepared_bytes(p: &PreparedChoice) -> usize {
 }
 /// Estimate the owned cache payload from borrowed results, BEFORE cloning it.
 fn run_bytes(key: &Vec<BranchKey>, terminals: &Vec<Terminal>, prepared: &Vec<PreparedChoice>) -> usize {
+    let _timing = beliefs::profile::scope("sequence.run_ledger");
     2 * (std::mem::size_of::<CachedRun>()
         + vec_bytes(key)
         + key
@@ -1661,6 +1688,7 @@ fn run_bytes(key: &Vec<BranchKey>, terminals: &Vec<Terminal>, prepared: &Vec<Pre
 mod tests {
     // Keep the owner's fixture corrections in their existing source file.
     include!("../../tests/internal/sequence_execution.rs");
+    include!("../../tests/internal/canonical_domains.rs");
 
     fn joint_fixture() -> (u8, Vec<GameAction>, Vec<(Table, f64)>) {
         let table = at_lead();
@@ -1892,7 +1920,7 @@ mod tests {
                 },
             ],
         };
-        let binding = bind_reconsideration(&program, program.start, &view, legal).unwrap();
+        let binding = bind_reconsideration(&program, program.start, &view, &crate::legal_actions::eligible(legal)).unwrap();
         let expected = binding
             .alternatives
             .iter()
@@ -1948,7 +1976,7 @@ mod tests {
         let table = two_cards_at_lead();
         let (root, legal) = table.to_act().unwrap();
         let view = table.view(root);
-        let eligible: Vec<_> = policy_actions(legal).collect();
+        let eligible = crate::legal_actions::eligible(legal);
         // Table already filters control requests. Inject one to test canonical
         // membership normalization independently of the engine/policy boundary.
         let mut with_control = legal.to_vec();
@@ -2146,7 +2174,7 @@ mod tests {
         let calls = std::cell::Cell::new(0usize);
         let mut completed = |view: &SeatView<'_>, actions: &[GameAction], budget| {
             if initial.matches(view) {
-                assert_eq!(actions, legal);
+                assert_eq!(actions, crate::legal_actions::eligible(&legal));
                 calls.set(calls.get() + 1);
             }
             leaf(view, actions, budget)
@@ -2178,7 +2206,7 @@ mod tests {
         assert_eq!(record.selected, 0);
         assert!(record.assessment.is_none());
         assert!(record.membership.programs.is_empty());
-        assert_eq!(record.membership.legal, policy_actions(&legal).collect::<Vec<_>>());
+        assert_eq!(record.membership.legal, crate::legal_actions::eligible(&legal));
         assert_eq!(record.support, [(0, 1.0 / 3.0), (1, 2.0 / 3.0)]);
         let [Selection::Offer { action, next }] = record.alternatives.as_slice() else {
             panic!("fixed response must have exactly one executable offer");
@@ -2565,7 +2593,7 @@ mod cache_tests {
         assert!(session.work.retained_bytes <= session.limits.memo_bytes);
     }
     #[test]
-    fn membership_reuse_requires_exact_private_view_and_ordered_legal_actions() {
+    fn membership_reuse_requires_exact_private_view_and_canonical_legal_domain() {
         let context = context();
         let mut leaf = no_leaf;
         let mut session = session(&context, &mut leaf, Limits::default());
@@ -2588,7 +2616,7 @@ mod cache_tests {
             session.membership(&view, &reordered).unwrap(),
             Membership::authored(&view, &reordered).unwrap()
         );
-        assert_eq!(session.memberships.len(), entries + 1);
+        assert_eq!(session.memberships.len(), entries);
         let card = hands[0][0];
         hands[0][0] = hands[1][0];
         hands[1][0] = card;
@@ -2599,7 +2627,7 @@ mod cache_tests {
             session.membership(&view, legal).unwrap(),
             Membership::authored(&view, legal).unwrap()
         );
-        assert_eq!(session.memberships.len(), entries + 2);
+        assert_eq!(session.memberships.len(), entries + 1);
     }
     #[test]
     fn dependency_cache_exhaustion_falls_back_without_retaining_or_skipping_validation() {

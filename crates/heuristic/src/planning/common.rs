@@ -76,6 +76,7 @@ pub(super) fn defer(ctx: &Ctx<'_>, fallback: &mut Decision, mode: Mode, failure:
         plan.review_pending = true;
         plan.prepared = Arc::new(Vec::new());
         plan.receipt.pending = None;
+        plan.pending_legal.clear();
     }
     if matches!(mode, Mode::Preplay { .. }) {
         fallback.why.extend([
@@ -103,6 +104,7 @@ impl Forecast {
         candidates: &[Candidate],
         allowance: Allowance,
     ) -> Result<Evaluated, Deferred> {
+        let _timing = beliefs::profile::scope("sequence.evaluate");
         let context = Context {
             params: self.context.response_params.clone(),
             seed: self.context.seed,
@@ -207,6 +209,13 @@ impl Forecast {
             .collect();
         *ctx.intent.borrow_mut() = Some(RetainedPlan {
             receipt: compared.receipt,
+            pending_legal: crate::legal_actions::eligible(
+                self.tables[0]
+                    .0
+                    .to_act()
+                    .expect("completed comparison has a root action")
+                    .1,
+            ),
             prepared: Arc::new(compared.prepared),
             parameters: ctx.params.clone(),
             origin: self.context.clone(),
