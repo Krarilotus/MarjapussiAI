@@ -637,6 +637,21 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
             || bytes > self.limits.memo_bytes.saturating_sub(self.work.retained_bytes)
         {
             let _timing = beliefs::profile::scope("sequence.eviction");
+            #[cfg(feature = "profile")]
+            {
+                // Fixed event labels only: no keys, payloads or lost-key count.
+                // The original pressure condition above retains its short circuit.
+                let entries = self.responses.len() >= max_entries;
+                let bytes = bytes > self.limits.memo_bytes.saturating_sub(self.work.retained_bytes);
+                drop(beliefs::profile::scope(match (entries, bytes) {
+                    (true, true) => "sequence.eviction.reason.both",
+                    (true, false) => "sequence.eviction.reason.entries",
+                    _ => "sequence.eviction.reason.bytes",
+                }));
+                if !self.memo.is_empty() {
+                    drop(beliefs::profile::scope("sequence.eviction.memo_nonempty"));
+                }
+            }
             // Reclaim optional traces first; drop capacities as well as elements.
             self.memo = Vec::new();
             self.tails = Vec::new();
@@ -1255,6 +1270,13 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
             let cached = self.memo.iter().position(|run| run.key == key);
             cached
         };
+        // Short event scopes count lookup outcomes, independently of whether a
+        // found result can be charged or a missing dependency later completes.
+        drop(beliefs::profile::scope(if cached.is_some() {
+            "sequence.finish.lookup_hit"
+        } else {
+            "sequence.finish.lookup_miss"
+        }));
         let mut terminals = if let Some(index) = cached {
             self.charge_work(
                 self.memo[index].transitions,
@@ -1262,7 +1284,7 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
                 self.memo[index].solver_nodes,
             )?;
             self.work.suffix_hits += 1;
-            let _copy_timing = beliefs::profile::scope("sequence.memo_copy");
+            let _copy_timing = beliefs::profile::scope("sequence.finish.hit_copy");
             prepared.extend(self.memo[index].prepared.iter().cloned());
             self.memo[index].terminals.clone()
         } else {
@@ -1271,11 +1293,16 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
             let solver_before = self.work.represented_solver_nodes;
             let mut records = Vec::new();
             let terminals = self.finish_uncached(branches, &mut records)?;
-            if self.limits.reuse_suffixes
-                && self.memo.len() < self.limits.memo_entries
-                && self.retain(run_bytes(&key, &terminals, &records))
-            {
-                let _copy_timing = beliefs::profile::scope("sequence.memo_copy");
+            // Preserve the original left-to-right short circuit: disabled and
+            // full-entry cases must not compute run_bytes or attempt retention.
+            if !self.limits.reuse_suffixes {
+                drop(beliefs::profile::scope("sequence.finish.not_retained.disabled"));
+            } else if self.memo.len() >= self.limits.memo_entries {
+                drop(beliefs::profile::scope("sequence.finish.not_retained.entry_cap"));
+            } else if !self.retain(run_bytes(&key, &terminals, &records)) {
+                drop(beliefs::profile::scope("sequence.finish.not_retained.byte_cap"));
+            } else {
+                let _copy_timing = beliefs::profile::scope("sequence.finish.store_copy");
                 self.memo.push(CachedRun {
                     key,
                     terminals: terminals.clone(),
@@ -1284,6 +1311,7 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
                     comparisons: self.work.represented_comparisons - comparisons_before,
                     solver_nodes: self.work.represented_solver_nodes - solver_before,
                 });
+                drop(beliefs::profile::scope("sequence.finish.stored"));
             }
             prepared.extend(records);
             terminals
@@ -1301,6 +1329,11 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
             terminal.tricks.splice(0..0, tricks.iter().cloned());
             terminal.consumed.splice(0..0, consumed.iter().cloned());
             terminal.interrupted |= interrupted;
+        }
+        if cached.is_some() {
+            // A lookup hit rejected by charging or prefix reattachment is not
+            // a served result. No event is emitted on those error paths.
+            drop(beliefs::profile::scope("sequence.finish.hit_served"));
         }
         Ok(terminals)
     }
@@ -2837,7 +2870,22 @@ mod cache_tests {
             }
             // Use the real batch eviction path, then demand the same suffixes.
             // A response filling the whole byte allowance evicts reusable data.
+            #[cfg(feature = "profile")]
+            let before_eviction = beliefs::profile::snapshot();
             assert!(session.retain_response(session.limits.memo_bytes) || entries == 0);
+            #[cfg(feature = "profile")]
+            {
+                let after = beliefs::profile::snapshot();
+                let delta = |label: &str| {
+                    after.get(label).map_or(0, |timing| timing.calls)
+                        - before_eviction.get(label).map_or(0, |timing| timing.calls)
+                };
+                assert_eq!(delta("sequence.eviction.reason.bytes"), u64::from(entries > 0));
+                assert_eq!(delta("sequence.eviction.reason.entries"), 0);
+                assert_eq!(delta("sequence.eviction.reason.both"), 0);
+                // This fixture clears canonical entries, not completed runs.
+                assert_eq!(delta("sequence.eviction.memo_nonempty"), 0);
+            }
             assert!(session.canonical.is_empty());
             assert_eq!(session.find_stage(&duplicated, &duplicated.suffix(Stage(3)).unwrap()), Ok(Stage(0)));
             assert_eq!(session.work.represented_transitions, 0);

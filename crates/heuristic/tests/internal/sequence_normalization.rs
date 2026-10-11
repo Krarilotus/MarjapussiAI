@@ -392,6 +392,15 @@ fn sibling_tail_unique_allowance_matches_cache_disabled_cold_and_warm() {
 
 #[test]
 fn sibling_tail_completed_parent_memo_preserves_unique_work_and_selected_support() {
+    #[cfg(feature = "profile")]
+    let assert_events = |expected: &[(&str, u64)]| {
+        let timings = beliefs::profile::snapshot();
+        for (label, count) in expected {
+            assert_eq!(timings.get(*label).map_or(0, |timing| timing.calls), *count, "{label}");
+        }
+    };
+    #[cfg(feature = "profile")]
+    beliefs::profile::reset();
     let (root, cohort) = cohort();
     let context = context();
     let first = Candidate::new(program(&[3, 0, 2, 4]));
@@ -412,6 +421,19 @@ fn sibling_tail_completed_parent_memo_preserves_unique_work_and_selected_support
         &mut response,
     )
     .unwrap();
+    #[cfg(feature = "profile")]
+    {
+        assert_events(&[
+            ("sequence.finish.lookup_miss", 2),
+            ("sequence.finish.lookup_hit", 0),
+            ("sequence.finish.not_retained.disabled", 2),
+            ("sequence.finish.not_retained.entry_cap", 0),
+            ("sequence.finish.not_retained.byte_cap", 0),
+            ("sequence.finish.stored", 0),
+            ("sequence.run_ledger", 0),
+        ]);
+        beliefs::profile::reset();
+    }
     let cached = evaluate(
         &candidates,
         &cohort,
@@ -427,6 +449,78 @@ fn sibling_tail_completed_parent_memo_preserves_unique_work_and_selected_support
         &mut response,
     )
     .unwrap();
+    #[cfg(feature = "profile")]
+    {
+        assert_events(&[
+            ("sequence.finish.lookup_miss", 1),
+            ("sequence.finish.lookup_hit", 1),
+            ("sequence.finish.hit_served", 1),
+            ("sequence.finish.hit_copy", 1),
+            ("sequence.finish.store_copy", 1),
+            ("sequence.finish.stored", 1),
+            ("sequence.finish.not_retained.disabled", 0),
+            ("sequence.finish.not_retained.entry_cap", 0),
+            ("sequence.finish.not_retained.byte_cap", 0),
+            ("sequence.run_ledger", 1),
+        ]);
+        // Reuse this real completed-parent fixture to classify admission loss.
+        // Zero entries AND bytes must select the earlier entry-cap branch,
+        // without doing the payload ledger calculation for rejected admission.
+        for (entries, label, ledgers) in [
+            (0, "sequence.finish.not_retained.entry_cap", 0),
+            (128, "sequence.finish.not_retained.byte_cap", 2),
+        ] {
+            beliefs::profile::reset();
+            let run = evaluate(
+                &candidates,
+                &cohort,
+                root,
+                context.provenance,
+                &context,
+                Limits {
+                    memo_entries: entries,
+                    memo_bytes: 0,
+                    ..limits(true)
+                },
+                &mut response,
+            )
+            .unwrap();
+            assert_eq!(run.values, uncached.values);
+            assert_eq!(run.executions, uncached.executions);
+            assert_eq!(run.receipt, uncached.receipt);
+            assert_events(&[
+                ("sequence.finish.lookup_miss", 2),
+                ("sequence.finish.lookup_hit", 0),
+                ("sequence.finish.stored", 0),
+                ("sequence.finish.not_retained.disabled", 0),
+                (label, 2),
+                ("sequence.run_ledger", ledgers),
+            ]);
+        }
+        beliefs::profile::reset();
+        let rejected = evaluate(
+            &candidates,
+            &cohort,
+            root,
+            context.provenance,
+            &context,
+            Limits {
+                transitions: uncached.work.represented_transitions - 1,
+                ..limits(true)
+            },
+            &mut response,
+        )
+        .unwrap_err();
+        assert_eq!(rejected.reason, SequenceError::Budget);
+        assert_eq!(rejected.work.completed_candidates, 1);
+        assert_events(&[
+            ("sequence.finish.lookup_miss", 1),
+            ("sequence.finish.lookup_hit", 1),
+            ("sequence.finish.stored", 1),
+            ("sequence.finish.hit_copy", 0),
+            ("sequence.finish.hit_served", 0),
+        ]);
+    }
 
     // One local Choice per parent, plus the outer candidate comparison.
     // Tail/response hits alone CANNOT eliminate a ValueStore comparison or the
