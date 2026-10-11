@@ -153,8 +153,9 @@ pub(super) fn support_subsequence(child: &[(usize, f64)], parent: &[(usize, f64)
 fn literal_tail(suffix: &Suffix) -> bool {
     suffix.nodes.as_slice() == [Node::Tail] && suffix.start == Stage(0)
 }
-/// Deliberately narrow. No future guard is queried or skipped, no empty binding
-/// escape, Response/Deferred/Reconsider/nested choice or authored gate is bypassed.
+/// Incumbents remain deliberately narrow: a legal card followed by literal Tail,
+/// or literal Tail itself. Broader suffixes can legitimately interrupt on an
+/// empty binding, which is not admitted as completed selected evidence here.
 fn exact_card(selection: &Selection) -> Option<GameAction> {
     match selection {
         Selection::Offer { action, next }
@@ -175,6 +176,69 @@ fn stage_card(suffix: &Suffix) -> Option<ActionType> {
             next,
         } if matches!(suffix.nodes.get(next.0), Some(Node::Tail)) => Some(*action),
         _ => None,
+    }
+}
+
+fn incumbent_admitted(selection: &Selection, root: u8, legal: &[GameAction]) -> bool {
+    match selection {
+        Selection::Stage(suffix) if literal_tail(suffix) => true,
+        Selection::Offer { .. } => {
+            exact_card(selection).is_some_and(|action| action.player.0 == root && legal.contains(&action))
+        }
+        Selection::Stage(suffix) => stage_card(suffix).is_some_and(|kind| {
+            legal
+                .iter()
+                .any(|action| action.player.0 == root && action.action_type == kind)
+        }),
+    }
+}
+
+/// Enclosure of successful forward terminal completions, NOT model totality,
+/// future legality, guard truth, feasibility or a promise to finish within Work.
+/// Validate normally, then inspect every reachable arm without reading facts or
+/// binding actions. All finite admitted paths end at an actual Tail. Thus an
+/// empty card binding's existing Interrupted -> Tail escape is also enclosed;
+/// it does not become a successful authored action or a losing receipt.
+fn card_tail_suffix(suffix: &Suffix) -> bool {
+    let program = Program {
+        name: "completion-enclosure",
+        version: 1,
+        start: suffix.start,
+        nodes: suffix.nodes.clone(),
+    };
+    if program.validate().is_err() {
+        return false;
+    }
+    let mut visited = vec![false; program.nodes.len()];
+    let mut pending = vec![program.start];
+    while let Some(stage) = pending.pop() {
+        if visited[stage.0] {
+            continue;
+        }
+        visited[stage.0] = true;
+        match &program.nodes[stage.0] {
+            Node::Tail => {}
+            Node::Action {
+                actions: Actions::Exact(ActionType::CardPlayed(_)) | Actions::Cards(_) | Actions::Standing(_),
+                next,
+            } => pending.push(*next),
+            Node::Guard { yes, no, unknown, .. } => pending.extend([*yes, *no, *unknown]),
+            Node::Choice(children) => pending.extend(children.iter().copied()),
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn competitor_admitted(selection: &Selection, root: u8, legal: &[GameAction]) -> bool {
+    match selection {
+        Selection::Stage(suffix) => card_tail_suffix(suffix),
+        Selection::Offer { action, next } => {
+            action.player.0 == root
+                && matches!(action.action_type, ActionType::CardPlayed(_))
+                && legal.contains(action)
+                && card_tail_suffix(next)
+        }
     }
 }
 impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, LeafFailure>> Session<'_, F> {
@@ -212,13 +276,10 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
             return Ok(None);
         }
         let legal = &membership.legal;
-        let admitted = alternatives.iter().all(|s| {
-            let action = exact_card(s).map(|a| a.action_type).or_else(|| match s {
-                Selection::Stage(suffix) => stage_card(suffix),
-                _ => None,
-            });
-            action.is_some_and(|action| legal.iter().any(|a| a.player.0 == self.root && a.action_type == action))
-        });
+        let admitted = incumbent_admitted(&alternatives[0], self.root, legal)
+            && alternatives[1..]
+                .iter()
+                .all(|s| competitor_admitted(s, self.root, legal));
         if !admitted {
             return Ok(None);
         }

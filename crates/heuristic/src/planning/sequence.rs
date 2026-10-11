@@ -22,6 +22,9 @@ pub use selection::{SelectedPlan, SelectionAuthorization};
 #[cfg(test)]
 #[path = "../../tests/internal/sequence_hard_reads.rs"]
 mod hard_read_tests;
+#[cfg(test)]
+#[path = "../../tests/internal/sequence_descendant_probe.rs"]
+pub(crate) mod descendant_probe;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Candidate {
@@ -2832,7 +2835,7 @@ mod cache_tests {
     fn no_leaf(_: &SeatView<'_>, _: &[GameAction], _: LeafBudget) -> Result<LeafResponse, LeafFailure> {
         panic!("pure dependency queries must not invoke a response")
     }
-    fn session<'a, F>(context: &'a Context, leaf: &'a mut F, limits: Limits) -> Session<'a, F> {
+    pub(super) fn session<'a, F>(context: &'a Context, leaf: &'a mut F, limits: Limits) -> Session<'a, F> {
         Session {
             root: 0,
             provenance: context.provenance,

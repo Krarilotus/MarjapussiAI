@@ -938,3 +938,6 @@ fn auction_and_return_reuse_the_real_depth_two_boundary_with_joint_support() {
         assert_eq!(plan.receipt.program, binding.program);
     }
 }
+
+#[path = "authentic_final_cash.rs"]
+mod authentic_final_cash;

@@ -8,6 +8,9 @@ use engine::{Card, CardSet};
 #[path = "sequence_dominance_cache.rs"]
 mod cache_accounting;
 
+#[path = "sequence_dominance_suffix.rs"]
+mod suffix_enclosure;
+
 fn context() -> Context {
     Context {
         params: crate::Params::default(),
