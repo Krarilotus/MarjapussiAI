@@ -711,7 +711,33 @@ impl Receipt {
         let Frontier::Reconsider { stage, .. } = inspect(&self.program, self.stage, view, legal, mind)?.frontier else {
             return Err(SequenceError::WrongContext);
         };
-        if self.program.suffix(stage)? != binding.source
+        let previous = self.stage;
+        self.stage = stage;
+        let result = self.install_reconsideration_at_frontier(binding, view, legal);
+        if result.is_err() {
+            self.stage = previous;
+        }
+        result
+    }
+
+    /// Install at an already consumed frontier, without replaying guard reads.
+    /// The evaluator must set the cursor to the actual Frontier::Reconsider
+    /// stage. This does not traverse guards or authorize a strategic selection.
+    pub(crate) fn install_reconsideration_at_frontier(
+        &mut self,
+        binding: &Reconsideration,
+        view: &SeatView<'_>,
+        legal: &[GameAction],
+    ) -> Result<(), SequenceError> {
+        if self.pending.is_some()
+            || !self.accepted.matches(view)
+            || !binding.information.matches(view)
+            || binding.legal != legal
+            || !matches!(self.program.nodes.get(self.stage.0), Some(Node::Reconsider { .. }))
+        {
+            return Err(SequenceError::WrongContext);
+        }
+        if self.program.suffix(self.stage)? != binding.source
             || binding.program.nodes.get(binding.program.start.0) != Some(&Node::Choice(binding.alternatives.clone()))
             || !binding.alternatives.contains(&binding.retained)
         {

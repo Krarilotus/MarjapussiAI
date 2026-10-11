@@ -655,3 +655,79 @@ fn current_catalogue_binding_preserves_a_still_legal_non_catalogue_retained_rout
         }
     )));
 }
+
+#[test]
+fn reached_frontier_install_matches_guarded_install_and_rejects_stale_bindings_atomically() {
+    let table = table();
+    let (seat, legal) = table.to_act().unwrap();
+    let view = table.view(seat);
+    let mind = reader(&view);
+    let program = Program {
+        name: "guarded-reconsideration",
+        version: 1,
+        start: Stage(2),
+        nodes: vec![
+            Node::Tail,
+            Node::Reconsider {
+                remaining: 1,
+                retained: Stage(0),
+            },
+            Node::Guard {
+                predicate: Guard::OwnCards(view.knowledge.certain(seat)),
+                yes: Stage(1),
+                no: Stage(0),
+                unknown: Stage(0),
+            },
+        ],
+    };
+    let binding = bind_reconsideration(&program, Stage(1), &view, legal).unwrap();
+    let mut guarded = Receipt::new(program, &view).unwrap();
+    let original = guarded.clone();
+    assert_eq!(
+        guarded.install_reconsideration_at_frontier(&binding, &view, legal),
+        Err(SequenceError::WrongContext)
+    );
+    assert_eq!(guarded, original, "direct installation cannot skip a guard");
+    let mut direct = guarded.clone();
+    direct.stage = Stage(1); // Evaluator already consumed the guard.
+    let reached = direct.clone();
+    let mut stale = binding.clone();
+    stale.source = binding.program.suffix(binding.program.start).unwrap();
+    assert_eq!(
+        guarded.install_reconsideration(&stale, &view, legal, &mind),
+        Err(SequenceError::WrongContext)
+    );
+    assert_eq!(guarded, original, "failed public installation restores its cursor");
+    for stale in [
+        stale,
+        {
+            let mut b = binding.clone();
+            b.legal.clear();
+            b
+        },
+        {
+            let mut b = binding.clone();
+            b.alternatives.clear();
+            b
+        },
+        {
+            let mut b = binding.clone();
+            b.information.events.clear();
+            b
+        },
+    ] {
+        assert_eq!(
+            direct.install_reconsideration_at_frontier(&stale, &view, legal),
+            Err(SequenceError::WrongContext)
+        );
+        assert_eq!(direct, reached);
+    }
+    direct
+        .install_reconsideration_at_frontier(&binding, &view, legal)
+        .unwrap();
+    guarded.install_reconsideration(&binding, &view, legal, &mind).unwrap();
+    assert_eq!(direct, guarded);
+    assert_eq!(direct.stage, binding.program.start);
+    assert_eq!(direct.program, binding.program);
+    assert!(direct.pending.is_none());
+}
