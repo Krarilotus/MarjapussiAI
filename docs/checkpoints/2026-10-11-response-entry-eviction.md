@@ -94,6 +94,55 @@ It did not identify evicted repeated keys or quantify reconstruction attributabl
 to this path. This checkpoint makes no speed, strength, completion or readiness
 claim; the all-Deferred and six-card logical-work gates remain unresolved.
 
+## Fixed-work follow-up
+
+Base `7738a3bc287736bc69a174d806534efee4e9463f`; evidence tag
+`checkpoint/2026-10-11-response-entry-fixed-work`.
+An identical private test shim reused the existing two-world fixture and all six
+byte-identical helpers at `bd647a0` and `7738a3b`. Each invocation ran 128
+uncached/cold/warm repetitions without a deadline, using the original domain,
+response model and limits. Four serial invocations used before/after/after/before
+order. All completed, with equal complete values, terminals, receipt, prepared
+records and selected-parent authorization. The complete reference text has SHA256
+`166f01510f435498b7e7d765c8c28df994238dd5ac3481ca2bf4f135cb614129` in every run.
+Each call represents 72 transitions, 2 comparisons and 216 solver nodes.
+
+| Work across 128 calls | Before | After |
+|---|---:|---:|
+| Cold suffix constructions | 2048 | 1408 |
+| Warm suffix constructions | 1536 | 256 |
+| Warm actual engine transitions | 9216 | 4608 |
+| Warm actual solver nodes | 27648 | 13824 |
+| Warm response entry-pressure events | 256 | 128 |
+
+Both repetitions reproduced these counters exactly. Each cold repetition
+exercised entry pressure. The cache uses one dependency entry in this fixture;
+this does not qualify scan costs at the production capacity. Observed elapsed
+means were noisy even for unchanged uncached work: before 0.47/1.09 ms, after
+2.61/2.60 ms. There is no elapsed-speed conclusion. Reduced actual work with
+identical logical work is established for this fixture only.
+
+Build provenance required a correction: the first after-build reported a fresh
+cached executable identical to the before binary. It was rejected before any
+measurement. Updating the two changed files' timestamps forced real heuristic
+compilation, with source bytes unchanged. The resulting binaries have distinct
+hashes and the expected 121/123-test inventories. The four runs used private
+copies selected from Cargo's JSON artifact events. Future snapshot comparisons
+must invalidate changed local packages and hold the shared lock through build,
+artifact verification and copying; requested source paths alone do not establish
+artifact provenance.
+
+Private reproducibility bundle: `tmp/2026-10-11-response-entry-fixed-work`,
+including source/patch manifest, commands, test lists, binary hashes and
+`results.json`. Runner receipts `response-entry-fixed-before-1`,
+`response-entry-fixed-after-1`, `response-entry-fixed-after-2`, and
+`response-entry-fixed-before-2` record respectively log SHA256
+`0fbd27845324867298ac11bc2585469fc73c9c8816d01c0375071bdce61aa6d8`,
+`5e262181b2c4c8f760e7c7df84f6d21d59447b59f6d4f19d173d8946a20923cc`,
+`e2bef8ac8613f7603c8901220625260efa0cc4c04e0d087041086c48b03d9a3a`,
+`67b3db91867165326cc9d2e5da4cc02e72520502b6449ba2703010fdf36764c2`.
+The private shim is not part of the policy or its runtime configuration.
+
 ## Ownership and cleanup
 
 Owned files: `crates/heuristic/src/planning/sequence.rs`, additions only in
