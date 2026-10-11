@@ -6,6 +6,7 @@ use engine::{partner, CardSet, SUITS};
 use engine::{ActionType, GameAction, QuestionType};
 
 use beliefs::conventions::pair_value;
+use beliefs::{Concept, ConceptQuery, Literal};
 
 use crate::rules::RuleId;
 use crate::valuation::Valuation;
@@ -36,7 +37,20 @@ impl Reach {
         // The believed pair is 1 or 0 where the facts decide (`beliefs`).
         let belief = ctx.mind.features(mate);
         let pair_p = |s: Suit| belief.pair[s as usize];
-        let partner_pair = 1.0 - uncalled.clone().map(|s| 1.0 - pair_p(s)).product::<f32>();
+        let no_partner_pair = ConceptQuery {
+            event: uncalled
+                .clone()
+                .map(|suit| Literal {
+                    concept: Concept::Pair { seat: mate, suit },
+                    value: false,
+                })
+                .collect(),
+            given: vec![],
+        };
+        let partner_pair = ctx
+            .joint_probability(&no_partner_pair)
+            .map(|p| 1.0 - p)
+            .unwrap_or_else(|| 1.0 - uncalled.clone().map(|s| 1.0 - pair_p(s)).product::<f32>());
         let mut halves: Vec<(Suit, f32)> = uncalled
             .filter_map(|s| {
                 let mine = hand & CardSet::halves(s);

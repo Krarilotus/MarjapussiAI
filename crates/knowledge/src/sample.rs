@@ -42,10 +42,10 @@ const BINOM: [[u64; 37]; 37] = {
 /// Exchangeable unknown cards: same signature (and, for a tied group, same constraints).
 /// Its cards are `pool[start..start + n]`.
 #[derive(Clone, Copy, Debug)]
-struct Class {
-    sig: u8,
-    n: u8,
-    start: u8,
+pub(super) struct Class {
+    pub(super) sig: u8,
+    pub(super) n: u8,
+    pub(super) start: u8,
 }
 
 /// A live constraint on hidden seat `j`, as bounds on the cards of `mask` dealt to it.
@@ -60,8 +60,8 @@ struct Tie {
 /// One split of every tied group. It stands for `mult` placements of the tied cards and
 /// leaves capacity `rest` per hidden seat.
 #[derive(Clone, Copy, Debug)]
-struct Leaf {
-    rest: [u8; 3],
+pub(super) struct Leaf {
+    pub(super) rest: [u8; 3],
     mult: u64,
 }
 
@@ -69,18 +69,18 @@ struct Leaf {
 /// marginals reuse its tables.
 #[derive(Clone, Debug)]
 pub struct DealSpace {
-    hidden: [Seat; 3],
-    known: Hands,
+    pub(super) hidden: [Seat; 3],
+    pub(super) known: Hands,
     /// Tied groups, split by the outer enumeration.
-    groups: Vec<Class>,
-    leaves: Vec<Leaf>,
+    pub(super) groups: Vec<Class>,
+    pub(super) leaves: Vec<Leaf>,
     /// `groups.len()` splits per leaf.
-    leaf_splits: Vec<[u8; 3]>,
+    pub(super) leaf_splits: Vec<[u8; 3]>,
     /// Running total of deals up to and including each leaf.
     cumulative: Vec<u64>,
     /// Untied classes, counted by the DP.
-    classes: Vec<Class>,
-    pool: [u8; CARDS],
+    pub(super) classes: Vec<Class>,
+    pub(super) pool: [u8; CARDS],
     /// Cards in classes `i..`.
     suffix: Vec<u8>,
     /// `ways[i * TABLE + r0 * DIM + r1]`: deals of classes `i..` into remaining capacity
@@ -146,7 +146,7 @@ fn below<R: RngCore + ?Sized>(rng: &mut R, n: u64) -> u64 {
     (m >> 64) as u64
 }
 
-fn minus(r: [u8; 3], split: [u8; 3]) -> [u8; 3] {
+pub(super) fn minus(r: [u8; 3], split: [u8; 3]) -> [u8; 3] {
     [r[0] - split[0], r[1] - split[1], r[2] - split[2]]
 }
 
@@ -157,7 +157,7 @@ fn cell(r: [u8; 3]) -> usize {
 /// Calls `f(split, ways to pick it)` for every split of `n` cards over the seats in `sig`
 /// with `split <= r`, until `f` returns true.
 #[inline]
-fn for_each_split(sig: u8, n: u8, r: [u8; 3], mut f: impl FnMut([u8; 3], u64) -> bool) {
+pub(super) fn for_each_split(sig: u8, n: u8, r: [u8; 3], mut f: impl FnMut([u8; 3], u64) -> bool) {
     let binom = |n: u8, k: u8| BINOM[n as usize][k as usize];
     match sig {
         1 | 2 | 4 => {
@@ -449,7 +449,7 @@ impl DealSpace {
     }
 
     #[inline]
-    fn ways(&self, i: usize, r: [u8; 3]) -> u64 {
+    pub(super) fn ways(&self, i: usize, r: [u8; 3]) -> u64 {
         self.ways[i * TABLE + cell(r)]
     }
 

@@ -5,7 +5,9 @@ use std::time::Instant;
 
 #[cfg(test)]
 use agent::Table;
+use beliefs::{Concept, ConceptBudget, ConceptQuery, Mind, PerspectiveBudget};
 use engine::{ActionType, CardSet, GameAction, Suit, SUITS};
+use observation::SeatEvent;
 
 use super::{back_features, Partner, BACK_FEATURES, PASSING_WEIGHTS};
 use crate::planning::{Forecast, BUDGET};
@@ -43,7 +45,113 @@ fn candidates(ctx: &Ctx, mut ranked: Vec<(GameAction, CardSet, f64)>, best: Game
                 && !(opening.allowed(hand - given) & CardSet::suit(suit)).is_empty()
         });
     }
+    add_known_connection(ctx, &mut result, &ranked);
     result
+}
+
+/// Preserve a connected announcement resource and winner that partner knows
+/// about. Independent length/half buckets need not represent their conjunction.
+/// This only nominates one missing allocation; completed engine outcomes decide
+/// whether it is useful. Knowledge receives no additional score bonus.
+fn add_known_connection(ctx: &Ctx, result: &mut Vec<GameAction>, ranked: &[(GameAction, CardSet, f64)]) {
+    let mate = engine::partner(ctx.me);
+    let budget = PerspectiveBudget {
+        outer_nodes: 0,
+        inner: ConceptBudget { max_nodes: 0 },
+        max_hypotheses: 0,
+    };
+    let own = ctx.k.certain(ctx.me);
+    let winners = ctx.k.standing(ctx.me) - CardSet::HALVES;
+    let mut missing = Vec::new();
+    for suit in SUITS
+        .into_iter()
+        .filter(|&s| !ctx.k.is_called(s) && CardSet::halves(s).is_subset(own))
+    {
+        for card in winners.iter() {
+            let query = ConceptQuery {
+                event: vec![
+                    Concept::Pair { seat: ctx.me, suit }.into(),
+                    Concept::Card { seat: ctx.me, card }.into(),
+                ],
+                given: vec![],
+            };
+            if ctx
+                .mind
+                .perspective_concept(mate, &query, budget)
+                .ok()
+                .and_then(|p| p.known_by_viewer)
+                != Some(true)
+            {
+                continue;
+            }
+            let preserved = |given| {
+                let mut after = *ctx.k;
+                after
+                    .apply(&SeatEvent::Pass {
+                        from: ctx.me,
+                        to: mate,
+                        cards: Some(given),
+                    })
+                    .is_ok()
+                    && CardSet::halves(suit).is_subset(after.certain(ctx.me))
+                    && after.standing(ctx.me).contains(card)
+            };
+            if !ranked
+                .iter()
+                .any(|(a, given, _)| result.contains(a) && preserved(*given))
+            {
+                missing.push((query, suit, card));
+            }
+        }
+    }
+    if missing.is_empty() {
+        return;
+    }
+    for (action, given, _) in ranked.iter().filter(|(a, _, _)| !result.contains(a)) {
+        let event = SeatEvent::Pass {
+            from: ctx.me,
+            to: mate,
+            cards: Some(*given),
+        };
+        let mut after = *ctx.k;
+        if after.apply(&event).is_err() {
+            continue;
+        }
+        let relevant: Vec<_> = missing
+            .iter()
+            .filter(|(_, suit, card)| {
+                CardSet::halves(*suit).is_subset(after.certain(ctx.me)) && after.standing(ctx.me).contains(*card)
+            })
+            .collect();
+        if relevant.is_empty() {
+            continue;
+        }
+        let mut model = Mind::new(
+            ctx.me,
+            ctx.k.dealt_certain(ctx.me),
+            ctx.mind.kinds(),
+            ctx.mind.params().clone(),
+        );
+        if ctx
+            .mind
+            .events()
+            .iter()
+            .chain(std::iter::once(&event))
+            .any(|e| model.apply(e).is_err())
+        {
+            continue;
+        }
+        if relevant.iter().any(|(query, _, _)| {
+            model
+                .perspective_concept(mate, query, budget)
+                .ok()
+                .and_then(|p| p.known_by_viewer)
+                == Some(true)
+        }) {
+            result.push(*action);
+            return;
+        }
+    }
 }
 
 fn add_candidate(

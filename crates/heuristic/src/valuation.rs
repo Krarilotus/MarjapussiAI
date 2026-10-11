@@ -30,6 +30,7 @@ use engine::{CARD_POINTS, LAST_TRICK_BONUS};
 use observation::Seat;
 
 use beliefs::conventions::pair_value;
+use beliefs::{Concept, ConceptQuery};
 
 use crate::hand::higher;
 use crate::stakes::Stakes;
@@ -184,16 +185,42 @@ impl Valuation {
             if theirs.is_empty() {
                 continue;
             }
-            let p_half = p_any(ctx, mate, theirs);
-            let p_pair_team = if !(hand & CardSet::halves(s)).is_empty() {
-                p_half
-            } else {
-                ctx.mind.features(mate).pair[s as usize]
-            };
             // Forced if the partner has no other card of the suit.
             let others = (k.may_hold(mate) & CardSet::suit(s)) - CardSet::halves(s);
-            let p_forced = 1.0 - p_any(ctx, mate, others);
-            let cost = p_pair_team * p_forced * meld(s) * reach.p_activate(ctx, s, leads);
+            // Ownership and being forced to break that pair are dependent: the
+            // same suit capacity constrains both. Query their conjunction.
+            let required = if !(hand & CardSet::halves(s)).is_empty() {
+                Concept::Count {
+                    seat: mate,
+                    cards: theirs,
+                    min: 1,
+                    max: 2,
+                }
+            } else {
+                Concept::Pair { seat: mate, suit: s }
+            };
+            let forced_pair = ConceptQuery {
+                event: vec![
+                    required.into(),
+                    Concept::Count {
+                        seat: mate,
+                        cards: others,
+                        min: 0,
+                        max: 0,
+                    }
+                    .into(),
+                ],
+                given: vec![],
+            };
+            let probability = ctx.joint_probability(&forced_pair).unwrap_or_else(|| {
+                let pair = if !(hand & CardSet::halves(s)).is_empty() {
+                    p_any(ctx, mate, theirs)
+                } else {
+                    ctx.mind.features(mate).pair[s as usize]
+                };
+                pair * (1.0 - p_any(ctx, mate, others))
+            });
+            let cost = probability * meld(s) * reach.p_activate(ctx, s, leads);
             for c in (hand & CardSet::suit(s)).iter() {
                 v.plan[c as usize] = cost;
             }
@@ -275,9 +302,35 @@ impl Choice {
         let ruff = trump
             .filter(|&t| t != led)
             .map_or(CardSet::EMPTY, |t| over(CardSet::suit(t)));
-        let follows = p_any(ctx, o, in_suit);
-        let void = ctx.mind.p_void(o, led);
-        (follows + (1.0 - follows) * void * p_any(ctx, o, ruff)).min(1.0)
+        let follow_query = ConceptQuery::new(Concept::Count {
+            seat: o,
+            cards: in_suit,
+            min: 1,
+            max: 9,
+        });
+        let ruff_query = ConceptQuery {
+            event: vec![
+                Concept::Void { seat: o, suit: led }.into(),
+                Concept::Count {
+                    seat: o,
+                    cards: ruff,
+                    min: 1,
+                    max: 9,
+                }
+                .into(),
+            ],
+            given: vec![],
+        };
+        match (ctx.joint_probability(&follow_query), ctx.joint_probability(&ruff_query)) {
+            // The events are mutually exclusive: a void player cannot also
+            // overtake in the led suit. Trump ownership is conditional on void.
+            (Some(follows), Some(ruffs)) => (follows + ruffs).min(1.0),
+            _ => {
+                let follows = p_any(ctx, o, in_suit);
+                let void = ctx.mind.p_void(o, led);
+                (follows + (1.0 - follows) * void * p_any(ctx, o, ruff)).min(1.0)
+            }
+        }
     }
 
     /// P(our team takes the trick if I play `c`).

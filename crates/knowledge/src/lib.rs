@@ -18,10 +18,12 @@ use engine::{
 };
 use observation::{Seat, SeatEvent};
 
+mod allocations;
 mod claim;
 mod facts;
 mod sample;
 
+pub use allocations::AllocationVisit;
 pub use claim::remaining_claim;
 pub use facts::{
     own_standing_of, standing_potential_of, Pairs, Passed, TeamPairs, BLANK_TEN_FACTOR, STOPPER_CONFIDENCE,
@@ -235,6 +237,24 @@ impl Knowledge {
     /// The deals consistent with this knowledge, for counting, marginals and sampling.
     pub fn deals(&self) -> DealSpace {
         DealSpace::new(self)
+    }
+
+    /// A private-hand hypothesis used only by grouped counting. Never changes
+    /// the observed knowledge or treats the hypothesis as a new observation.
+    pub(crate) fn with_current_hand(&self, seat: Seat, hand: CardSet) -> Option<Self> {
+        if seat >= 4 || hand.len() != self.hand_len(seat) as u32 || !self.certain(seat).is_subset(hand) {
+            return None;
+        }
+        if !self.constraints().iter().filter(|c| c.seat == seat).all(|c| {
+            let n = (hand & c.mask).len() as u8;
+            c.lo <= n && n <= c.hi
+        }) {
+            return None;
+        }
+        let mut conditioned = *self;
+        conditioned.make_certain(seat, hand).ok()?;
+        conditioned.possible[seat as usize] = CardSet::EMPTY;
+        Some(conditioned)
     }
 
     pub fn apply(&mut self, event: &SeatEvent) -> Result<(), Contradiction> {

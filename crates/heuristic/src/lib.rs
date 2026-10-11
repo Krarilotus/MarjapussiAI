@@ -7,6 +7,7 @@
 //! rule (`rules.rs`) that produced it and the facts that rule used.
 
 mod bidding;
+mod concepts;
 mod endgame;
 mod hand;
 mod leads;
@@ -87,6 +88,7 @@ pub(crate) struct Ctx<'a> {
     /// Seed for `Params.sample_temperature > 0` (deterministic per seat and event count).
     pub seed: u64,
     pub routes: RefCell<Option<routes::Routes>>,
+    pub concepts: RefCell<concepts::Reads>,
     pub series: SeriesScore,
 }
 
@@ -267,6 +269,7 @@ impl HeuristicAgent {
             solver: &self.solver,
             seed,
             routes: RefCell::new(None),
+            concepts: RefCell::new(concepts::Reads::default()),
             series: view.series,
         };
         let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));

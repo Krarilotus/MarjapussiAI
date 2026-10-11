@@ -433,6 +433,19 @@ impl Knowledge {
         }
     }
 
+    /// Reconstruct a hypothetical dealt hand from a complete current hand and
+    /// observed transfers. Hidden transfers cannot identify its private history.
+    /// Reuses K5's first/second-passer ownership, including returned cards.
+    pub fn dealt_from_current(&self, seat: Seat, now: CardSet) -> Option<CardSet> {
+        if seat >= 4 || now.len() != self.hand_len(seat) as u32 {
+            return None;
+        }
+        if matches!(self.given(seat), Passed::Hidden) || matches!(self.received(seat), Passed::Hidden) {
+            return None;
+        }
+        Some(self.dealt_from(seat, now, Self::seen(self.given(seat)), Self::seen(self.received(seat))))
+    }
+
     /// K5: cards certainly in `seat`'s **dealt** hand (the hand it bid with).
     pub fn dealt_certain(&self, seat: Seat) -> CardSet {
         let gave = Self::seen(self.given(seat));

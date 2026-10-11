@@ -155,6 +155,8 @@ pub(crate) struct Derived {
 
 #[derive(Default)]
 pub(crate) struct Cache {
+    pub concepts: Option<(Epochs, u32, crate::concepts::ConceptStore)>,
+    pub perspective_facts: [Option<(Epochs, crate::perspective::ViewerFacts)>; 4],
     /// The exact base, keyed by the fact epoch.
     pub base: Option<(u32, Table)>,
     /// The signal record and each seat's dealt-class likelihood, keyed by the signal epoch.

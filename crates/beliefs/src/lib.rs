@@ -8,11 +8,13 @@
 
 mod band;
 mod calibrate;
+mod concepts;
 pub mod conventions;
 mod deals;
 pub mod factors;
 mod features;
 mod mind;
+mod perspective;
 mod reads;
 pub mod record;
 mod table;
@@ -20,9 +22,11 @@ mod view;
 
 pub use band::{Band, Bands};
 pub use calibrate::{scale, Calibration, Family, FAMILIES};
+pub use concepts::{Concept, ConceptBudget, ConceptError, ConceptEstimate, ConceptQuery, Literal, ProbabilityBounds};
 pub use deals::DealWeights;
 pub use features::{Kernel, N_FEATURES, UNIFORM_STAY};
 pub use mind::{BeliefParams, Epochs, FeatureCards, Mind, PerKind, Signals};
+pub use perspective::{PerspectiveBudget, PerspectiveEstimate};
 pub use reads::{CountDist, SeatFeatures};
 pub use view::View;
 

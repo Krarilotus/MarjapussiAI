@@ -3,6 +3,69 @@ use crate::{HeuristicAgent, Params};
 use std::cell::RefCell;
 
 #[test]
+fn shortlist_preserves_a_joint_partner_known_resource_only_when_missing() {
+    let set = |text: &str| {
+        text.split_whitespace().fold(CardSet::EMPTY, |h, c| {
+            h | CardSet::single(c.parse::<engine::Card>().unwrap().index())
+        })
+    };
+    let low = set("g-6 g-7 g-8 g-9 e-6 e-7 r-6 r-7 r-8");
+    let resources = set("s-A s-K s-O e-A");
+    let whole = low | resources;
+    let action = |given: CardSet| GameAction {
+        player: engine::PlaceAtTable(0),
+        action_type: ActionType::Pass(given.cards().try_into().unwrap()),
+    };
+    let give_winners = set("s-A e-A g-6 g-7");
+    let give_pair = set("s-K s-O g-6 g-7");
+    let keep_connection = set("g-6 g-7 g-8 g-9");
+    let ranked = vec![
+        (action(give_winners), give_winners, 3.0),
+        (action(give_pair), give_pair, 2.0),
+        (action(keep_connection), keep_connection, 1.0),
+    ];
+    for shared in [resources, keep_connection] {
+        let mut mind = Mind::new(
+            0,
+            whole - shared,
+            [crate::SeatKind::Unknown; 4],
+            beliefs::BeliefParams::base_only(),
+        );
+        mind.apply(&SeatEvent::Pass {
+            from: 2,
+            to: 0,
+            cards: Some(shared),
+        })
+        .unwrap();
+        let params = Params::default();
+        let ctx = Ctx {
+            me: 0,
+            k: mind.knowledge(),
+            mind: &mind,
+            params: &params,
+            solver: &RefCell::new(None),
+            seed: 7,
+            routes: RefCell::new(None),
+            concepts: RefCell::new(crate::concepts::Reads::default()),
+            series: crate::SeriesScore::default(),
+        };
+        let mut options = vec![ranked[0].0, ranked[1].0];
+        add_known_connection(&ctx, &mut options, &ranked);
+        if shared == resources {
+            assert_eq!(options, ranked.iter().map(|x| x.0).collect::<Vec<_>>());
+            add_known_connection(&ctx, &mut options, &ranked);
+            assert_eq!(options.len(), 3, "already represented connection is not duplicated");
+        } else {
+            assert_eq!(
+                options.len(),
+                2,
+                "root's private pair must not become partner knowledge"
+            );
+        }
+    }
+}
+
+#[test]
 fn expired_comparison_retains_c42_without_publishing_partial_outcomes() {
     let hands = std::array::from_fn(|s| (0..9).map(|c| engine::Card::from_index((9 * s + c) as u8)).collect());
     let mut table = Table::new(&hands);
@@ -35,6 +98,7 @@ fn expired_comparison_retains_c42_without_publishing_partial_outcomes() {
         solver: &RefCell::new(None),
         seed: 7,
         routes: RefCell::new(None),
+        concepts: RefCell::new(crate::concepts::Reads::default()),
         series: view.series,
     };
     let partner = Partner::of(mind);

@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 
+use engine::CardSet;
 use knowledge::{Belief, Hands, Passed};
 
 use crate::conventions::HandClass;
@@ -89,5 +90,52 @@ impl Belief for DealWeights {
             }
         }
         weight
+    }
+}
+
+impl DealWeights {
+    /// Refine allocation classes by every role read by the joint model and query.
+    /// This is the same weight owner as sampling/search, including factors once.
+    pub(crate) fn allocation_labels(&self, masks: &[CardSet]) -> [u64; 36] {
+        let features = self.likelihoods.iter().any(Option::is_some);
+        let mut keys: Vec<(u8, [u32; 4], Vec<bool>)> = Vec::new();
+        std::array::from_fn(|c| {
+            let c = c as u8;
+            let role = if !features {
+                0
+            } else if CardSet::ACES.contains(c) {
+                1
+            } else if CardSet::HALVES.contains(c) {
+                2 + engine::suit_of(c) as u8
+            } else {
+                0
+            };
+            let key = (
+                role,
+                self.factors.map(|row| row[c as usize].to_bits()),
+                masks.iter().map(|m| m.contains(c)).collect(),
+            );
+            if let Some(i) = keys.iter().position(|k| *k == key) {
+                i as u64
+            } else {
+                keys.push(key);
+                (keys.len() - 1) as u64
+            }
+        })
+    }
+
+    /// Conservative per-deal ceiling. Normalised bid likelihoods and their
+    /// exchange-kernel average are at most one; factors may exceed one.
+    pub(crate) fn weight_ceiling(&self, live: CardSet) -> f64 {
+        // Allow for rounding in finite exchange-kernel summation/products.
+        live.iter()
+            .map(|c| {
+                self.factors
+                    .iter()
+                    .map(|row| row[c as usize] as f64)
+                    .fold(0.0, f64::max)
+            })
+            .product::<f64>()
+            * (1.0 + 1e-10)
     }
 }

@@ -1,13 +1,11 @@
 # Concept store: from cards to decisions
 
-Updated: 2026-10-08. This document describes the concept catalogue and its dependencies, including proposed work. It is a design graph, not an automatically extracted Rust call graph.
-
-Local continuation, 2026-10-09: [entry conditions](entry-conditions.md) and
-[bounded return forecasts](return-rollouts.md) now consume this catalogue through
-typed Rust helpers and the shared seat-view table. The latter document gives the
-implemented dependency loop. Whole-game optimal search, calibrated score
-probabilities and raising remain outside this v1 slice; older diagrams below
-retain their historical status.
+This catalogue describes the concepts and their dependencies, including proposed
+work. Typed Rust helpers implement [entry conditions](entry-conditions.md), joint
+holding queries and [bounded return forecasts](return-rollouts.md). The shared
+seat-view table carries legal continuations through exchanges, contract choices,
+raising and play. The tables distinguish these implementations from the wider
+planning design.
 
 The graphics and machine-readable graph below preserve the **7 October design snapshot**. Their "corrections remain local" labels are historical; the current branch map is in the table below.
 
@@ -42,6 +40,28 @@ An agent starts with its own hand, public events and the cards privately passed 
 | `p_holds(y,c)`, `p_void(y,s)` | Fact-constrained card distribution, updated by available bid and exchange evidence. | Beliefs; exact facts force probabilities to 0 or 1. |
 | `bluffing(y)` | A signal has zero support under the facts; the catalogue calls for reduced trust in that seat's signals. | Belief-reading concept; it does not weaken exact facts. |
 | `seat_style(y)` | How a seat's convention is interpreted. The catalogue's v1 default is our convention for everyone. | Individual style exceptions remain proposed. |
+
+### Joint queries and knowledge of another seat
+
+`ConceptQuery` describes a conjunction of card, void, pair and count predicates,
+with optional conditions. `Mind::concept` returns the unconditional hard fact,
+truth under those conditions, and joint probability bounds as separate fields.
+Proof considers every hard-consistent allocation, including allocations assigned
+zero weight by the belief model.
+
+`Mind::perspective_concept(viewer, query, budget)` separates “I know this” from
+“I know the viewer knows this” and from an estimate of the viewer's belief.
+Public plays and shared transfers provide direct proofs. Private-hand hypotheses
+use only the viewer's starting hand and filtered events. Opponents see the public
+transfer event; only participants see its cards. Later play, transfers and undo
+update or invalidate the supporting facts and caches.
+
+For a ruffing entry, a known void removes one uncertain dependency. Trump
+ownership and the opponents' ability to follow or overruff remain joint queries.
+Their probabilities are calculated under the same constraints and weights.
+Node-limited traversal retains unresolved mass, and hypothetical conditions stay
+distinct from observed facts. Full-game continuations still model each actor's
+decisions from its own view.
 
 ## L1 → L2 → L3: bidding
 

@@ -3,7 +3,12 @@
 //! Its realized entries, promotions, announcements and last trick are not
 //! independent bonuses: the engine's final score still selects the plan.
 
-use std::time::{Duration, Instant};
+use std::{
+    cell::RefCell,
+    time::{Duration, Instant},
+};
+
+mod cache;
 
 use agent::{SeatView, Table};
 use engine::{ActionType, CardSet, GameAction, GameFinishedInfo, GameOutcome, QuestionType};
@@ -13,6 +18,7 @@ use crate::{fact, Ctx, Decision, Fact, HeuristicAgent, Params, Rng, RuleId};
 
 pub(crate) const BUDGET: Duration = Duration::from_millis(2_000);
 
+#[derive(Clone)]
 pub(crate) struct Outcome {
     pub score: f64,
     pub points: f64,
@@ -81,7 +87,13 @@ impl Outcome {
 
 /// Finish a candidate using only each simulated actor's own view.
 /// Callers disable recursive forecasting and supply the comparison deadline.
-pub(crate) fn rollout(mut table: Table, action: GameAction, params: &Params, deadline: Instant) -> Option<Outcome> {
+fn rollout(
+    mut table: Table,
+    action: GameAction,
+    params: &Params,
+    deadline: Instant,
+    decisions: &mut cache::Decisions,
+) -> Option<Outcome> {
     let team = action.player.0 as usize % 2;
     table.apply(action);
     let mut players: [HeuristicAgent; 4] = std::array::from_fn(|_| HeuristicAgent::new(params.clone()));
@@ -98,7 +110,7 @@ pub(crate) fn rollout(mut table: Table, action: GameAction, params: &Params, dea
         if Instant::now() >= deadline {
             return None;
         }
-        let decision = players[seat as usize].decide(&table.view(seat), legal);
+        let decision = decisions.decide(&mut players[seat as usize], &table.view(seat), legal);
         if !legal.contains(&decision.action) {
             return None;
         }
@@ -161,6 +173,8 @@ pub(crate) struct Forecast {
     params: Params,
     deadline: Instant,
     pub ess: f64,
+    decisions: RefCell<cache::Decisions>,
+    outcomes: RefCell<Vec<Vec<(GameAction, Outcome)>>>,
 }
 
 impl Forecast {
@@ -241,25 +255,35 @@ impl Forecast {
         params.plan_worlds = 0;
         params.endgame_tricks = params.endgame_tricks.min(2);
         params.endgame_worlds = params.endgame_worlds.min(8);
+        let tables = tables?;
+        let outcomes = (0..tables.len()).map(|_| Vec::new()).collect();
         Some(Self {
-            tables: tables?,
+            tables,
             params,
             deadline,
             ess,
+            decisions: RefCell::new(cache::Decisions::default()),
+            outcomes: RefCell::new(outcomes),
         })
     }
 
     pub fn compare(&self, actions: &[GameAction]) -> Option<Comparison> {
         let mut means: Vec<Outcome> = actions.iter().map(|_| Outcome::default()).collect();
         let mut terminals: Vec<Vec<_>> = actions.iter().map(|_| Vec::new()).collect();
-        for (table, weight) in &self.tables {
+        let mut outcomes = self.outcomes.borrow_mut();
+        let mut decisions = self.decisions.borrow_mut();
+        for (world, (table, weight)) in self.tables.iter().enumerate() {
             for (i, &action) in actions.iter().enumerate() {
                 if Instant::now() >= self.deadline || !table.to_act()?.1.contains(&action) {
                     return None;
                 }
-                let result = rollout(table.clone(), action, &self.params, self.deadline)?;
+                if !outcomes[world].iter().any(|(a, _)| *a == action) {
+                    let result = rollout(table.clone(), action, &self.params, self.deadline, &mut decisions)?;
+                    outcomes[world].push((action, result));
+                }
+                let result = &outcomes[world].iter().find(|(a, _)| *a == action)?.1;
                 terminals[i].push((result.terminal?, *weight));
-                means[i].add(&result, *weight);
+                means[i].add(result, *weight);
             }
         }
         Some(Comparison { means, terminals })
@@ -280,6 +304,8 @@ impl Forecast {
             fact("forecast_tricks", chosen.tricks),
             fact("forecast_last", chosen.last),
             fact("forecast_gain", chosen.score - comparison.means[0].score),
+            fact("forecast_decisions", self.decisions.borrow().evaluated),
+            fact("forecast_reused_decisions", self.decisions.borrow().hits),
         ];
         if chosen.declaring > 0.0 {
             facts.push(fact("forecast_made", chosen.made / chosen.declaring));
@@ -406,4 +432,56 @@ pub(crate) fn choose(ctx: &Ctx, legal: &[GameAction], mut baseline: Decision) ->
         ]);
     }
     baseline
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repricing_reuses_completed_baseline_without_replaying_it() {
+        let hands = std::array::from_fn(|s| (0..9).map(|c| engine::Card::from_index((9 * s + c) as u8)).collect());
+        let mut table = Table::new(&hands);
+        while table.game.state.phase == engine::GamePhase::Bidding {
+            let action = *table
+                .to_act()
+                .unwrap()
+                .1
+                .iter()
+                .find(|a| a.action_type == ActionType::StopBidding)
+                .unwrap();
+            table.apply(action);
+        }
+        let actions: Vec<_> = table
+            .to_act()
+            .unwrap()
+            .1
+            .iter()
+            .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+            .take(2)
+            .copied()
+            .collect();
+        assert_eq!(actions.len(), 2);
+        let forecast = Forecast {
+            tables: vec![(table, 1.0)],
+            params: Params {
+                plan_worlds: 0,
+                return_worlds: 0,
+                endgame_tricks: 0,
+                ..Params::default()
+            },
+            deadline: Instant::now() + Duration::from_secs(30),
+            ess: 1.0,
+            decisions: RefCell::new(cache::Decisions::default()),
+            outcomes: RefCell::new(vec![vec![]]),
+        };
+        let first = forecast.compare(&actions[..1]).unwrap();
+        let evaluated = forecast.decisions.borrow().evaluated;
+        let repeated = forecast.compare(&actions[..1]).unwrap();
+        assert_eq!(repeated.means[0].score, first.means[0].score);
+        assert_eq!(forecast.decisions.borrow().evaluated, evaluated);
+        let expanded = forecast.compare(&actions).unwrap();
+        assert_eq!(expanded.means[0].score, first.means[0].score);
+        assert_eq!(forecast.outcomes.borrow()[0].len(), 2);
+    }
 }
