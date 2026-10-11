@@ -11,7 +11,7 @@ pub(crate) const MAX_NODES: usize = 1_000_000;
 const MAX_LITERALS: usize = 16;
 
 /// Predicates on current holdings, not intentions or future optimal play.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Concept {
     Card {
         seat: Seat,
@@ -55,7 +55,7 @@ impl Concept {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Literal {
     pub concept: Concept,
     pub value: bool,
@@ -69,7 +69,7 @@ impl From<Concept> for Literal {
 
 /// P(all event literals | all given literals). Conditions are hypotheses; they
 /// do not modify the Mind's facts or add the same bidding evidence a second time.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConceptQuery {
     pub event: Vec<Literal>,
     pub given: Vec<Literal>,

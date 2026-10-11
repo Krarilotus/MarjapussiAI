@@ -43,10 +43,11 @@ pub(super) fn prepared_response(
     let suffix = plan.receipt.program.suffix(plan.receipt.stage).ok()?;
     let next_suffix = plan.receipt.program.suffix(next).ok()?;
     let membership = sequence::Membership::from_candidates(legal, &[]).ok()?;
-    let certificate = plan.prepared.iter().find(|choice| {
+    let certificate = plan.authorized_records()?.iter().find(|choice| {
         choice.information.matches(current)
             && choice.semantic_suffix == suffix
             && choice.context == plan.context
+            && choice.scope == sequence::ChoiceScope::Response
             && choice.membership.legal == membership.legal
             && choice.assessment.is_none()
             && choice.alternatives.len() == 1

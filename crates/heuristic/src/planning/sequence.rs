@@ -12,13 +12,12 @@ use engine::{GameAction, GameFinishedInfo, GameOutcome, PlayPhase, PublicState};
 use std::time::Instant;
 
 mod reuse;
-mod canonical;
-use canonical::{fingerprint, locate, CanonicalProgram};
 pub use reuse::CompletedCache;
+mod selection;
+pub use selection::{SelectedPlan, SelectionAuthorization};
 #[cfg(test)]
 #[path = "../../tests/internal/sequence_hard_reads.rs"]
 mod hard_read_tests;
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Candidate {
@@ -198,8 +197,17 @@ impl Membership {
         )
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChoiceScope {
+    Parent,
+    Global,
+    Local,
+    FixedAction,
+    Response,
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedChoice {
+    pub scope: ChoiceScope,
     pub information: Information,
     pub semantic_suffix: Suffix,
     pub context: Context,
@@ -225,6 +233,7 @@ pub struct Comparison {
     pub values: Assessment,
     pub receipt: Receipt,
     pub prepared: Vec<PreparedChoice>,
+    pub selection: std::sync::Arc<SelectedPlan>,
     pub work: Work,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -307,9 +316,32 @@ pub fn prepared_lookup_with_boundary(
     let initial = receipt.program.suffix(stage).map_err(|_| NeedsReview)?;
     for _ in 0..crate::concepts::sequence::MAX_STAGES {
         let inspection = inspect(&receipt.program, stage, view, legal, mind).map_err(|_| NeedsReview)?;
-        let offers = match inspection.frontier {
-            Frontier::Actions(offers) => Some(offers),
-            Frontier::Choice(_) => None,
+        let (offers, bound) = match inspection.frontier {
+            Frontier::Actions(offers) => {
+                let bound = offers
+                    .iter()
+                    .map(|offer| {
+                        Ok(Selection::Offer {
+                            action: offer.action,
+                            next: receipt.program.suffix(offer.next).map_err(|_| NeedsReview)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, NeedsReview>>()?;
+                (Some(offers), bound)
+            }
+            Frontier::Choice(stages) => (
+                None,
+                stages
+                    .into_iter()
+                    .map(|stage| {
+                        receipt
+                            .program
+                            .suffix(stage)
+                            .map(Selection::Stage)
+                            .map_err(|_| NeedsReview)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
             Frontier::Tail
             | Frontier::Interrupted
             | Frontier::Reconsider { .. }
@@ -333,6 +365,27 @@ pub fn prepared_lookup_with_boundary(
                     && &choice.membership == membership
             })
             .ok_or(NeedsReview)?;
+        if choice.alternatives != bound || choice.support.is_empty() {
+            return Err(NeedsReview);
+        }
+        let expected_scope = if suffix == initial && boundary_membership.is_some() {
+            ChoiceScope::Global
+        } else if choice.assessment.is_some() {
+            ChoiceScope::Local
+        } else {
+            ChoiceScope::FixedAction
+        };
+        if choice.scope != expected_scope {
+            return Err(NeedsReview);
+        }
+        match &choice.assessment {
+            Some(assessment)
+                if assessment.cohort_complete
+                    && assessment.candidates.len() == bound.len()
+                    && assessment.selected == choice.selected => {}
+            None if bound.len() == 1 && choice.selected == 0 => {}
+            _ => return Err(NeedsReview),
+        }
         let selected = choice.alternatives.get(choice.selected).ok_or(NeedsReview)?;
         match selected {
             Selection::Stage(suffix) if offers.is_none() => {
@@ -420,6 +473,12 @@ struct TailRun {
     consumed: Vec<Consumed>,
     transitions: usize,
     solver_nodes: u64,
+}
+/// Exact authored input, with validation and demanded canonical stages reused.
+/// Slots are filled lazily; no eager compilation of every possible suffix.
+struct CanonicalProgram {
+    program: Program,
+    suffixes: Vec<Option<Suffix>>,
 }
 struct AuthoredMembership {
     information: Information,
@@ -576,14 +635,12 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         let cached = self.canonical_program(program)?;
         self.cached_suffix(program, stage, cached)
     }
-    /// The sorted fingerprint index only narrows exact equality checks. Its
-    /// entries share the original cache's admission, accounting and eviction.
+    /// Reuse exact input validation without hashing the entire authored model.
+    /// A stage scan calls this once, retaining the original linear Eq lookup.
     fn canonical_program(&mut self, program: &Program) -> Result<Option<usize>, SequenceError> {
-        let fingerprint = fingerprint(program);
-        let insertion = match locate(&self.canonical, program, fingerprint) {
-            Ok(index) => return Ok(Some(index)),
-            Err(insertion) => insertion,
-        };
+        if let Some(index) = self.canonical.iter().position(|entry| entry.program == *program) {
+            return Ok(Some(index));
+        }
         program.validate()?;
         let bytes = 2
             * (std::mem::size_of::<CanonicalProgram>()
@@ -591,12 +648,12 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
                 + std::mem::size_of::<Vec<Option<Suffix>>>()
                 + program.nodes.len() * std::mem::size_of::<Option<Suffix>>());
         if self.canonical.len() < self.limits.memo_entries && self.retain_reusable(bytes) {
-            self.canonical.insert(insertion, CanonicalProgram {
-                fingerprint,
+            let index = self.canonical.len();
+            self.canonical.push(CanonicalProgram {
                 program: program.clone(),
                 suffixes: vec![None; program.nodes.len()],
             });
-            Ok(Some(insertion))
+            Ok(Some(index))
         } else {
             Ok(None)
         }
@@ -887,6 +944,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
                     let offer = offers.remove(0);
                     let legal = branch.table.to_act().ok_or(SequenceError::WrongContext)?.1;
                     let fixed = PreparedChoice {
+                        scope: ChoiceScope::FixedAction,
                         information: information.clone(),
                         semantic_suffix: self.suffix(&branch.receipt.program, branch.receipt.stage)?,
                         context: self.context.clone(),
@@ -1253,6 +1311,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         }
         let action = self.response(&first.table)?;
         prepared.push(PreparedChoice {
+            scope: ChoiceScope::Response,
             information,
             semantic_suffix,
             context: self.context.clone(),
@@ -1354,6 +1413,11 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
             }
         }
         let information = Information::of(&view);
+        let scope = if membership.is_some() {
+            ChoiceScope::Global
+        } else {
+            ChoiceScope::Local
+        };
         let membership = match membership {
             Some(membership) => membership,
             None => self.membership(&view, first.table.to_act().ok_or(SequenceError::WrongContext)?.1)?,
@@ -1391,6 +1455,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         let assessment = self.values(outcomes.iter().map(Vec::as_slice))?;
         let selected = assessment.selected;
         prepared.push(PreparedChoice {
+            scope,
             information,
             semantic_suffix,
             context: self.context.clone(),
@@ -1553,11 +1618,31 @@ pub fn evaluate_with_cache<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) ->
         )?;
         receipt.propose(selected.first.clone(), &original, legal)?;
         let prepared = selected.prepared.clone();
+        let selection = std::sync::Arc::new(SelectedPlan::completed(
+            information,
+            context,
+            Membership {
+                legal: crate::legal_actions::eligible(legal),
+                // Preserve the actual nomination order, including aliases.
+                programs: candidates
+                    .iter()
+                    .map(|candidate| candidate.program.suffix(candidate.stage))
+                    .collect::<Result<_, _>>()?,
+            },
+            &values,
+            cohort
+                .iter()
+                .enumerate()
+                .map(|(origin, (_, weight))| (origin, *weight))
+                .collect(),
+            selected,
+        )?);
         Ok(Comparison {
             executions,
             values,
             receipt,
             prepared,
+            selection,
             work: session.work,
         })
     })();
@@ -2076,6 +2161,7 @@ mod tests {
         // Descendant records retain their original membership and assessment.
         assert_eq!(result.values.selected, 0);
         let mut prepared = vec![PreparedChoice {
+            scope: ChoiceScope::Global,
             information: Information::of(&view),
             semantic_suffix: binding.program.suffix(binding.program.start).unwrap(),
             context: context.clone(),
@@ -2612,7 +2698,7 @@ mod cache_tests {
         assert!(session.work.retained_bytes <= session.limits.memo_bytes);
     }
     #[test]
-    fn indexed_stage_scan_matches_uncached_first_stage_with_full_and_cleared_cache() {
+    fn stage_scan_matches_uncached_first_stage_with_full_and_cleared_cache() {
         let context = context();
         let original = program();
         let mut duplicated = original.clone();
@@ -2630,7 +2716,9 @@ mod cache_tests {
                         assert_eq!(session.find_stage(program, &suffix), find_stage(program, &suffix));
                     }
                 }
-                assert!(session.canonical.windows(2).all(|pair| pair[0].fingerprint <= pair[1].fingerprint));
+                if entries > 0 {
+                    assert_eq!(session.canonical[0].program, original);
+                }
                 assert!(session.canonical.len() <= entries);
                 assert!(session.work.retained_bytes <= session.limits.memo_bytes);
             }

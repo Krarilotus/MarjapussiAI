@@ -116,7 +116,7 @@ fn planned(table: &Table) -> (HeuristicAgent, GameAction) {
     *policy.intent.get_mut() = Some(RetainedPlan {
         receipt,
         pending_legal: crate::legal_actions::eligible(legal),
-        prepared: std::sync::Arc::new(Vec::new()),
+        selection: None,
         parameters: params,
         origin,
         context,
@@ -454,7 +454,7 @@ fn an_observed_global_choice_does_not_certify_an_unrecorded_tail_action() {
     *policy.intent.get_mut() = Some(RetainedPlan {
         receipt: compared.receipt,
         pending_legal: crate::legal_actions::eligible(legal),
-        prepared: std::sync::Arc::new(compared.prepared),
+        selection: Some(compared.selection),
         parameters: params,
         origin,
         context,

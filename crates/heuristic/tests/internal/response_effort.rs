@@ -213,7 +213,7 @@ fn strict_response_rejects_retained_intent_without_consuming_or_clearing_it() {
     let plan = RetainedPlan {
         receipt: Receipt::new(program, &view).unwrap(),
         pending_legal: Vec::new(),
-        prepared: std::sync::Arc::new(Vec::new()),
+        selection: None,
         parameters: params.clone(),
         origin: PlanningContext {
             observer: seat,

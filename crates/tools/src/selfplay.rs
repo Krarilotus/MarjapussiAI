@@ -20,7 +20,7 @@ use eval::{
     RandomAgent, Rng,
 };
 use heuristic::sequence_concepts::{Actions, Guard, Information, Node, ReadMeaning, Suffix};
-use heuristic::sequence_evaluation::{Consumed, Selection};
+use heuristic::sequence_evaluation::{ChoiceScope, Consumed, Selection};
 use heuristic::value_concepts::{Assessment, CohortMethod, NodeValue};
 use heuristic::{BeliefScope, HeuristicAgent, Params, PlanMode, PlanningAssessment, SequenceTrace};
 use serde_json::{json, Value};
@@ -409,6 +409,64 @@ impl<'a> SequenceJson<'a> {
     }
 }
 
+fn choice_scope_json(scope: ChoiceScope) -> &'static str {
+    match scope {
+        ChoiceScope::Parent => "parent",
+        ChoiceScope::Global => "global",
+        ChoiceScope::Local => "local",
+        ChoiceScope::FixedAction => "fixed_action",
+        ChoiceScope::Response => "response",
+    }
+}
+
+// Consistency validation of a recorded authorization, not a second planner or
+// a proof of reachability. The immutable evaluator-owned SelectedPlan owns that.
+fn sequence_authorization_error(trace: &SequenceTrace) -> Option<&'static str> {
+    let Some(authorization) = &trace.authorization else { return None };
+    if trace.mode == PlanMode::Deferred || trace.failure.is_some() {
+        return Some("deferred trace cannot authorize a selected child");
+    }
+    let parent = &authorization.parent;
+    let Some(values) = &parent.assessment else { return Some("parent assessment is missing") };
+    if parent.scope != ChoiceScope::Parent || !values.cohort_complete || parent.support.is_empty()
+        || values.candidates.len() != parent.alternatives.len()
+        || values.candidates.len() != parent.membership.programs.len()
+        || parent.selected != values.selected
+        || parent.membership.programs.get(parent.selected) != Some(&parent.semantic_suffix)
+    {
+        return Some("parent selection is incomplete or inconsistent");
+    }
+    if authorization.records.len() != trace.choices.len()
+        || authorization.records.iter().collect::<std::collections::BTreeSet<_>>().len() != authorization.records.len()
+    {
+        return Some("authorization record indices do not uniquely align with trace choices");
+    }
+    for choice in &trace.choices {
+        if choice.context != parent.context || choice.information.seat != parent.information.seat
+            || choice.selected >= choice.alternatives.len() || choice.support.is_empty()
+            || choice.support.iter().any(|pair| !parent.support.contains(pair))
+        {
+            return Some("authorized child context, selection or original support mismatch");
+        }
+        match choice.scope {
+            ChoiceScope::Parent | ChoiceScope::Global | ChoiceScope::Local => {
+                let Some(values) = &choice.assessment else { return Some("ranked child assessment is missing") };
+                if !values.cohort_complete || values.candidates.len() != choice.alternatives.len()
+                    || values.selected != choice.selected
+                {
+                    return Some("ranked child assessment is incomplete or inconsistent");
+                }
+            }
+            ChoiceScope::FixedAction | ChoiceScope::Response => {
+                if choice.assessment.is_some() || choice.alternatives.len() != 1 || choice.selected != 0 {
+                    return Some("fixed child must be a singleton without a value assessment");
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Only serialize the actual trace. Terminal worlds are model hypotheses,
 /// observer projections never expose another actor's private reasoning state.
 pub fn sequence_json(trace: &SequenceTrace, value_assessment: Option<&PlanningAssessment>) -> Value {
@@ -420,6 +478,35 @@ pub fn sequence_json(trace: &SequenceTrace, value_assessment: Option<&PlanningAs
         BeliefScope::PreparedConditional { origin } => json!({"kind": "prepared_conditional",
             "origin": refs.information(origin), "meaning": "original joint model conditioned on modeled observation"}),
     };
+    let authorization = trace.authorization.as_ref().map(|authorization| {
+        let parent = &authorization.parent;
+        let values = parent.assessment.as_ref();
+        let selected = values.and_then(|v| v.candidates.get(v.selected));
+        json!({"schema": "marjapussi.selection-authorization/1",
+            "consistency_error": sequence_authorization_error(trace),
+            "parent": {"id": "sequence/authorization/parent", "scope": choice_scope_json(parent.scope),
+                "information": refs.information(&parent.information), "program": refs.program(&parent.semantic_suffix),
+                "context": {"params": parent.context.params.to_toml(), "seed": parent.context.seed,
+                    "posterior_revision": parent.context.posterior_revision,
+                    "belief_model": parent.context.provenance.belief_model,
+                    "response_model": parent.context.provenance.response_model,
+                    "cohort": cohort_json(parent.context.provenance.cohort)},
+                "selected": parent.selected, "alternative": values.and_then(|v| v.alternative),
+                "candidate_count": values.map(|v| v.candidates.len()),
+                "alternatives_count": parent.alternatives.len(),
+                "program_count": parent.membership.programs.len(), "legal_count": parent.membership.legal.len(),
+                "comparison_programs": parent.membership.programs.iter().map(|p| refs.program(p)).collect::<Vec<_>>(),
+                "cohort_complete": values.map(|v| v.cohort_complete),
+                "selected_estimate": selected.map(|v| json!({"our_score": v.our_score,
+                    "opponent_score": v.opponent_score, "difference": v.difference,
+                    "declaring": v.declaring, "joint_made": v.joint_made,
+                    "made_given_declaring": v.made_given_declaring})),
+                "support": parent.support.iter().map(|(origin, weight)| json!({"origin": origin, "weight": weight})).collect::<Vec<_>>()},
+            "certificates": authorization.records.iter().enumerate().map(|(i, record)| json!({
+                "choice": format!("sequence/choice/{i}"), "record_index": record})).collect::<Vec<_>>(),
+            "meaning": "Evaluator-owned completed parent selection authorizes only its reachable selected-tree certificates. Record indices are provenance, not probabilities.",
+            "projection": "Compact parent summary only: no parent terminal arrays, full value trace or future records copied. Parent refs are decision-local. This summary is not an exact equality key: cross-decision interning requires full producer semantic evidence and run/model provenance, not ids or this projection alone."})
+    });
     let choices: Vec<_> = trace.choices.iter().enumerate().map(|(i, choice)| {
         let info = refs.information(&choice.information);
         let suffix = refs.program(&choice.semantic_suffix);
@@ -427,7 +514,7 @@ pub fn sequence_json(trace: &SequenceTrace, value_assessment: Option<&PlanningAs
         let consumed: Vec<_> = choice.consumed.iter().map(|r| refs.consumed(r)).collect();
         let programs: Vec<_> = choice.membership.programs.iter().map(|p| refs.program(p)).collect();
         let values = choice.assessment.as_ref().map(|a| values_json(a, None, false, &format!("sequence/choice/{i}/value")));
-        json!({"id": format!("sequence/choice/{i}"), "information": info, "program": suffix,
+        json!({"id": format!("sequence/choice/{i}"), "scope": choice_scope_json(choice.scope), "information": info, "program": suffix,
             "context": {"params": choice.context.params.to_toml(), "seed": choice.context.seed,
                 "posterior_revision": choice.context.posterior_revision,
                 "belief_model": choice.context.provenance.belief_model, "response_model": choice.context.provenance.response_model,
@@ -489,7 +576,7 @@ pub fn sequence_json(trace: &SequenceTrace, value_assessment: Option<&PlanningAs
             PlanMode::Prepared => "prepared", PlanMode::Retry => "retry", PlanMode::Deferred => "deferred"},
         "information": information, "belief_scope": scope, "program": program,
         "value_nodeId": value_assessment.map(|a| format!("value/{}", a.values.root.0)),
-        "choices": choices, "terminals": terminals,
+        "authorization": authorization, "choices": choices, "terminals": terminals,
         "work": {"transitions": work.transitions, "represented_transitions": work.represented_transitions,
             "comparisons": work.comparisons, "represented_comparisons": work.represented_comparisons, "response_calls": work.response_calls,
             "actual_solver_nodes": work.actual_solver_nodes, "represented_solver_nodes": work.represented_solver_nodes,
@@ -1260,6 +1347,7 @@ mod tests {
                 .all(|r| ids.contains(&r.as_u64().unwrap())));
         }
         let sequence = SequenceTrace {
+            authorization: None,
             mode: PlanMode::Formation,
             information: Information::of(&view),
             scope: BeliefScope::CurrentInformation,
@@ -1334,6 +1422,7 @@ mod tests {
             ],
         };
         let choice = PreparedChoice {
+            scope: ChoiceScope::FixedAction,
             information: information.clone(),
             semantic_suffix: program.clone(),
             context: Context {
@@ -1371,6 +1460,7 @@ mod tests {
             support: vec![(0, 0.123456789012345)],
         };
         let trace = SequenceTrace {
+            authorization: None,
             mode: PlanMode::Prepared,
             scope: BeliefScope::PreparedConditional {
                 origin: information.clone(),
@@ -1385,6 +1475,107 @@ mod tests {
             total_candidates: None,
         };
         (table, trace, action)
+    }
+
+    // Hand-built serializer fixture only. It does not claim SelectedPlan
+    // execution or playing strength; production authorization is evaluator-owned.
+    fn authorized_sequence_fixture() -> (agent::Table, SequenceTrace, engine::GameAction) {
+        use heuristic::sequence_evaluation::SelectionAuthorization;
+        use heuristic::value_concepts::ValueStore;
+        let (table, mut trace, action) = sequence_fixture();
+        let mut local = trace.choices[0].clone();
+        let cohort = CohortMethod::HistorySampled {
+            current_draws: 2048, current_proposal_ess: Some(1.25), current_resampled: true,
+            model: "synthetic-history-model", proposals: 17, slots: 1,
+        };
+        local.context.provenance.cohort = cohort;
+        let terminals = [(engine::GameOutcome {
+            playing_team: Some(0), game_value: 120, team_points: [130, 10], team_tricks: [5, 4],
+        }, local.support[0].1)];
+        let values = ValueStore::new(&[&terminals], 0, local.context.provenance).unwrap().assess().unwrap();
+        let mut parent = local.clone();
+        parent.scope = ChoiceScope::Parent;
+        parent.membership.programs = vec![parent.semantic_suffix.clone()];
+        parent.alternatives = vec![Selection::Stage(parent.semantic_suffix.clone())];
+        parent.assessment = Some(values.clone());
+        parent.consumed.clear();
+        let mut response = local.clone();
+        response.scope = ChoiceScope::Response;
+        local.scope = ChoiceScope::Local;
+        local.alternatives = vec![Selection::Stage(local.semantic_suffix.clone())];
+        local.assessment = Some(values);
+        response.assessment = None;
+        trace.choices = vec![local, response];
+        trace.authorization = Some(SelectionAuthorization {
+            parent: std::sync::Arc::new(parent), records: vec![3, 8],
+        });
+        (table, trace, action)
+    }
+
+    #[test]
+    fn compact_authorization_preserves_scopes_support_and_history_provenance_without_future_tree() {
+        let (_, mut trace, _) = authorized_sequence_fixture();
+        assert_eq!(sequence_authorization_error(&trace), None);
+        let row = sequence_json(&trace, None);
+        assert!(row["authorization"]["consistency_error"].is_null());
+        assert_eq!(decision_assessment_json(None, Some(&trace), false).unwrap()["value_assessment_present"], false,
+            "parent provenance is not a current-call value ranking");
+        assert_eq!(row["authorization"]["parent"]["scope"], "parent");
+        assert_eq!(row["authorization"]["parent"]["cohort_complete"], true);
+        assert_eq!(row["authorization"]["parent"]["candidate_count"], 1);
+        assert_eq!(row["authorization"]["certificates"][1]["record_index"], 8);
+        assert_eq!(row["choices"][0]["scope"], "local");
+        assert_eq!(row["choices"][1]["scope"], "response");
+        assert!(row["choices"][1]["assessment"].is_null());
+        let parent = &row["authorization"]["parent"];
+        assert_eq!(parent["support"][0]["weight"], json!(trace.choices[0].support[0].1));
+        assert_eq!(parent["context"]["cohort"]["history_proposals"], 17);
+        assert_eq!(parent["context"]["cohort"]["current_allocations"]["draws"], 2048);
+        assert_eq!(parent["context"]["cohort"]["current_allocations"]["proposal_ess"], 1.25);
+        for field in ["trace", "terminals", "records", "assessment"] {
+            assert!(parent.get(field).is_none(), "compact parent must not copy {field}");
+        }
+        // Exact same information/suffix is interned once, not once per branch.
+        assert_eq!(row["information_sets"].as_array().unwrap().len(), 1);
+        assert_eq!(parent["program"], row["choices"][0]["program"]);
+        trace.mode = PlanMode::Retry;
+        let retry = sequence_json(&trace, None);
+        assert_eq!(retry["mode"], "retry");
+        assert_eq!(retry["authorization"], row["authorization"]);
+        assert_eq!(retry["choices"][0]["scope"], "local");
+        trace.choices.clear();
+        trace.authorization.as_mut().unwrap().records.clear();
+        assert_eq!(sequence_authorization_error(&trace), None, "completed parent without children is valid");
+    }
+
+    #[test]
+    fn authorization_rejects_bad_alignment_incomplete_parent_and_changed_original_weight() {
+        let (_, trace, _) = authorized_sequence_fixture();
+        let mut wrong = trace.clone();
+        wrong.authorization.as_mut().unwrap().records.pop();
+        assert!(sequence_authorization_error(&wrong).unwrap().contains("align"));
+        wrong = trace.clone();
+        std::sync::Arc::make_mut(&mut wrong.authorization.as_mut().unwrap().parent)
+            .assessment.as_mut().unwrap().cohort_complete = false;
+        assert!(sequence_authorization_error(&wrong).unwrap().contains("incomplete"));
+        wrong = trace.clone();
+        wrong.choices[0].support[0].1 += 0.1;
+        assert!(sequence_authorization_error(&wrong).unwrap().contains("support"));
+        wrong = trace.clone();
+        wrong.choices[1].assessment = wrong.choices[0].assessment.clone();
+        assert!(sequence_authorization_error(&wrong).unwrap().contains("singleton"));
+        wrong = trace.clone();
+        wrong.mode = PlanMode::Deferred;
+        assert!(sequence_authorization_error(&wrong).unwrap().contains("deferred"));
+        // Recorder refuses the incorrect receipt before removal/serialization.
+        let (table, _, action) = authorized_sequence_fixture();
+        let recorder = AssessmentRecorder::default();
+        recorder.0.borrow_mut().push_back(CapturedDecision {
+            seat: action.player.0, event_count: wrong.information.events.len(), action,
+            policy_nanos: 0, assessment: None, sequence: Some(wrong),
+        });
+        assert!(recorder.consume(&table.view(action.player.0), &action, false).unwrap_err().contains("authorization"));
+        assert_eq!(recorder.0.borrow().len(), 1, "mismatch must not attach/remove evidence");
     }
 
     #[test]

@@ -15,7 +15,7 @@ pub struct RetainedPlan {
     /// Complete eligible domain that authorized the outstanding proposal.
     /// Empty once accepted or invalidated; never inferred from the chosen move.
     pub pending_legal: Vec<GameAction>,
-    pub prepared: std::sync::Arc<Vec<PreparedChoice>>,
+    pub selection: Option<std::sync::Arc<super::sequence::SelectedPlan>>,
     pub parameters: Params,
     pub origin: PlanningContext,
     pub context: Context,
@@ -24,6 +24,21 @@ pub struct RetainedPlan {
 }
 
 impl RetainedPlan {
+    /// Evidence belongs to this original parent comparison, not an independently
+    /// supplied local certificate or a newly inferred catalogue.
+    pub(super) fn authorized_records(&self) -> Option<&[PreparedChoice]> {
+        let selected = self.selection.as_ref()?;
+        let root = selected.root();
+        let origin = crate::concepts::sequence::Information {
+            seat: self.origin.observer,
+            knowledge: self.origin.knowledge,
+            events: self.origin.events.clone(),
+            kinds: self.origin.kinds,
+            series: self.origin.series,
+        };
+        (root.information == origin && root.context == self.context).then(|| selected.records())
+    }
+
     /// New evidence is accepted before any current-value or legality lookup.
     /// A fork/undo requests recovery; its old assessments never certify a move.
     pub fn synchronize(
@@ -83,6 +98,7 @@ pub enum PlanMode {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SequenceTrace {
     pub mode: PlanMode,
+    pub authorization: Option<super::sequence::SelectionAuthorization>,
     pub information: crate::concepts::sequence::Information,
     pub scope: super::BeliefScope,
     pub program: Option<crate::concepts::sequence::Suffix>,
@@ -150,44 +166,28 @@ pub(crate) fn prepared(ctx: &crate::Ctx<'_>, legal: &[GameAction]) -> Option<cra
         let receipt = reconsidered.as_ref().unwrap_or(&plan.receipt);
         let membership = super::sequence::Membership::authored(&view, legal).ok()?;
         let retained_suffix = receipt.program.suffix(receipt.stage).ok()?;
-        let required = if let Some(boundary) = &boundary_membership {
-            // The boundary evaluated exactly this horizon-adjusted domain,
-            // including its retained child. Plain authored routes are different
-            // semantic suffixes and cannot substitute for these alternatives.
-            boundary.programs.clone()
-        } else {
-            let mut required = membership.programs.clone();
-            if !required.contains(&retained_suffix) {
-                required.push(retained_suffix.clone());
-            }
-            required
-        };
-        // A generated catalogue records availability, not comparison coverage.
-        // Only alternatives actually ranked on this same conditional support
-        // can certify warm selection against today's authored routes.
-        let certificate_index = plan.prepared.iter().position(|choice| {
+        let records = plan.authorized_records()?;
+        let certificate = records.iter().find(|choice| {
             choice.information.matches(&view)
                 && choice.semantic_suffix == retained_suffix
                 && choice.context == plan.context
-                && covers(choice, &required)
+                && boundary_membership
+                    .as_ref()
+                    .is_none_or(|boundary| covers(choice, &boundary.programs))
         })?;
-        let certificate = &plan.prepared[certificate_index];
-        // Use the very record whose coverage was checked, with its support.
-        // An earlier narrow record must not be authorized by a later one.
-        let mut certified_path = vec![certificate.clone()];
-        certified_path.extend(
-            plan.prepared
-                .iter()
-                .enumerate()
-                .filter(|(index, choice)| {
-                    *index != certificate_index
-                        && choice.information.matches(&view)
-                        && choice.semantic_suffix != retained_suffix
-                        && choice.context == certificate.context
-                        && (choice.assessment.is_none() || choice.support == certificate.support)
-                })
-                .map(|(_, choice)| choice.clone()),
-        );
+        // At a global boundary, covers proves the complete horizon-adjusted
+        // comparison. Elsewhere parent-selected reachability authorizes the
+        // local scope; lookup checks ALL locally bound alternatives and today's
+        // predicted full catalogue. Neither check asserts a new global Best.
+        let certified_path: Vec<_> = records
+            .iter()
+            .filter(|choice| {
+                choice.information.matches(&view)
+                    && choice.context == certificate.context
+                    && choice.support == certificate.support
+            })
+            .cloned()
+            .collect();
         let offer = super::sequence::prepared_lookup_with_boundary(
             receipt,
             &view,
@@ -216,11 +216,16 @@ pub(crate) fn prepared(ctx: &crate::Ctx<'_>, legal: &[GameAction]) -> Option<cra
     };
     ctx.concepts.borrow_mut().sequence = Some(SequenceTrace {
         mode,
+        authorization: plan
+            .selection
+            .as_ref()
+            .map(|selected| selected.authorization(&crate::concepts::sequence::Information::of(&view))),
         information: crate::concepts::sequence::Information::of(&view),
         scope,
         program: plan.receipt.program.suffix(plan.receipt.stage).ok(),
         choices: plan
-            .prepared
+            .authorized_records()
+            .unwrap_or_default()
             .iter()
             .filter(|choice| choice.information.matches(&view))
             .cloned()
@@ -271,11 +276,12 @@ pub(crate) fn forced(ctx: &crate::Ctx<'_>, legal: &[GameAction]) {
     // The next decision must recover; keeping the old value would hide that gap.
     let program = plan.receipt.program.suffix(plan.receipt.stage).ok();
     plan.review_pending = true;
-    plan.prepared = std::sync::Arc::new(Vec::new());
+    plan.selection = None;
     plan.receipt.pending = None;
     plan.pending_legal.clear();
     ctx.concepts.borrow_mut().sequence = Some(SequenceTrace {
         mode: PlanMode::Deferred,
+        authorization: None,
         information: Information::of(&view),
         scope: super::BeliefScope::CurrentInformation,
         program,
@@ -296,6 +302,9 @@ fn covers(choice: &PreparedChoice, required: &[crate::concepts::sequence::Suffix
     let Some(assessment) = &choice.assessment else {
         return false;
     };
+    if choice.scope != super::sequence::ChoiceScope::Global {
+        return false;
+    }
     if !assessment.cohort_complete || assessment.candidates.len() != choice.alternatives.len() {
         return false;
     }
@@ -399,6 +408,7 @@ mod tests {
             1.0,
         )];
         let mut choice = PreparedChoice {
+            scope: super::super::sequence::ChoiceScope::Global,
             information: Information::of(&view),
             semantic_suffix: tail.clone(),
             context: Context {

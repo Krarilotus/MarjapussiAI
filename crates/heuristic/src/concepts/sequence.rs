@@ -17,11 +17,11 @@ pub const MAX_RECONSIDERATIONS: u8 = 1;
 /// This extra boundary is authored explicitly; the play decorator stays at one.
 pub const MAX_BOUNDARY_DEPTH: u8 = MAX_RECONSIDERATIONS + 1;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stage(pub usize);
 
 /// Binding enumerates legal members; it never ranks or picks a tactic.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Actions {
     Exact(ActionType),
     /// All current legal raises, sharing a post-acceptance continuation edge.
@@ -32,7 +32,7 @@ pub enum Actions {
     Standing(CardSet),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Guard {
     /// The observer has an actual legal play action; no hidden game phase read.
     PlayReady,
@@ -44,7 +44,7 @@ pub enum Guard {
     Known(ConceptQuery),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Node {
     Action {
         actions: Actions,
@@ -74,7 +74,7 @@ pub enum Node {
     Deferred,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     pub name: &'static str,
     pub version: u32,

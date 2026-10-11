@@ -92,6 +92,11 @@ impl AssessmentRecorder {
             } else {
                 selected_matches = None;
             }
+            if let Some(sequence) = &captured.sequence {
+                if let Some(error) = super::sequence_authorization_error(sequence) {
+                    return Err(format!("sequence authorization mismatch: {error}"));
+                }
+            }
             if captured.sequence.as_ref().is_some_and(|s| !s.information.matches(view)) {
                 return Err("sequence context mismatch: honest view, history or metadata".into());
             }
@@ -143,6 +148,7 @@ mod tests {
             policy_nanos: 17,
             assessment: None,
             sequence: Some(SequenceTrace {
+                authorization: None,
                 mode: PlanMode::Deferred,
                 information: Information::of(view),
                 scope: BeliefScope::CurrentInformation,

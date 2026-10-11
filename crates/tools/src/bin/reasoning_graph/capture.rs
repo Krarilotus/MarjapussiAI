@@ -518,6 +518,82 @@ fn program_ref(value: &Value, aliases: &HashMap<String, String>) -> Result<Strin
         .ok_or_else(|| format!("unresolved authored reference {id}"))
 }
 
+// Authorization is provenance, not a score dependency or a reconstructed proof
+// that the selected route is globally optimal.
+fn authorization(sequence: &Value, aliases: &HashMap<String, String>, graph: &mut Graph) -> Result<Option<String>, String> {
+    let authorization = &sequence["authorization"];
+    if authorization.is_null() { return Ok(None); }
+    if authorization["schema"] != "marjapussi.selection-authorization/1"
+        || !authorization["consistency_error"].is_null()
+        || sequence["mode"] == "deferred" || !sequence["failure"].is_null()
+    {
+        return Err("invalid or deferred selection authorization".into());
+    }
+    let parent = &authorization["parent"];
+    let count = parent["candidate_count"].as_u64().ok_or("authorization parent candidate count missing")?;
+    let selected = parent["selected"].as_u64().ok_or("authorization parent selection missing")?;
+    if parent["scope"] != "parent" || parent["cohort_complete"] != true
+        || count == 0 || selected >= count
+        || parent["alternatives_count"].as_u64() != Some(count)
+        || parent["program_count"].as_u64() != Some(count)
+        || array(parent, "comparison_programs")?.len() as u64 != count
+    {
+        return Err("authorization parent is not a consistent completed comparison".into());
+    }
+    let choices = array(sequence, "choices")?;
+    let certificates = array(authorization, "certificates")?;
+    let support = array(parent, "support")?;
+    if support.is_empty() { return Err("authorization original parent support is missing".into()); }
+    for program in array(parent, "comparison_programs")? {
+        program_ref(program, aliases)?;
+    }
+    if parent["comparison_programs"][selected as usize] != parent["program"] {
+        return Err("authorization selected parent program mismatch".into());
+    }
+    if certificates.len() != choices.len() { return Err("authorization certificate count mismatch".into()); }
+    let mut records = HashSet::new();
+    for (certificate, choice) in certificates.iter().zip(choices) {
+        let index = certificate["record_index"].as_u64().ok_or("authorization record index missing")?;
+        if certificate["choice"] != choice["id"] || !records.insert(index)
+            || choice["context"] != parent["context"]
+            || array(choice, "support")?.is_empty()
+            || !array(choice, "support")?.iter().all(|pair| support.contains(pair))
+        {
+            return Err("authorization child identity, context or original support mismatch".into());
+        }
+        let alternatives = array(choice, "alternatives")?;
+        let selected = choice["selected"].as_u64().ok_or("authorized child selection missing")?;
+        let values = &choice["assessment"];
+        match choice["scope"].as_str() {
+            Some("parent" | "global" | "local") => {
+                if values["cohort_complete"] != true || values["selected"].as_u64() != Some(selected)
+                    || array(values, "candidates")?.len() != alternatives.len() || selected as usize >= alternatives.len()
+                {
+                    return Err("authorized ranked child assessment incomplete or inconsistent".into());
+                }
+            }
+            Some("response" | "fixed_action") => {
+                if !values.is_null() || selected != 0 || alternatives.len() != 1 {
+                    return Err("authorized fixed child must be a singleton without a value assessment".into());
+                }
+            }
+            _ => return Err("authorized child evidence scope missing or unsupported".into()),
+        }
+    }
+    let id = identity(parent, "id")?;
+    graph.add(node(&id, "Completed parent selection".into(), "rule", "SelectedPlan authorization projection",
+        parent, vec![edge(&identity(parent, "information")?, "original honest information", "authorization_provenance"),
+            edge(&program_ref(&parent["program"], aliases)?, "parent-selected authored candidate", "definition_binding")],
+        "Completed ranking of original nominated parent programs under its named joint model. Reachable certificates authorize reuse; this is not a fresh live-posterior ranking or proof of optimality.",
+        "Compact completed-parent provenance; full original comparison omitted"))?;
+    for certificate in certificates {
+        let choice_id = identity(certificate, "choice")?;
+        graph.link(&choice_id, &id, "reachable certificate in selected parent tree", "selected_parent_authorization")?;
+        graph.nodes.get_mut(&choice_id).ok_or("missing authorized choice")?["authorization_record_index"] = certificate["record_index"].clone();
+    }
+    Ok(Some(id))
+}
+
 fn sequence(sequence: &Value, graph: &mut Graph) -> Result<Option<String>, String> {
     if sequence["schema"] != "marjapussi.sequence-trace/1" {
         return Err("unsupported sequence trace schema".into());
@@ -527,7 +603,8 @@ fn sequence(sequence: &Value, graph: &mut Graph) -> Result<Option<String>, Strin
     for info in array(sequence, "information_sets")? {
         let id = identity(info, "id")?;
         let value = &info["value"];
-        let observed = id == actual || origin == Some(id.as_str());
+        let observed = id == actual || origin == Some(id.as_str())
+            || sequence["authorization"]["parent"]["information"].as_str() == Some(id.as_str());
         let scope = if observed {
             "Honest observer knowledge in its recorded current or historical-origin context; no other actor's private view."
         } else {
@@ -578,12 +655,22 @@ fn sequence(sequence: &Value, graph: &mut Graph) -> Result<Option<String>, Strin
                 "recorded_consumption",
             ));
         }
-        let mut value = node(&id, format!("Conditional suffix choice · alternative {}", choice["selected"]), "decision", "Recorded PreparedChoice",
-            &json!({"selected": choice["selected"], "alternatives": choice["alternatives"], "support": choice["support"]}), inputs,
-            "Choice on its original conditional joint support. A retained choice is not a freshly evaluated live posterior.", "Captured prepared choice");
+        let (name, scope) = match choice["scope"].as_str() {
+            Some("parent") => ("Parent candidate comparison", "Complete original nominated parent domain; model estimate, not proof of optimality."),
+            Some("global") => ("Global authored boundary", "Complete declared horizon-adjusted authored boundary domain, not all conceivable strategies or a fresh live posterior."),
+            Some("local") => ("Local authored alternatives", "Complete local bound alternatives inside the parent-selected tree; does not assert a new global Best."),
+            Some("fixed_action") => ("Fixed authored action", "Fixed step on an authorized branch; no value ranking or success probability is invented."),
+            Some("response") => ("Recorded response-model step", "Singleton offer of the declared response model; not a value comparison or observed probability."),
+            None => ("Conditional suffix choice", "Evidence scope was not recorded by this older capture; do not infer global authorization from its mode or membership."),
+            Some(other) => return Err(format!("unsupported prepared choice scope {other}")),
+        };
+        let mut value = node(&id, format!("{name}: alternative {}", choice["selected"]), "decision", "Recorded PreparedChoice",
+            &json!({"scope": choice["scope"], "selected": choice["selected"], "alternatives": choice["alternatives"], "support": choice["support"]}), inputs,
+            scope, "Captured scoped choice; authorization requires explicit parent provenance");
         value["bindings"] = json!({"context": choice["context"].to_string()});
         choices.push(graph.add(value)?);
     }
+    let authorization = authorization(sequence, &aliases, graph)?;
     let mut terminals = Vec::new();
     let mut origins = HashSet::new();
     for terminal in array(sequence, "terminals")? {
@@ -654,6 +741,9 @@ fn sequence(sequence: &Value, graph: &mut Graph) -> Result<Option<String>, Strin
             "selected authored suffix definition",
             "definition_binding",
         ));
+    }
+    if let Some(parent) = authorization {
+        inputs.push(edge(&parent, "completed parent selection provenance", "selected_parent_authorization"));
     }
     if let Some(id) = graph.collection(
         "capture/choices",
@@ -818,6 +908,7 @@ pub(super) fn export(input: &Value, index: Option<u64>, step: Option<u64>) -> Re
             "meaning": "Limits::solver_nodes is optional; neither a configured ceiling nor None/uncapped can be inferred from these counters. Recorded deferral details describe only the stopping lane."},
         "work_attribution": "Per-trace aggregate; not attributed to individual concept or continuation nodes.",
         "belief_scope": sequence_data["belief_scope"], "selected_terminal_value_alignment_verified": joined,
+        "authorization_projection": sequence_data["authorization"]["projection"],
         "assessment_matches_chosen_action": decision.map(|d| &d["assessment_matches_chosen_action"]),
         "unsupported_or_not_exported": ["Unrecorded joint allocations and other actors' response inputs are not fabricated.",
             "Only selected-cohort continuation traces are retained; unrecorded rejected-candidate paths are not invented.",
@@ -1123,6 +1214,96 @@ mod tests {
         wrong = fixture();
         wrong["seat"] = json!(2);
         assert!(export(&wrong, None, None).unwrap_err().contains("identity mismatch"));
+    }
+
+    // Synthetic serializer-shape evidence only; no SelectedPlan was executed.
+    fn authorized_fixture() -> Value {
+        let mut input = with_values();
+        let mut local = input["assessment"].clone();
+        local.as_object_mut().unwrap().remove("extensions");
+        local["nodeId"] = json!("sequence/choice/0/value/3");
+        local["cohort_complete"] = json!(true);
+        for value in local["trace"].as_array_mut().unwrap() {
+            value["nodeId"] = json!(format!("sequence/choice/0/value/{}", value["ref"]));
+            value["dependency_nodeIds"] = json!(value["dependencies"].as_array().unwrap().iter()
+                .map(|id| format!("sequence/choice/0/value/{id}")).collect::<Vec<_>>());
+        }
+        let sequence = &mut input["assessment"]["extensions"]["sequence"];
+        let parent_support = json!([{"origin": 0, "weight": 0.25}, {"origin": 1, "weight": 0.75}]);
+        let choice = &mut sequence["choices"][0];
+        choice["scope"] = json!("local");
+        choice["support"] = json!([{"origin": 1, "weight": 0.75}]);
+        choice["alternatives"] = json!([{"kind": "stage", "program": choice["program"]}]);
+        choice["assessment"] = local;
+        choice["value_nodeId"] = json!("sequence/choice/0/value/3");
+        let mut response = choice.clone();
+        response["id"] = json!("sequence/choice/1");
+        response["scope"] = json!("response");
+        response["assessment"] = Value::Null;
+        response["value_nodeId"] = Value::Null;
+        response["alternatives"] = json!([{"kind": "offer", "action": {"type": "card", "card": "eA"}}]);
+        sequence["choices"].as_array_mut().unwrap().push(response);
+        sequence["authorization"] = json!({"schema": "marjapussi.selection-authorization/1", "consistency_error": null,
+            "parent": {"id": "sequence/authorization/parent", "scope": "parent", "cohort_complete": true,
+                "information": sequence["information"], "program": sequence["program"],
+                "comparison_programs": [sequence["program"]],
+                "context": sequence["choices"][0]["context"], "candidate_count": 1,
+                "alternatives_count": 1, "program_count": 1, "legal_count": 2, "selected": 0,
+                "support": parent_support, "selected_estimate": {"difference": 260.0}},
+            "certificates": [{"choice": "sequence/choice/0", "record_index": 3},
+                {"choice": "sequence/choice/1", "record_index": 8}], "projection": "synthetic compact parent"});
+        input
+    }
+
+    #[test]
+    fn shares_completed_parent_and_distinguishes_local_global_and_retry_without_probability_claim() {
+        let input = authorized_fixture();
+        let output = export(&input, None, None).unwrap();
+        let n = nodes(&output);
+        assert_eq!(n.keys().filter(|id| **id == "sequence/authorization/parent").count(), 1);
+        assert!(n["sequence/choice/0"]["label"].as_str().unwrap().starts_with("Local authored"));
+        assert!(n["sequence/choice/0"]["epistemic"].as_str().unwrap().contains("not assert a new global"));
+        assert_eq!(n["sequence/choice/1"]["runtime_value"]["scope"], "response");
+        for id in ["sequence/choice/0", "sequence/choice/1"] {
+            let inputs = n[id]["inputs"].as_array().unwrap();
+            let parent = inputs.iter().find(|edge| edge["id"] == "sequence/authorization/parent").unwrap();
+            assert_eq!(parent["relation"], "selected_parent_authorization");
+        }
+        assert_eq!(n["sequence/choice/1"]["authorization_record_index"], 8);
+        assert!(n["sequence/authorization/parent"]["runtime_value"].get("probability").is_none());
+        let mut retry = input.clone();
+        retry["assessment"]["extensions"]["sequence"]["mode"] = json!("retry");
+        let retry = export(&retry, None, None).unwrap();
+        assert_eq!(nodes(&retry)["sequence/choice/0"], n["sequence/choice/0"]);
+        let mut global = input.clone();
+        global["assessment"]["extensions"]["sequence"]["choices"][0]["scope"] = json!("global");
+        let global = export(&global, None, None).unwrap();
+        assert!(nodes(&global)["sequence/choice/0"]["epistemic"].as_str().unwrap().contains("horizon-adjusted"));
+        let legacy = export(&fixture(), None, None).unwrap();
+        assert!(nodes(&legacy)["sequence/choice/0"]["epistemic"].as_str().unwrap().contains("not recorded"));
+    }
+
+    #[test]
+    fn rejects_forged_authorization_alignment_scope_mass_and_incomplete_evidence() {
+        let input = authorized_fixture();
+        for lane in 0..6 {
+            let mut wrong = input.clone();
+            let sequence = &mut wrong["assessment"]["extensions"]["sequence"];
+            match lane {
+                0 => sequence["authorization"]["certificates"][1]["record_index"] = json!(3),
+                1 => sequence["authorization"]["parent"]["cohort_complete"] = json!(false),
+                2 => sequence["choices"][0]["support"][0]["weight"] = json!(1.0),
+                3 => sequence["choices"][0]["assessment"]["cohort_complete"] = json!(false),
+                4 => sequence["choices"][1]["scope"] = json!("local"),
+                _ => sequence["mode"] = json!("deferred"),
+            }
+            assert!(export(&wrong, None, None).is_err(), "invalid authorization lane {lane}");
+        }
+        let mut no_children = input.clone();
+        let sequence = &mut no_children["assessment"]["extensions"]["sequence"];
+        sequence["choices"] = json!([]);
+        sequence["authorization"]["certificates"] = json!([]);
+        assert!(nodes(&export(&no_children, None, None).unwrap()).contains_key("sequence/authorization/parent"));
     }
 
     #[test]

@@ -329,3 +329,36 @@ mirror the selector's implementation.
 No broad self-play result or speed guarantee follows from this design document.
 The previous conditional-sequence proposal supplies execution/persistence detail;
 the authored model here governs strategic construction and comparison.
+
+
+## Captured selected-plan authorization
+
+The runtime capture boundary distinguishes `ChoiceScope::{Parent, Global, Local,
+FixedAction, Response}`. Parent/Global/Local describe completed comparisons within
+respectively the nominated parent domain, a horizon-adjusted authored boundary,
+or local bound alternatives. A local result is not a newly established global
+best action. Complete means every required alternative on the emitted cohort,
+not exhaustive hard-consistent deal/history coverage. FixedAction and Response
+are singleton offers without a value
+assessment. Retry preserves the original certificate scope; `SequenceTrace.mode`
+reports the operational retry separately.
+
+`SequenceTrace.authorization` links the trace's choices, in order, to certificate
+indices under one immutable evaluator-created completed parent. A compact capture
+retains the parent's honest origin, context, selected program, comparison counts,
+selected estimate, ordered comparison program references and original
+`(origin, weight)` support. It omits the parent's
+full value trace, terminal arrays and other future records. Parent references are
+decision-local; cross-decision interning must compare exact semantic evidence,
+not merely equal exported reference strings. The compact summary is insufficient
+as an exact equality key; retain full producer evidence and run/model provenance
+when interning across decisions. Conditional child support retains
+original unnormalised mass. Certificate indices and reachability are provenance,
+not probabilities or claims of a freshly recalculated posterior.
+
+The exporter draws parent authorization links separately from evaluator value
+dependencies and authored control-flow references. It checks artifact consistency;
+it does not recreate the evaluator's reachability proof. Missing authorization or
+scope in older captures stays unrecorded. An incomplete/deferred trace cannot
+claim selected-plan authorization. No generated HTML or live capture is qualified
+by these source-only capture changes; root validates/integrates before generation.

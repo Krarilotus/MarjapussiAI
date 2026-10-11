@@ -272,7 +272,7 @@ fn common_install_keeps_the_assessed_receipt_context_and_deferral_invalidates_on
             let deferred = slot.as_ref().unwrap();
             assert!(deferred.review_pending);
             assert!(deferred.receipt.pending.is_none());
-            assert!(deferred.prepared.is_empty());
+            assert!(deferred.selection.is_none());
             assert_eq!(deferred.receipt.program, installed.receipt.program);
             assert_eq!(deferred.origin, installed.origin);
             assert_eq!(selected.action, action);

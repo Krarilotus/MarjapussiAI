@@ -61,6 +61,7 @@ impl From<Deferred> for Failure {
 /// repair, while invalidating its predictions and unpublished pending action.
 pub(super) fn defer(ctx: &Ctx<'_>, fallback: &mut Decision, mode: Mode, failure: Failure) {
     ctx.concepts.borrow_mut().sequence = Some(SequenceTrace {
+        authorization: None,
         mode: PlanMode::Deferred,
         information: Information::of(&view(ctx)),
         scope: BeliefScope::CurrentInformation,
@@ -74,7 +75,7 @@ pub(super) fn defer(ctx: &Ctx<'_>, fallback: &mut Decision, mode: Mode, failure:
     });
     if let Some(plan) = ctx.intent.borrow_mut().as_mut() {
         plan.review_pending = true;
-        plan.prepared = Arc::new(Vec::new());
+        plan.selection = None;
         plan.receipt.pending = None;
         plan.pending_legal.clear();
     }
@@ -186,6 +187,7 @@ impl Forecast {
         baseline.why.extend(self.facts(&compared, mode));
         let initial = view(ctx);
         let trace = SequenceTrace {
+            authorization: Some(compared.selection.authorization(&Information::of(&initial))),
             mode: if matches!(mode, Mode::Repair) {
                 PlanMode::Repair
             } else {
@@ -195,7 +197,8 @@ impl Forecast {
             scope: BeliefScope::CurrentInformation,
             program: compared.receipt.program.suffix(compared.receipt.stage).ok(),
             choices: compared
-                .prepared
+                .selection
+                .records()
                 .iter()
                 .filter(|choice| choice.information.matches(&initial))
                 .cloned()
@@ -220,7 +223,7 @@ impl Forecast {
                     .expect("completed comparison has a root action")
                     .1,
             ),
-            prepared: Arc::new(compared.prepared),
+            selection: Some(compared.selection),
             parameters: ctx.params.clone(),
             origin: self.context.clone(),
             context,
