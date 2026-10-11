@@ -297,3 +297,6 @@ fn defender_forecast_completes_hidden_history_and_labels_conditional_sampling() 
         Err(PreparationError::Deferred)
     ));
 }
+
+#[path = "history_two_pass.rs"]
+mod two_pass;

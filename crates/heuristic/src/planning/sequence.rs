@@ -12,6 +12,8 @@ use engine::{GameAction, GameFinishedInfo, GameOutcome, PlayPhase, PublicState};
 use std::time::Instant;
 
 mod reuse;
+mod canonical;
+use canonical::{fingerprint, locate, CanonicalProgram};
 pub use reuse::CompletedCache;
 #[cfg(test)]
 #[path = "../../tests/internal/sequence_hard_reads.rs"]
@@ -419,12 +421,6 @@ struct TailRun {
     transitions: usize,
     solver_nodes: u64,
 }
-/// Exact authored input, with validation and demanded canonical stages reused.
-/// Slots are filled lazily; no eager compilation of every possible suffix.
-struct CanonicalProgram {
-    program: Program,
-    suffixes: Vec<Option<Suffix>>,
-}
 struct AuthoredMembership {
     information: Information,
     membership: Membership,
@@ -577,25 +573,41 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
     }
     fn suffix(&mut self, program: &Program, stage: Stage) -> Result<Suffix, SequenceError> {
         let _timing = beliefs::profile::scope("sequence.suffix");
-        let mut cached = self.canonical.iter().position(|entry| entry.program == *program);
+        let cached = self.canonical_program(program)?;
+        self.cached_suffix(program, stage, cached)
+    }
+    /// The sorted fingerprint index only narrows exact equality checks. Its
+    /// entries share the original cache's admission, accounting and eviction.
+    fn canonical_program(&mut self, program: &Program) -> Result<Option<usize>, SequenceError> {
+        let fingerprint = fingerprint(program);
+        let insertion = match locate(&self.canonical, program, fingerprint) {
+            Ok(index) => return Ok(Some(index)),
+            Err(insertion) => insertion,
+        };
+        program.validate()?;
+        let bytes = 2
+            * (std::mem::size_of::<CanonicalProgram>()
+                + program_bytes(program)
+                + std::mem::size_of::<Vec<Option<Suffix>>>()
+                + program.nodes.len() * std::mem::size_of::<Option<Suffix>>());
+        if self.canonical.len() < self.limits.memo_entries && self.retain_reusable(bytes) {
+            self.canonical.insert(insertion, CanonicalProgram {
+                fingerprint,
+                program: program.clone(),
+                suffixes: vec![None; program.nodes.len()],
+            });
+            Ok(Some(insertion))
+        } else {
+            Ok(None)
+        }
+    }
+    // The index is local to one call/scan: no insertion or eviction occurs
+    // between lookup and use. Never keep indices in receipts or other caches.
+    fn cached_suffix(&mut self, program: &Program, stage: Stage, cached: Option<usize>) -> Result<Suffix, SequenceError> {
         if let Some(index) = cached {
             if let Some(suffix) = self.canonical[index].suffixes.get(stage.0).and_then(Option::as_ref) {
                 let _copy_timing = beliefs::profile::scope("sequence.suffix_copy");
                 return Ok(suffix.clone());
-            }
-        } else {
-            program.validate()?;
-            let bytes = 2
-                * (std::mem::size_of::<CanonicalProgram>()
-                    + program_bytes(program)
-                    + std::mem::size_of::<Vec<Option<Suffix>>>()
-                    + program.nodes.len() * std::mem::size_of::<Option<Suffix>>());
-            if self.canonical.len() < self.limits.memo_entries && self.retain_reusable(bytes) {
-                cached = Some(self.canonical.len());
-                self.canonical.push(CanonicalProgram {
-                    program: program.clone(),
-                    suffixes: vec![None; program.nodes.len()],
-                });
             }
         }
         // Either this exact input was validated above, or it equals a validated
@@ -619,8 +631,12 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         })
     }
     fn find_stage(&mut self, program: &Program, suffix: &Suffix) -> Result<Stage, SequenceError> {
+        let _timing = beliefs::profile::scope("sequence.suffix");
+        // Validate/locate this immutable input once for the whole scan, also
+        // when cache admission is disabled. Preserve first matching stage.
+        let cached = self.canonical_program(program)?;
         for stage in 0..program.nodes.len() {
-            if self.suffix(program, Stage(stage))? == *suffix {
+            if self.cached_suffix(program, Stage(stage), cached)? == *suffix {
                 return Ok(Stage(stage));
             }
         }
@@ -2382,6 +2398,9 @@ mod tests {
         assert_eq!(warm.values, cold.values);
         assert_eq!(warm.receipt, cold.receipt);
         assert_eq!(warm.prepared, cold.prepared);
+        assert_eq!(warm.executions, cold.executions);
+        assert_eq!(warm.work.represented_transitions, cold.work.represented_transitions);
+        assert_eq!(warm.work.represented_comparisons, cold.work.represented_comparisons);
         for run in [&cold, &warm] {
             assert_eq!(run.work.represented_solver_nodes, cold.work.represented_solver_nodes);
         }
@@ -2591,6 +2610,39 @@ mod cache_tests {
             Err(SequenceError::InvalidProgram)
         );
         assert!(session.work.retained_bytes <= session.limits.memo_bytes);
+    }
+    #[test]
+    fn indexed_stage_scan_matches_uncached_first_stage_with_full_and_cleared_cache() {
+        let context = context();
+        let original = program();
+        let mut duplicated = original.clone();
+        duplicated.nodes.push(Node::Tail);
+        let mut renamed = original.clone();
+        renamed.name = "same-semantics-different-input";
+        for entries in [0, 1, 8] {
+            let mut leaf = no_leaf;
+            let mut session = session(&context, &mut leaf, Limits { memo_entries: entries, ..Limits::default() });
+            for _ in 0..2 {
+                for program in [&original, &duplicated, &renamed] {
+                    for stage in 0..program.nodes.len() {
+                        let suffix = program.suffix(Stage(stage)).unwrap();
+                        assert_eq!(session.suffix(program, Stage(stage)).unwrap(), suffix);
+                        assert_eq!(session.find_stage(program, &suffix), find_stage(program, &suffix));
+                    }
+                }
+                assert!(session.canonical.windows(2).all(|pair| pair[0].fingerprint <= pair[1].fingerprint));
+                assert!(session.canonical.len() <= entries);
+                assert!(session.work.retained_bytes <= session.limits.memo_bytes);
+            }
+            // Use the real batch eviction path, then demand the same suffixes.
+            // A response filling the whole byte allowance evicts reusable data.
+            assert!(session.retain_response(session.limits.memo_bytes) || entries == 0);
+            assert!(session.canonical.is_empty());
+            assert_eq!(session.find_stage(&duplicated, &duplicated.suffix(Stage(3)).unwrap()), Ok(Stage(0)));
+            assert_eq!(session.work.represented_transitions, 0);
+            assert_eq!(session.work.represented_comparisons, 0);
+            assert_eq!(session.work.represented_solver_nodes, 0);
+        }
     }
     #[test]
     fn membership_reuse_requires_exact_private_view_and_canonical_legal_domain() {

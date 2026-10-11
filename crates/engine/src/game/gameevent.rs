@@ -34,7 +34,7 @@ pub struct GameAction {
     pub player: PlaceAtTable,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Hash)]
 pub enum ActionType {
     Start,
     NewBid(i32),
