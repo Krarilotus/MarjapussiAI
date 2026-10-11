@@ -201,6 +201,95 @@ fn response_edges_are_canonical_and_do_not_replenish_play_reconsideration() {
 }
 
 #[test]
+fn initial_catalogue_binding_preserves_the_live_play_horizon() {
+    let mut table = table();
+    while table.game.state.phase == engine::GamePhase::Bidding {
+        let action = *table
+            .to_act()
+            .unwrap()
+            .1
+            .iter()
+            .find(|a| a.action_type == ActionType::StopBidding)
+            .unwrap();
+        table.apply(action);
+    }
+    let (seat, legal) = table.to_act().unwrap();
+    let view = table.view(seat);
+    let initial = Program {
+        name: "initial-play-binding",
+        version: 1,
+        start: Stage(1),
+        nodes: vec![
+            Node::Tail,
+            Node::Reconsider {
+                remaining: MAX_BOUNDARY_DEPTH,
+                retained: Stage(0),
+            },
+        ],
+    };
+    initial.validate().unwrap();
+    let reading = inspect(&initial, initial.start, &view, legal, &reader(&table, seat)).unwrap();
+    assert!(matches!(
+        reading.frontier,
+        Frontier::Reconsider {
+            remaining: MAX_BOUNDARY_DEPTH,
+            ..
+        }
+    ));
+    let binding = bind_reconsideration(&initial, initial.start, &view, legal).unwrap();
+    let actual: Vec<_> = binding
+        .alternatives
+        .iter()
+        .map(|stage| binding.program.suffix(*stage).unwrap())
+        .collect();
+    let live = authored_programs_with_reconsideration(&view, legal, MAX_RECONSIDERATIONS).unwrap();
+    let expected: Vec<_> = live
+        .iter()
+        .map(|program| program.suffix(program.start).unwrap())
+        .collect();
+    // Tail is already a live catalogue member, so the retained Tail adds no
+    // alternative. Initial binding must neither weaken nor expand live scope.
+    assert_eq!(actual, expected);
+    assert!(binding.program.nodes.iter().any(|node| matches!(
+        node,
+        Node::Reconsider {
+            remaining: MAX_RECONSIDERATIONS,
+            ..
+        }
+    )));
+    assert!(!binding.program.nodes.iter().any(|node| matches!(
+        node,
+        Node::Reconsider {
+            remaining: MAX_BOUNDARY_DEPTH,
+            ..
+        }
+    )));
+    assert_eq!(
+        with_reconsideration(&initial, MAX_BOUNDARY_DEPTH),
+        Err(SequenceError::InvalidProgram),
+        "the ordinary play decorator still rejects depth two"
+    );
+    let mut invalid = initial.clone();
+    invalid.nodes[1] = Node::Reconsider {
+        remaining: MAX_BOUNDARY_DEPTH + 1,
+        retained: Stage(0),
+    };
+    assert_eq!(invalid.validate(), Err(SequenceError::InvalidProgram));
+    assert_eq!(
+        inspect(&invalid, invalid.start, &view, legal, &reader(&table, seat)),
+        Err(SequenceError::InvalidProgram)
+    );
+    assert_ne!(initial.suffix(initial.start).unwrap(), {
+        let mut play_only = initial.clone();
+        play_only.nodes[1] = Node::Reconsider {
+            remaining: MAX_RECONSIDERATIONS,
+            retained: Stage(0),
+        };
+        play_only.suffix(play_only.start).unwrap()
+    });
+}
+
+#[test]
 fn stop_bidding_receipt_accepts_only_own_matching_event_once() {
     let mut table = table();
     let (seat, legal) = table.to_act().unwrap();

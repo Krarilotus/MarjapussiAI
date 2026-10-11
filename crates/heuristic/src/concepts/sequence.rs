@@ -13,6 +13,9 @@ pub const MAX_STAGES: usize = 4096;
 pub const MAX_ALTERNATIVES: usize = 128;
 /// Semantic lookahead, independent of wall time and logical-work allowances.
 pub const MAX_RECONSIDERATIONS: u8 = 1;
+/// An initial preplay catalogue binding precedes the ordinary play horizon.
+/// This extra boundary is authored explicitly; the play decorator stays at one.
+pub const MAX_BOUNDARY_DEPTH: u8 = MAX_RECONSIDERATIONS + 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stage(pub usize);
@@ -156,7 +159,7 @@ impl Program {
                     }
                 }
                 Node::Reconsider { remaining, retained } => {
-                    if *remaining == 0 || *remaining > MAX_RECONSIDERATIONS {
+                    if *remaining == 0 || *remaining > MAX_BOUNDARY_DEPTH {
                         return Err(SequenceError::InvalidProgram);
                     }
                     visit(program, *retained, marks)?;
@@ -675,7 +678,7 @@ pub(crate) fn inspect_with(
                 if *remaining == 0 {
                     return Err(SequenceError::Budget);
                 }
-                if *remaining > MAX_RECONSIDERATIONS {
+                if *remaining > MAX_BOUNDARY_DEPTH {
                     return Err(SequenceError::InvalidProgram);
                 }
                 consumed.push(Read {
