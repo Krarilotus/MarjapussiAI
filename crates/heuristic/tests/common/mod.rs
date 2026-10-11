@@ -144,7 +144,6 @@ impl Scene {
         // continuations and their hidden-card guards are in contract_planning.
         self.act_with(
             Params {
-                plan_worlds: 0,
                 ..Params::default()
             },
             legal,

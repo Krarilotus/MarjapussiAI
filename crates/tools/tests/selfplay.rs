@@ -16,11 +16,9 @@ fn fresh_and_reused_agents_play_the_same_game() {
     let p = Params {
         endgame_tricks: 2,
         endgame_worlds: 1,
-        return_worlds: 1,
-        plan_worlds: 1,
         ..Params::default()
     };
-    let (mut forecasts, mut endgames) = (0, 0);
+    let mut endgames = 0;
     for seed in 0..50 {
         let hands = deal(seed);
         let (result, log) = play_game(&hands, &mut hp1_players(&p));
@@ -31,18 +29,12 @@ fn fresh_and_reused_agents_play_the_same_game() {
             assert_eq!(seat, l.seat);
             let fresh = HeuristicAgent::new(p.clone()).act(&table.view(seat), legal);
             for d in [&fresh, &l.decision] {
-                forecasts += d
-                    .explanation
-                    .facts
-                    .iter()
-                    .filter(|f| f.key == "forecast_complete")
-                    .count();
                 endgames += d.explanation.facts.iter().filter(|f| f.key == "complete").count();
                 assert!(
                     d.explanation
                         .facts
                         .iter()
-                        .filter(|f| matches!(f.key, "complete" | "forecast_complete"))
+                        .filter(|f| f.key == "complete")
                         .all(|f| f.value == 1.0),
                     "seed {seed}: determinism comparison must finish: {:?}",
                     d
@@ -60,8 +52,5 @@ fn fresh_and_reused_agents_play_the_same_game() {
             );
         }
     }
-    assert!(
-        forecasts > 0 && endgames > 0,
-        "the suite must exercise forecasts and the solver"
-    );
+    assert!(endgames > 0, "the suite must exercise the solver");
 }

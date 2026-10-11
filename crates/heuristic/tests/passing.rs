@@ -164,7 +164,7 @@ fn pair_messages_mark_only_the_suits_the_convention_covers() {
 }
 
 #[test]
-fn tied_passes_follow_the_supplied_legal_order() {
+fn tied_passes_do_not_depend_on_the_supplied_legal_order() {
     let s = mh_scene(
         &["g-6", "g-7", "g-8", "e-6", "e-7", "e-8", "r-A", "r-Z", "r-K"],
         &plain_auction(),
@@ -180,7 +180,8 @@ fn tied_passes_follow_the_supplied_legal_order() {
         })
         .collect();
     assert_eq!(legal.len(), 2);
-    assert_eq!(s.act(&legal).action, legal[0]);
+    // Ties break by the canonical action order (`legal_actions::eligible`), not by enumeration.
+    let first = s.act(&legal).action;
     legal.reverse();
-    assert_eq!(s.act(&legal).action, legal[0]);
+    assert_eq!(s.act(&legal).action, first);
 }

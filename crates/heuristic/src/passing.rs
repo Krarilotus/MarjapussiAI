@@ -2,7 +2,6 @@
 //! The active belief model does not yet infer intent from observed pass choices.
 
 mod features;
-mod forecast;
 pub use features::{
     back_features, back_plan, forth_features, score, Partner, PassingWeights, BACK_FEATURES, FORTH_FEATURES,
     PASSING_WEIGHTS,
@@ -56,10 +55,10 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
         .0
     } else {
         let trump = back_plan(hand, partner.half, ctx.params.partner_half_conf);
-        let (baseline, options) = choose(ctx, legal, &PASSING_WEIGHTS.back, &BACK_FEATURES, RuleId::PBack, |y| {
+        choose(ctx, legal, &PASSING_WEIGHTS.back, &BACK_FEATURES, RuleId::PBack, |y| {
             back_features(hand, &partner, trump, y)
-        });
-        forecast::choose(ctx, options, &partner, trump, baseline)
+        })
+        .0
     }
 }
 

@@ -11,7 +11,7 @@ use heuristic::{Decision, HeuristicAgent, Params, RuleId};
 // comparison. These oracle checks isolate that guarantee and its follow-through.
 fn certified_agent() -> HeuristicAgent {
     HeuristicAgent::new(Params {
-        plan_worlds: 0,
+
         ..Params::default()
     })
 }

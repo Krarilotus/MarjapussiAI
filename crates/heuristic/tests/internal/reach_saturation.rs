@@ -3,7 +3,7 @@ use super::*;
 use agent::{SeatView, Table};
 use beliefs::Mind;
 use engine::Card;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
 fn eager_reach(ctx: &Ctx, legal: &[GameAction]) -> Reach {
@@ -201,8 +201,6 @@ fn assert_saturated_entry_branch(ctx: &Ctx, legal: &[GameAction], reach: &Reach,
 
 fn params() -> crate::Params {
     crate::Params {
-        plan_worlds: 0,
-        return_worlds: 0,
         endgame_worlds: 8,
         endgame_tricks: 2,
         ..crate::Params::default()
@@ -212,7 +210,7 @@ fn params() -> crate::Params {
 fn with_ctx<T>(
     view: &SeatView<'_>,
     params: &crate::Params,
-    f: impl FnOnce(&Ctx<'_>, &crate::response::ResponseState) -> T,
+    f: impl FnOnce(&Ctx<'_>) -> T,
 ) -> T {
     let mut mind = Mind::new(
         view.seat,
@@ -224,7 +222,6 @@ fn with_ctx<T>(
         mind.apply(event).unwrap();
     }
     let solver = RefCell::new(None);
-    let state = crate::response::ResponseState::new(None);
     let ctx = Ctx {
         me: view.seat,
         k: mind.knowledge(),
@@ -233,16 +230,10 @@ fn with_ctx<T>(
         solver: &solver,
         seed: params.seed ^ (view.seat as u64) << 56 ^ view.events.len() as u64,
         deadline: Some(Instant::now() + Duration::from_secs(60)),
-        raw_events: view.events,
         routes: RefCell::new(None),
         concepts: RefCell::new(crate::concepts::Reads::default()),
-        intent: &RefCell::new(None),
-        completed: &RefCell::default(),
-        formation_attempted: &Cell::new(false),
-        response_completion: Some(&state),
-        series: view.series,
     };
-    f(&ctx, &state)
+    f(&ctx)
 }
 
 fn entry_bits(entry: crate::routes::Entry) -> ([u32; 4], [u32; 4], u32) {
@@ -269,7 +260,7 @@ fn eager_and_lazy_reach_preserve_shared_reads_and_later_full_entries() {
     let view = table.view(seat);
     let params = params();
     let run = |eager: bool| {
-        with_ctx(&view, &params, |ctx, _| {
+        with_ctx(&view, &params, |ctx| {
             let reach = if eager {
                 eager_reach(ctx, &legal)
             } else {
@@ -340,7 +331,7 @@ fn initially_saturated_access_leaves_full_entries_lazy_and_bitwise_equal() {
         })
         .collect();
     let run = |eager: bool| {
-        with_ctx(&view, &params, |ctx, _| {
+        with_ctx(&view, &params, |ctx| {
             let before = ctx.concepts.borrow().snapshot();
             let entries = cards.iter().map(|&c| ctx.entry(c).lead[partner(seat) as usize]);
             let lead = if eager {
@@ -362,51 +353,3 @@ fn initially_saturated_access_leaves_full_entries_lazy_and_bitwise_equal() {
     assert_eq!(run(false), run(true));
 }
 
-#[test]
-fn completed_leaf_after_eager_or_lazy_reach_has_identical_decision_and_effort() {
-    let table = at_lead(7);
-    let (seat, raw_legal) = table.to_act().unwrap();
-    let legal = crate::legal_actions::eligible(raw_legal);
-    let view = table.view(seat);
-    let params = params();
-    let run = |eager: bool| {
-        with_ctx(&view, &params, |ctx, state| {
-            // Re-running Reach in play hits identical shared query results. The
-            // oracle primes precisely the old eager entry reads before valuation.
-            let reach = if eager {
-                eager_reach(ctx, &legal)
-            } else {
-                Reach::new(ctx, &legal)
-            };
-            assert_saturated_entry_branch(ctx, &legal, &reach, eager);
-            let decision = crate::play::decide(ctx, &legal);
-            state.finish(decision, ctx.deadline).unwrap()
-        })
-    };
-    let lazy = run(false);
-    let eager = run(true);
-    assert_eq!(lazy, eager); // action, rule, why and canonical solver effort
-    assert!(
-        lazy.canonical_solver_nodes > 0,
-        "fixture must exercise the completed solver lane"
-    );
-    let mut actor = crate::HeuristicAgent::new(params);
-    let public = actor
-        .completed_response_with_effort_before(&view, &legal, Some(Instant::now() + Duration::from_secs(60)), None)
-        .unwrap();
-    assert_eq!(public, lazy);
-    assert_eq!(
-        public
-            .decision
-            .why
-            .iter()
-            .map(|f| (f.key, f.value.to_bits()))
-            .collect::<Vec<_>>(),
-        eager
-            .decision
-            .why
-            .iter()
-            .map(|f| (f.key, f.value.to_bits()))
-            .collect::<Vec<_>>()
-    );
-}

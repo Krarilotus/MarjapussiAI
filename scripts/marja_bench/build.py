@@ -202,17 +202,15 @@ panic = "abort"
         name: "{name}".into(), parameters: format!("{{:?}}; effective seed supplied by worker; see policy_seed", {name}::Params::default()),
         make: Box::new(|seed, _| Box::new({name}::HeuristicAgent::new({name}::Params {{ seed, ..{name}::Params::default() }}))),
     }});''' for name in historical_sources)
-    source = '''use tools::selfplay::{Policy, AssessmentRecorder, builtin_policies_with_recording, record_current, run_with_recording};
+    source = '''use tools::selfplay::{builtin_policies, run_with, Policy};
 fn main() {
-    let recorder = AssessmentRecorder::default();
-    let mut policies = builtin_policies_with_recording(recorder.clone());
-    let current_recorder = recorder.clone();
+    let mut policies = builtin_policies();
     policies.push(Policy {
         name: "new".into(), parameters: format!("{:?}; effective seed supplied by worker; see policy_seed", heuristic::Params::default()),
-        make: Box::new(move |seed, _| record_current(heuristic::HeuristicAgent::new(heuristic::Params { seed, ..heuristic::Params::default() }), current_recorder.clone())),
+        make: Box::new(|seed, _| Box::new(heuristic::HeuristicAgent::new(heuristic::Params { seed, ..heuristic::Params::default() }))),
     });
 ''' + historical + '''
-    if let Err(error) = run_with_recording(policies, recorder) { eprintln!("{error}"); std::process::exit(1); }
+    if let Err(error) = run_with(policies) { eprintln!("{error}"); std::process::exit(1); }
 }
 '''
     (harness / "src/main.rs").write_text(source, encoding="utf-8")

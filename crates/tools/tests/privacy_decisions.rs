@@ -38,8 +38,6 @@ fn hidden_cards_do_not_change_hp1_decisions() {
     let params = Params {
         endgame_tricks: 2,
         endgame_worlds: 8,
-        plan_worlds: 2,
-        return_worlds: 2,
         ..Params::default()
     };
     let mut swaps = 0;
@@ -50,14 +48,9 @@ fn hidden_cards_do_not_change_hp1_decisions() {
         let mut rng = Rng::new(seed);
         let hands = deal(seed);
         let mut table = Table::new(&hands);
-        // Cheap legal histories suffice; the compared decisions below enable forecasts.
         let mut players: Vec<HeuristicAgent> = (0..4)
             .map(|_| {
-                HeuristicAgent::new(Params {
-                    return_worlds: 0,
-                    plan_worlds: 0,
-                    ..params.clone()
-                })
+                HeuristicAgent::new(params.clone())
             })
             .collect();
         let mut actions = vec![];
@@ -119,7 +112,7 @@ fn hidden_cards_do_not_change_hp1_decisions() {
                 d.explanation
                     .facts
                     .iter()
-                    .filter(|f| matches!(f.key, "complete" | "forecast_complete"))
+                    .filter(|f| f.key == "complete")
                     .all(|f| f.value == 1.0),
                 "seed {seed}: privacy comparison must finish"
             );

@@ -71,11 +71,6 @@ fn main() {
                 times.entry(phase).or_default().push(ns);
                 if let Some(writer) = decisions.as_mut() {
                     let raising = table.game.state.phase == engine::GamePhase::Raising;
-                    let assessment = tools::selfplay::decision_assessment_json(
-                        players[seat as usize].last_assessment(),
-                        players[seat as usize].last_sequence(),
-                        raising,
-                    );
                     serde_json::to_writer(
                         &mut *writer,
                         &serde_json::json!({
@@ -83,41 +78,19 @@ fn main() {
                             "seat": seat, "event_count": view.events.len(),
                             "phase": phase, "nanoseconds": ns,
                             "action": tools::record::action_json(&d.action, raising),
-                            "assessment": assessment,
+                            "rule": d.rule.code(),
                         }),
                     )
                     .expect("write decision evidence");
                     writeln!(writer).expect("write decision separator");
                 }
                 if cli.str("--timings-out").is_some() {
-                    let assessment = players[seat as usize].last_assessment();
-                    let sequence = players[seat as usize].last_sequence();
                     observations.push(serde_json::json!({
                         "repeat": r, "game_seed": seed, "decision": decision_index,
                         "seat": seat, "phase": phase, "nanoseconds": ns,
                         "legal_actions": legal.len(), "remaining_cards": view.knowledge.hand_len(seat),
                         "action": tools::record::action_json(&d.action, view.knowledge.declarer().is_some()),
                         "rule": d.rule.code(),
-                        "sequence": sequence.map(|s| serde_json::json!({
-                            "mode": format!("{:?}", s.mode), "failure": s.failure.map(|e| format!("{e:?}")),
-                            "transitions": s.work.transitions, "represented_transitions": s.work.represented_transitions,
-                            "comparisons": s.work.comparisons, "represented_comparisons": s.work.represented_comparisons,
-                            "actual_solver_nodes": s.work.actual_solver_nodes,
-                            "represented_solver_nodes": s.work.represented_solver_nodes,
-                            "completed_candidates": s.work.completed_candidates,
-                            "response_calls": s.work.response_calls, "response_hits": s.work.response_hits,
-                            "suffix_hits": s.work.suffix_hits, "retained_bytes": s.work.retained_bytes,
-                            "total_candidates": s.total_candidates,
-                            "deferred_limit": s.deferred_limit.map(|limit| format!("{limit:?}")),
-                            "deferred_limit_detail": s.deferred_limit.map(tools::selfplay::deferred_limit_json),
-                        })),
-                        "assessment": assessment.map(|a| serde_json::json!({
-                            "evaluated_nodes": a.values.evaluated_nodes,
-                            "memo_hits": a.values.memo_hits,
-                            "candidates": a.actions.len(),
-                            "cohort_size": a.values.cohort_size,
-                            "response_model": a.values.provenance.response_model,
-                        })),
                         "facts": d.why.iter().map(|f| (f.key, f.value)).collect::<BTreeMap<_, _>>(),
                     }));
                 }

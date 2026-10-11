@@ -60,24 +60,6 @@ params! {
     /// Pass-back plan: minimum P(partner holds a half of the suit) to favour my single half.
     partner_half_conf: f32 = 0.5,
 
-    /// Shared hypothetical deals for return forecasts (0: C42 choice only).
-    return_worlds: u32 = 8,
-
-    /// Shared continuation worlds for auction, raising and open-lead comparisons.
-    /// Zero retains the baseline policy.
-    plan_worlds: u32 = 8,
-
-    /// Represented engine transitions available when forming the opening plan.
-    /// Memo hits consume the same logical allowance as uncached evaluation.
-    plan_formation_transitions: u32 = 131_072,
-
-    /// Represented transitions available for an ordinary plan repair.
-    plan_repair_transitions: u32 = 8_192,
-
-    /// Bound on retained continuation dependencies, in MiB per private planner.
-    /// Transient evaluation allocations and solver scratch are separate.
-    plan_memo_mib: u32 = 64,
-
     /// HL-2: cash a side-suit standing card before the valuation leads.
     lead_cash_standing: bool = true,
     // Planned leads (M3, Judge item 5; `leads.rs`), each switchable for its A/B against the
@@ -148,23 +130,6 @@ impl Params {
                 "endgame_tricks must be in 0..={}",
                 engine::TRICKS
             )));
-        }
-        if self.return_worlds > 64 {
-            return Err(HeuristicError::Params("return_worlds must be in 0..=64".into()));
-        }
-        if self.plan_worlds > 64 {
-            return Err(HeuristicError::Params("plan_worlds must be in 0..=64".into()));
-        }
-        for (name, value) in [
-            ("plan_formation_transitions", self.plan_formation_transitions),
-            ("plan_repair_transitions", self.plan_repair_transitions),
-        ] {
-            if !(1..=1_048_576).contains(&value) {
-                return Err(HeuristicError::Params(format!("{name} must be in 1..=1048576")));
-            }
-        }
-        if self.plan_memo_mib > 256 {
-            return Err(HeuristicError::Params("plan_memo_mib must be in 0..=256".into()));
         }
         if self.endgame_tricks != 0 && self.endgame_worlds == 0 {
             return Err(HeuristicError::Params(

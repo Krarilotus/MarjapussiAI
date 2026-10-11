@@ -6,14 +6,10 @@ use beliefs::{ConceptBudget, ConceptQuery};
 
 use crate::Ctx;
 
-pub mod sequence;
-pub mod value;
 
 pub(crate) struct Reads {
     remaining: usize,
     results: Vec<(ConceptQuery, Option<f32>)>,
-    pub assessment: Option<crate::planning::PlanningAssessment>,
-    pub sequence: Option<crate::planning::retained::SequenceTrace>,
 }
 
 impl Default for Reads {
@@ -21,8 +17,6 @@ impl Default for Reads {
         Self {
             remaining: 2048,
             results: vec![],
-            assessment: None,
-            sequence: None,
         }
     }
 }
@@ -95,19 +89,11 @@ mod tests {
             solver: &RefCell::new(None),
             seed: 1,
             deadline: None,
-            raw_events: mind.events(),
             routes: RefCell::new(None),
-            intent: &RefCell::new(None),
-            completed: &RefCell::default(),
-            formation_attempted: &std::cell::Cell::new(false),
-            response_completion: None,
             concepts: RefCell::new(Reads {
                 remaining: 700,
                 results: vec![],
-                assessment: None,
-                sequence: None,
-            }),
-            series: crate::SeriesScore::default(),
+                    }),
         };
         let invalid = ConceptQuery::new(Concept::Card { seat: 4, card: 0 });
         assert_eq!(ctx.joint_probability(&invalid), None);
