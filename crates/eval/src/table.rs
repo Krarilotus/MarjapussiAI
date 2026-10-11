@@ -105,16 +105,56 @@ pub fn play_game(hands: &[Vec<Card>; 4], players: &mut [Box<dyn Agent>]) -> (Gam
 pub fn play_game_with(
     hands: &[Vec<Card>; 4],
     players: &mut [Box<dyn Agent>],
-    mut hook: impl FnMut(&Table, Seat, &Decision),
+    hook: impl FnMut(&Table, Seat, &Decision),
 ) -> (GameFinishedInfo, Vec<Logged>) {
     let mut table = Table::new(hands);
     table.kinds = std::array::from_fn(|s| players[s].kind());
+    play_table_with(table, players, usize::MAX, hook).expect("complete legal game")
+}
+
+/// A bounded continuation failed before a complete engine outcome was available.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RunError {
+    Players(usize),
+    ActionLimit(usize),
+    IllegalAction(GameAction),
+}
+
+impl std::fmt::Display for RunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Players(n) => write!(f, "expected four players, got {n}"),
+            Self::ActionLimit(n) => write!(f, "continuation exceeded {n} actions"),
+            Self::IllegalAction(a) => write!(f, "policy returned an illegal action: {a:?}"),
+        }
+    }
+}
+
+impl std::error::Error for RunError {}
+
+/// Continue an existing table without replacing its private histories, kinds or series.
+/// The limit bounds policy calls, not the wall time of an individual `Agent::act`.
+pub fn play_table_with(
+    mut table: Table,
+    players: &mut [Box<dyn Agent>],
+    max_actions: usize,
+    mut hook: impl FnMut(&Table, Seat, &Decision),
+) -> Result<(GameFinishedInfo, Vec<Logged>), RunError> {
+    if players.len() != 4 {
+        return Err(RunError::Players(players.len()));
+    }
     let mut log = Vec::with_capacity(64);
     while let Some((seat, legal)) = table.to_act() {
+        if log.len() >= max_actions {
+            return Err(RunError::ActionLimit(max_actions));
+        }
         let view = table.view(seat);
         let t0 = std::time::Instant::now();
         let decision = players[seat as usize].act(&view, legal);
         let nanos = t0.elapsed().as_nanos();
+        if !legal.contains(&decision.action) {
+            return Err(RunError::IllegalAction(decision.action));
+        }
         let flags = detectors::flags(&table, seat, legal, &decision.action);
         hook(&table, seat, &decision);
         table.apply(decision.action);
@@ -125,5 +165,5 @@ pub fn play_game_with(
             flags,
         });
     }
-    (GameFinishedInfo::from(table.game), log)
+    Ok((GameFinishedInfo::from(table.game), log))
 }

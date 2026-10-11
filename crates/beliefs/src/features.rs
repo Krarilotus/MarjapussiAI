@@ -447,6 +447,7 @@ pub(crate) struct Leaves {
 
 impl Leaves {
     pub(crate) fn new(k: &Knowledge) -> Leaves {
+        let _timing = crate::profile::scope("belief.feature_leaves");
         let me = k.me();
         let space = knowledge::DealSpace::with_features(k);
         let (a, h) = counts(k.certain(me));

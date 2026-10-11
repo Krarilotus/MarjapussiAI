@@ -2,6 +2,7 @@
 //! records. Running agents and evaluating them is `crates/eval`.
 
 pub mod cli;
+pub mod dryrun;
 pub mod legacy;
 pub mod record;
 pub mod selfplay;

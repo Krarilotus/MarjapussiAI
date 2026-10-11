@@ -27,10 +27,10 @@ const EVEN: u16 = (1 << 0) | (1 << 2) | (1 << 4) | (0b1111 << 6);
 /// using the engine. This is exposed-deal capability, not a hidden-information policy.
 pub fn trick_control(state: FastState, mv: Move) -> TrickControl {
     debug_assert!(state.moves().any(|m| m == mv));
-    TrickControl(control(state.after(mv), state.tricks_done() + 1))
+    TrickControl(control(state.after(mv), state.tricks_done() + 1, ALL))
 }
 
-fn control(state: FastState, end: u8) -> u16 {
+fn control(state: FastState, end: u8, wanted: u16) -> u16 {
     if state.tricks_done() == end {
         let seat = state.leader();
         let team = seat % 2;
@@ -51,18 +51,26 @@ fn control(state: FastState, end: u8) -> u16 {
                 }
             }
         }
-        return goals;
+        return goals & wanted;
     }
     let ours = if state.to_move().is_multiple_of(2) {
         EVEN
     } else {
         ALL ^ EVEN
     };
-    let (mut any, mut every) = (0, ALL);
+    // For the actor's team one successful child proves a goal; for the other
+    // team one unsuccessful child disproves it. Resolved goals need no further
+    // descendants. This is exact Boolean minimax, independently for each bit.
+    let (mut any, mut every) = (0, wanted & !ours);
+    let mut unresolved = wanted;
     for mv in state.moves() {
-        let child = control(state.after(mv), end);
-        any |= child;
+        let child = control(state.after(mv), end, unresolved);
+        any |= child & ours;
         every &= child;
+        unresolved = (wanted & ours & !any) | every;
+        if unresolved == 0 {
+            break;
+        }
     }
-    (any & ours) | (every & !ours)
+    any | every
 }

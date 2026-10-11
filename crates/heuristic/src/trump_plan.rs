@@ -6,12 +6,66 @@ use engine::{partner, CardSet, SUITS};
 use engine::{ActionType, GameAction, QuestionType};
 
 use beliefs::conventions::pair_value;
-use beliefs::{Concept, ConceptQuery, Literal};
+use beliefs::{Concept, ConceptBudget, ConceptQuery, Literal, PerspectiveBudget};
 
 use crate::rules::RuleId;
 use crate::valuation::Valuation;
 use crate::{decision, fact, Ctx, Decision};
 use engine::PlayerTrumpPossibilities;
+
+/// The player with the lead performs this action. A respondent's rights are
+/// irrelevant: the engine owns truthful answers and the resulting activation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Activation {
+    Announce,
+    AskPair,
+    AskHalf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Alternatives {
+    own: Option<Activation>,
+    partner: Option<Activation>,
+}
+
+impl Alternatives {
+    /// Conditional on the live pair belonging to our team in this allocation.
+    fn new(mine: u32, own: PlayerTrumpPossibilities, partner: PlayerTrumpPossibilities) -> Self {
+        match mine {
+            2 => Self {
+                own: own.may_announce().then_some(Activation::Announce),
+                partner: partner.may_ask_pair().then_some(Activation::AskPair),
+            },
+            1 => Self {
+                own: Some(Activation::AskHalf),
+                partner: Some(Activation::AskHalf),
+            },
+            _ => Self {
+                own: own.may_ask_pair().then_some(Activation::AskPair),
+                partner: partner.may_announce().then_some(Activation::Announce),
+            },
+        }
+    }
+
+    fn available(self, partner_lead: bool) -> bool {
+        self.own.is_some() || (partner_lead && self.partner.is_some())
+    }
+}
+
+/// Approximate future openings belonging to each actor, not interchangeable
+/// team tricks and not a joint probability. Exact next-opening activation is
+/// separately evaluated by Routes through the engine's trick-control solver.
+#[derive(Clone, Copy)]
+pub(crate) struct Control {
+    pub own: f32,
+    pub partner: f32,
+}
+
+impl Control {
+    pub fn with_own_lead(self) -> Self {
+        Self { own: self.own + 1.0, ..self }
+    }
+}
 
 /// What our team can still reach, from my view.
 pub(crate) struct Reach {
@@ -28,6 +82,7 @@ pub(crate) struct Reach {
 
 impl Reach {
     pub fn new(ctx: &Ctx, legal: &[GameAction]) -> Reach {
+        let _timing = beliefs::profile::scope("pair.reach");
         let k = ctx.k;
         let mate = partner(ctx.me);
         let hand = k.certain(ctx.me);
@@ -71,9 +126,21 @@ impl Reach {
             (!my_pairs.is_empty() && !k.rights(ctx.me).may_announce() && k.rights(mate).may_ask_pair())
                 || (partner_pair > 0.0 && !k.rights(ctx.me).may_ask_pair() && k.rights(mate).may_announce());
         if requires_partner {
-            for action in legal {
-                if let ActionType::CardPlayed(c) = action.action_type {
-                    p_partner_lead = p_partner_lead.max(ctx.entry(c.index()).lead[mate as usize]);
+            // Establish the hard entry first. Its existence is sufficient for
+            // this access proxy; do not build a sampled Routes DP to rediscover it.
+            let known_entry = legal.iter().any(|action| match action.action_type {
+                ActionType::CardPlayed(c) if !CardSet::HALVES.contains(c.index()) => {
+                    !(k.partner_entry_winners(ctx.me, c.index()) - CardSet::HALVES).is_empty()
+                }
+                _ => false,
+            });
+            if known_entry {
+                p_partner_lead = 1.0;
+            } else {
+                for action in legal {
+                    if let ActionType::CardPlayed(c) = action.action_type {
+                        p_partner_lead = p_partner_lead.max(ctx.entry(c.index()).lead[mate as usize]);
+                    }
                 }
             }
         }
@@ -85,30 +152,54 @@ impl Reach {
         }
     }
 
-    /// Leads our team still needs to activate the pair of `s` I hold a half of: one for my
-    /// announcement or my half question, plus one for "Yours" first if the partner may hold a
-    /// pair (the order mine → yours → ours).
-    pub fn leads_needed(&self, ctx: &Ctx, s: Suit) -> u32 {
-        let split = (ctx.k.certain(ctx.me) & CardSet::halves(s)).len() == 1;
-        1 + (split && self.partner_may(ctx)) as u32
+    fn alternatives(&self, ctx: &Ctx, s: Suit, own: PlayerTrumpPossibilities) -> Alternatives {
+        Alternatives::new(
+            (ctx.k.certain(ctx.me) & CardSet::halves(s)).len(),
+            own,
+            ctx.k.rights(partner(ctx.me)),
+        )
     }
 
-    /// P(the pair of `s` gets activated) given `leads` expected leads of our team (C25: the one
-    /// owner of activation). My own pair needs my `Own` right, or the partner's "Yours" after
-    /// its lead; a split pair needs a half question, which no right forbids.
-    pub fn p_activate(&self, ctx: &Ctx, s: Suit, leads: f32) -> f32 {
-        let mate = partner(ctx.me);
-        let mine = ctx.k.certain(ctx.me) & CardSet::halves(s);
-        let rights = match mine.len() {
-            2 if ctx.k.rights(ctx.me).may_announce() => 1.0,
-            2 if ctx.k.rights(mate).may_ask_pair() => self.p_partner_lead,
-            2 => 0.0,
-            1 => 1.0, // A split pair can still be asked at every rights level.
-            _ if ctx.k.rights(ctx.me).may_ask_pair() => 1.0,
-            _ if ctx.k.rights(mate).may_announce() => self.p_partner_lead,
-            _ => 0.0,
+    /// Reserve openings for higher-valued known pairs that have only this actor's
+    /// route. This does not solve uncertain declaration order, but prevents one
+    /// expected opening being reused for every actor-exclusive known pair.
+    fn openings_needed(&self, ctx: &Ctx, s: Suit, own_actor: bool) -> f32 {
+        let k = ctx.k;
+        let known = k.team_pairs(ctx.me);
+        1.0 + SUITS
+            .into_iter()
+            .filter(|&other| {
+                other != s
+                    && pair_value(other) > pair_value(s)
+                    && known.certain() & (1 << other as u8) != 0
+            })
+            .filter(|&other| {
+                let routes = self.alternatives(ctx, other, k.rights(ctx.me));
+                if own_actor {
+                    routes.own.is_some() && routes.partner.is_none()
+                } else {
+                    routes.partner.is_some() && routes.own.is_none()
+                }
+            })
+            .count() as f32
+    }
+
+    /// Conditional access estimate, with each lead assigned to its actual actor.
+    /// Alternative routes share the same pair; use the stronger estimate rather
+    /// than adding correlated events. Pair ownership is charged once by callers.
+    pub fn p_activate(&self, ctx: &Ctx, s: Suit, control: Control) -> f32 {
+        let routes = self.alternatives(ctx, s, ctx.k.rights(ctx.me));
+        let own = if routes.own.is_some() {
+            (control.own / self.openings_needed(ctx, s, true)).clamp(0.0, 1.0)
+        } else {
+            0.0
         };
-        rights * (leads / self.leads_needed(ctx, s) as f32).min(1.0)
+        let partner = if routes.partner.is_some() {
+            (control.partner / self.openings_needed(ctx, s, false)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        own.max(partner)
     }
 
     /// Whether the partner may hold a pair worth a "Yours" (P10a "may need").
@@ -145,13 +236,8 @@ fn keeps_needed_rights(ctx: &Ctx, reach: &Reach, ask: QuestionType) -> bool {
     let after = before.after_question(ask);
     // The partner will plausibly win a lead before the end (P10a).
     let lead = reach.p_partner_lead >= ctx.params.partner_lead_conf;
-    // My own uncalled pair: I announce it (Own), or the partner asks me "Yours" after a lead.
-    let my_pair =
-        |r: PlayerTrumpPossibilities| reach.my_pairs.is_empty() || r.may_announce() || (theirs.may_ask_pair() && lead);
-    // The partner's possible pair: my "Yours" (asking it now is its activation), or the
-    // partner's own announcement after a lead.
-    let partner_pair =
-        |r: PlayerTrumpPossibilities| !reach.partner_may(ctx) || r.may_ask_pair() || (theirs.may_announce() && lead);
+    let my_pair = |r| reach.my_pairs.is_empty() || Alternatives::new(2, r, theirs).available(lead);
+    let partner_pair = |r| !reach.partner_may(ctx) || Alternatives::new(0, r, theirs).available(lead);
     let lost_mine = my_pair(before) && !my_pair(after);
     let lost_theirs = ask != QuestionType::Yours && partner_pair(before) && !partner_pair(after);
     !lost_mine && !lost_theirs
@@ -163,7 +249,7 @@ fn find(legal: &[GameAction], t: ActionType) -> Option<&GameAction> {
 
 /// The plan at a lead where questions are legal.
 pub(crate) fn timing(ctx: &Ctx, legal: &[GameAction], reach: &Reach, val: &Valuation) -> Option<Decision> {
-    let planned = action(ctx, legal, reach)?;
+    let planned = action(ctx, legal, reach);
     let cards = legal
         .iter()
         .filter_map(|a| match a.action_type {
@@ -171,7 +257,10 @@ pub(crate) fn timing(ctx: &Ctx, legal: &[GameAction], reach: &Reach, val: &Valua
             _ => None,
         })
         .fold(CardSet::EMPTY, |s, c| s | CardSet::single(c));
-    let retained = ctx.k.retaining_lead(ctx.me) & (cards - val.plan_cards);
+    let retained = (ctx.k.retaining_lead(ctx.me) & (cards - val.plan_cards))
+        .iter()
+        .filter(|&card| planned.as_ref().is_some_and(|p| preserves_activation(ctx, p, card)))
+        .fold(CardSet::EMPTY, |set, card| set | CardSet::single(card));
     // With no trump, all these cards remain own winners. Under trump, only
     // the trump run plus ONE side winner is certified; later side rounds can
     // become ruffable. Cash that side card first, then the trump run survives.
@@ -202,33 +291,115 @@ pub(crate) fn timing(ctx: &Ctx, legal: &[GameAction], reach: &Reach, val: &Valua
             ));
         }
     }
-    // A partner's own announcement can replace my question after a safe entry.
-    // Preserve partner's pairs and avoid protected own pair suits. Certify one
-    // specific winner, not separate sampled claims about winning the trick and
-    // keeping an announcement available.
+    connected_entry(ctx, legal, cards - val.plan_cards, reach, planned.as_ref()).or(planned)
+}
+
+/// Follow an available conditional route even after my question rights have
+/// been spent: the pair owner can announce, or the other actor can ask Yours.
+/// This proves availability, not a commitment by a privately modelled partner.
+fn connected_entry(
+    ctx: &Ctx,
+    legal: &[GameAction],
+    cards: CardSet,
+    reach: &Reach,
+    planned: Option<&Decision>,
+) -> Option<Decision> {
     let mate = partner(ctx.me);
-    if ctx.params.lead_cash_standing
-        && planned.action.action_type == ActionType::Question(QuestionType::Yours)
-        && ctx.k.rights(mate).may_announce()
-        && ctx.k.hand_len(mate) > 1
-    {
-        let entry = (cards - val.plan_cards)
-            .iter()
-            .filter_map(|c| {
-                let winners = ctx.k.partner_entry_winners(ctx.me, c) - CardSet::HALVES;
-                crate::leads::cash_card(winners, winners).map(|winner| (c, winner))
-            })
-            .min_by_key(|&(c, _)| (engine::CARD_POINTS[c as usize], c));
-        if let Some((c, winner)) = entry {
-            let a = find(legal, ActionType::CardPlayed(engine::Card::from_index(c)))?;
-            return Some(decision(
-                a,
-                RuleId::HC4,
-                vec![fact("partner_entry", winner), fact("partner_can_announce", 1)],
-            ));
-        }
+    if !ctx.params.lead_cash_standing || ctx.k.hand_len(mate) <= 1 {
+        return None;
     }
-    Some(planned)
+    let defer_yours = !ctx.k.rights(ctx.me).may_ask_pair()
+        || planned.is_some_and(|p| p.action.action_type == ActionType::Question(QuestionType::Yours));
+    let known = ctx.k.team_pairs(ctx.me);
+    let connection = SUITS
+        .into_iter()
+        .filter(|&s| known.certain() & (1 << s as u8) != 0)
+        .filter_map(|suit| {
+            let route = reach.alternatives(ctx, suit, ctx.k.rights(ctx.me)).partner?;
+            let usable = match route {
+                Activation::Announce => defer_yours,
+                Activation::AskPair => !ctx.k.rights(ctx.me).may_announce() && partner_knows_pair(ctx, suit),
+                // Split access remains in the solver's joint entry valuation.
+                Activation::AskHalf => false,
+            };
+            usable.then_some((Some(suit), route))
+        })
+        .max_by_key(|&(suit, _)| suit.map(pair_value))
+        .or_else(|| {
+            // Preserve the existing uncertain pair-owner alternative. A
+            // non-half entry preserves any pair it has; it does not prove that
+            // the partner has one. No suit or known-pair fact is published here.
+            (defer_yours && reach.partner_may(ctx) && ctx.k.rights(mate).may_announce())
+                .then_some((None, Activation::Announce))
+        });
+    let (suit, route) = connection?;
+    let (card, winner) = (cards - CardSet::HALVES)
+        .iter()
+        .filter_map(|c| {
+            let winners = ctx.k.partner_entry_winners(ctx.me, c) - CardSet::HALVES;
+            crate::leads::cash_card(winners, winners).map(|winner| (c, winner))
+        })
+        .min_by_key(|&(c, _)| (engine::CARD_POINTS[c as usize], c))?;
+    let action = find(legal, ActionType::CardPlayed(engine::Card::from_index(card)))?;
+    let mut why = vec![
+        fact("partner_entry", winner),
+        fact("partner_can_announce", u8::from(route == Activation::Announce)),
+        fact("partner_can_ask", u8::from(route == Activation::AskPair)),
+        fact("entry_consumes_no_half", 1),
+    ];
+    if let Some(suit) = suit {
+        why.extend([fact("activation_suit", suit as u8), fact("pair_survives_entry", 1)]);
+    }
+    Some(decision(action, RuleId::HC4, why))
+}
+
+/// A guaranteed next own lead is useful only if its activation resources remain.
+/// For a known partner resource, forcing follow in another suit preserves it.
+/// A speculative half question retains its existing attempt model; no certainty
+/// about that unknown half is inferred from this guard.
+fn preserves_activation(ctx: &Ctx, planned: &Decision, card: u8) -> bool {
+    let k = ctx.k;
+    let mate = partner(ctx.me);
+    let ours = k.certain(ctx.me) - CardSet::single(card);
+    match planned.action.action_type {
+        ActionType::AnnounceTrump(suit) => {
+            CardSet::halves(suit).is_subset(ours)
+                && Alternatives::new(2, k.rights(ctx.me), k.rights(mate)).own == Some(Activation::Announce)
+        }
+        ActionType::Question(QuestionType::Yours) => {
+            if !k.rights(ctx.me).may_ask_pair() {
+                return false;
+            }
+            let known = k.pairs(mate).certain;
+            known == 0 || SUITS.into_iter().any(|suit| {
+                known & (1 << suit as u8) != 0 && forced_other_suit(ctx, mate, suit, card)
+            })
+        }
+        ActionType::Question(QuestionType::YourHalf(suit)) => {
+            !(ours & CardSet::halves(suit)).is_empty()
+                && (k.known_half(mate, suit) != Some(true) || forced_other_suit(ctx, mate, suit, card))
+        }
+        _ => false,
+    }
+}
+
+fn forced_other_suit(ctx: &Ctx, mate: u8, pair: Suit, card: u8) -> bool {
+    let led = engine::suit_of(card);
+    led != pair && ctx.k.count_bounds(mate, led).0 > 0
+}
+
+/// Root's proof of viewer knowledge, never a probability rounded to one. This
+/// shortcut requests no traversal and cannot reveal a private root pair to mate.
+fn partner_knows_pair(ctx: &Ctx, suit: Suit) -> bool {
+    ctx.mind
+        .perspective_concept(
+            partner(ctx.me),
+            &ConceptQuery { event: vec![Concept::Pair { seat: ctx.me, suit }.into()], given: vec![] },
+            PerspectiveBudget { outer_nodes: 0, inner: ConceptBudget { max_nodes: 0 }, max_hypotheses: 0 },
+        )
+        .ok()
+        .and_then(|p| p.known_by_viewer)
+        == Some(true)
 }
 
 fn action(ctx: &Ctx, legal: &[GameAction], reach: &Reach) -> Option<Decision> {
@@ -272,3 +443,7 @@ fn action(ctx: &Ctx, legal: &[GameAction], reach: &Reach) -> Option<Decision> {
     }
     None
 }
+
+#[cfg(test)]
+#[path = "../tests/internal/activation_resources.rs"]
+mod tests;

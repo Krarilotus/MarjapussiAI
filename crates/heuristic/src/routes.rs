@@ -21,6 +21,7 @@ pub(crate) struct Routes {
 
 impl Routes {
     fn new(ctx: &Ctx) -> Self {
+        let _timing = beliefs::profile::scope("routes");
         // A computational budget, not a fitted playing-strength parameter.
         const WORLDS: usize = 64;
         let model = ctx.mind.deal_model();
@@ -44,6 +45,7 @@ impl Routes {
     }
 
     fn entry(&mut self, ctx: &Ctx, card: u8) -> Entry {
+        let _timing = beliefs::profile::scope("routes.entry");
         if let Some(entry) = self.entries[card as usize] {
             return entry;
         }

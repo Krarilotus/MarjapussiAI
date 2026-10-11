@@ -3,6 +3,53 @@ use crate::{HeuristicAgent, Params};
 use std::cell::RefCell;
 
 #[test]
+fn combined_shortlist_keeps_pair_and_control_together_without_a_score_bonus() {
+    let set = |text: &str| {
+        text.split_whitespace().fold(CardSet::EMPTY, |h, c| {
+            h | CardSet::single(c.parse::<engine::Card>().unwrap().index())
+        })
+    };
+    let low = set("g-6 g-7 g-8 g-9 e-6 e-7 r-6 r-7 r-8");
+    let resources = set("s-A s-K s-O e-A");
+    let mut mind = Mind::new(0, low, [crate::SeatKind::Unknown; 4], beliefs::BeliefParams::base_only());
+    mind.apply(&SeatEvent::Pass { from: 2, to: 0, cards: Some(resources) }).unwrap();
+    let params = Params::default();
+    let solver = RefCell::new(None);
+    let ctx = Ctx {
+        me: 0,
+        k: mind.knowledge(),
+        mind: &mind,
+        params: &params,
+        solver: &solver,
+        seed: 7,
+        routes: RefCell::new(None),
+        concepts: RefCell::new(crate::concepts::Reads::default()),
+        series: crate::SeriesScore::default(),
+    };
+    let action = |given: CardSet| GameAction {
+        player: engine::PlaceAtTable(0),
+        action_type: ActionType::Pass(given.cards().try_into().unwrap()),
+    };
+    let give_winners = set("s-A e-A g-6 g-7");
+    let give_pair = set("s-K s-O g-6 g-7");
+    let keep_connection = set("g-6 g-7 g-8 g-9");
+    let ranked = vec![
+        (action(give_winners), give_winners, 3.0),
+        (action(give_pair), give_pair, 2.0),
+        (action(keep_connection), keep_connection, 1.0),
+    ];
+    let mut selected = vec![ranked[0].0, ranked[1].0];
+    add_connected_allocations(&ctx, &mut selected, &ranked);
+    assert_eq!(selected, ranked.iter().map(|x| x.0).collect::<Vec<_>>());
+    // C42 still prefers the first action: nomination only adds the missing
+    // conjunction for completed continuation comparison, with no repricing.
+    assert_eq!(ranked[0].2, 3.0);
+    add_connected_allocations(&ctx, &mut selected, &ranked);
+    assert_eq!(selected.len(), 3);
+    assert!(ctx.routes.borrow().is_none(), "shape coverage needs no sampled entry evaluation");
+}
+
+#[test]
 fn shortlist_preserves_a_joint_partner_known_resource_only_when_missing() {
     let set = |text: &str| {
         text.split_whitespace().fold(CardSet::EMPTY, |h, c| {

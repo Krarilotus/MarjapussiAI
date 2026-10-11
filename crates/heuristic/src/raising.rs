@@ -197,6 +197,7 @@ fn raised_hand(ctx: &Ctx) -> Option<(CardSet, i32, usize)> {
 /// Before the sampled endgame: realize the certified floor rather than replace
 /// its guaranteed route with an attractive continuation in a few sampled deals.
 pub(crate) fn follow(ctx: &Ctx, legal: &[GameAction]) -> Option<Decision> {
+    let _timing = beliefs::profile::scope("claim.follow");
     if ctx.k.declarer() != Some(ctx.me)
         || !ctx.k.trick().is_empty()
         || ctx.k.trick_winners().iter().any(|&seat| seat != ctx.me)

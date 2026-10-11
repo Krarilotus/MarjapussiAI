@@ -100,7 +100,7 @@ fn stream_seed(deal_seed: u64, slot: u8) -> u64 {
     Rng::new(deal_seed.wrapping_add(u64::from(slot).wrapping_mul(0x9E37_79B9_7F4A_7C15))).next_u64()
 }
 
-fn phase(phase: &GamePhase) -> &'static str {
+pub(crate) fn phase(phase: &GamePhase) -> &'static str {
     match phase {
         GamePhase::WaitingForStart => "waiting_for_start",
         GamePhase::Bidding => "bidding",
@@ -126,7 +126,7 @@ fn message(message: Message) -> &'static str {
     }
 }
 
-fn metrics_json(m: &MatchStats) -> Value {
+pub(crate) fn metrics_json(m: &MatchStats) -> Value {
     let seats: Vec<_> = m.seats.iter().map(|s| json!({
         "auction_bids": s.auction_bids, "auction_passes": s.auction_passes,
         "raise_opportunities": s.raise_opportunities, "raises": s.raises,

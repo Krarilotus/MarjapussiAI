@@ -345,6 +345,7 @@ impl Mind {
                 return t;
             }
         }
+        let _timing = crate::profile::scope("belief.base");
         let t = table::base(self.knowledge());
         self.cache.borrow_mut().base = Some((epoch, t));
         t
@@ -362,6 +363,7 @@ impl Mind {
 
     /// The feature DP of this epoch (also for the study).
     pub(crate) fn posterior(&self) -> Posterior {
+        let _timing = crate::profile::scope("belief.posterior");
         self.signals();
         let fact = self.own.fact_epoch();
         let leaves = match self.cache.borrow_mut().leaves.take() {
@@ -397,15 +399,15 @@ impl Mind {
     /// exchange need every term's class masses, which nothing else reads.
     pub(crate) fn dealt(&self) -> [SeatFeatures; 4] {
         let key = self.epochs();
-        let (parts, z) = {
-            let d = self.derived();
-            (d.dealt.clone(), d.z)
-        };
         if let Some((e, f)) = self.cache.borrow().dealt {
             if e == key {
                 return f;
             }
         }
+        let (parts, z) = {
+            let d = self.derived();
+            (d.dealt.clone(), d.z)
+        };
         let cal = match self.params.signals {
             Signals::Full => self.params.calibration,
             Signals::BaseOnly => Calibration::NONE,
@@ -419,6 +421,7 @@ impl Mind {
     }
 
     fn compute(&self, key: Epochs) -> Derived {
+        let _timing = crate::profile::scope("belief.derived");
         let k = self.knowledge();
         let post = self.posterior();
         let holds = self.card_table(&post);

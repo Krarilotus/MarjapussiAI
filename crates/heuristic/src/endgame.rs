@@ -24,6 +24,7 @@ use crate::{decision, fact, Ctx, Decision, Rng};
 const TT_BITS: u32 = 16;
 
 pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option<Decision> {
+    let _timing = beliefs::profile::scope("endgame");
     let deadline = Instant::now() + Duration::from_millis(45);
     let k = ctx.k;
     let tricks_left = k.hand_len(ctx.me) as u32;

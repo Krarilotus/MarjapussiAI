@@ -202,6 +202,7 @@ impl HeuristicAgent {
 }
 
 fn sync<'a>(slot: &'a mut Option<Synced>, params: &Params, view: &SeatView) -> &'a Mind {
+        let _timing = beliefs::profile::scope("policy.sync");
     let start = view.knowledge.dealt_certain(view.seat);
     let continues = slot.as_ref().is_some_and(|m| {
         m.mind.seat() == view.seat
@@ -247,6 +248,7 @@ impl Agent for HeuristicAgent {
 impl HeuristicAgent {
     /// The decision with its typed rule ID (`rules.rs`).
     pub fn decide(&mut self, view: &SeatView, legal: &[GameAction]) -> Decision {
+        let _timing = beliefs::profile::scope("policy.decide");
         let legal: Vec<GameAction> = legal
             .iter()
             .filter(|a| a.action_type != ActionType::UndoRequest)

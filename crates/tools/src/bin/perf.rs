@@ -19,12 +19,14 @@ fn fnv(bytes: &[u8]) -> u64 {
 }
 
 fn main() {
-    let cli = Cli::parse(&["--games", "--out", "--repeat", "--params"], &[]);
+    let cli = Cli::parse(&["--games", "--out", "--repeat", "--params", "--profile-out"], &[]);
     let (games, repeat) = (cli.get("--games", 2_000u64), cli.get("--repeat", 3usize));
     let out = cli.str("--out").unwrap_or_default().to_string();
     let params = cli.params("--params");
     // Per phase, the best (lowest) mean over the repeats, and p99/max of that run.
     let mut best: BTreeMap<&'static str, (f64, f64, f64, usize)> = BTreeMap::new();
+    #[cfg(feature = "profile")]
+    beliefs::profile::reset();
     let mut overall_best = f64::MAX;
     let mut log = String::new();
     for r in 0..repeat {
@@ -114,4 +116,12 @@ fn main() {
         println!("| {phase} | {n} | {mean:.1} | {p99:.1} | {max:.1} |");
     }
     println!("mean over all non-forced decisions: {overall_best:.1} µs");
+    #[cfg(feature = "profile")]
+    if let Some(path) = cli.str("--profile-out") {
+        let data: serde_json::Map<String, serde_json::Value> = beliefs::profile::snapshot().into_iter().map(|(name, t)| {
+            (name.into(), serde_json::json!({"calls":t.calls,"inclusive_ms":t.inclusive_ns as f64 / 1e6,"exclusive_ms":t.exclusive_ns as f64 / 1e6}))
+        }).collect();
+        std::fs::write(path, serde_json::to_vec_pretty(&data).unwrap()).expect("write --profile-out");
+    }
+
 }

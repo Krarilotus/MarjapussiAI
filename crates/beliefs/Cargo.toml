@@ -17,3 +17,6 @@ rand = "0.9.0"
 
 [lib]
 name = "beliefs"
+
+[features]
+profile = []

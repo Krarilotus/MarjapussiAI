@@ -19,4 +19,4 @@ pub mod stats;
 pub mod suite;
 mod table;
 
-pub use table::{deal, play_game, play_game_with, Composite, Logged, RandomAgent, Rng, Table};
+pub use table::{deal, play_game, play_game_with, play_table_with, Composite, Logged, RandomAgent, Rng, RunError, Table};

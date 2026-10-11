@@ -34,7 +34,7 @@ use beliefs::{Concept, ConceptQuery};
 
 use crate::hand::higher;
 use crate::stakes::Stakes;
-use crate::trump_plan::Reach;
+use crate::trump_plan::{Control, Reach};
 use crate::Ctx;
 
 /// The ideas a choice can turn on (for labels: the term that separates the choice from the
@@ -132,7 +132,10 @@ impl Valuation {
         // comes from winning trick 8, which is this trick's value, not a future one).
         let n = k.hand_len(me) as f32;
         let before_last = ((n - 2.0) / (n - 1.0).max(1.0)).max(0.0);
-        let leads = (hand.iter().map(|c| v.p_win[c as usize]).sum::<f32>() + reach.p_partner_lead) * before_last;
+        let control = Control {
+            own: hand.iter().map(|c| v.p_win[c as usize]).sum::<f32>() * before_last,
+            partner: reach.p_partner_lead * before_last,
+        };
         let mate = ctx.mind.features(partner(me));
         let mut future_lead = 0.0f32;
         for s in SUITS.into_iter().filter(|&s| !k.is_called(s)) {
@@ -146,7 +149,7 @@ impl Valuation {
                 continue;
             }
             let worth = p_team * meld(s);
-            let p_act = reach.p_activate(ctx, s, leads);
+            let p_act = reach.p_activate(ctx, s, control);
             for c in mine.iter() {
                 v.pair[c as usize] = worth * p_act;
             }
@@ -161,7 +164,7 @@ impl Valuation {
             }
             // The joint query includes counterpart ownership exactly once.
             v.lead_gain[s as usize] = meld(s) * (1.0 - p_act);
-            future_lead = future_lead.max(worth * (reach.p_activate(ctx, s, leads + 1.0) - p_act));
+            future_lead = future_lead.max(worth * (reach.p_activate(ctx, s, control.with_own_lead()) - p_act));
             if mine.len() == 2 {
                 v.at_risk[s as usize] = worth * (1.0 - p_act);
             }
@@ -220,7 +223,7 @@ impl Valuation {
                 };
                 pair * (1.0 - p_any(ctx, mate, others))
             });
-            let cost = probability * meld(s) * reach.p_activate(ctx, s, leads);
+            let cost = probability * meld(s) * reach.p_activate(ctx, s, control);
             for c in (hand & CardSet::suit(s)).iter() {
                 v.plan[c as usize] = cost;
             }

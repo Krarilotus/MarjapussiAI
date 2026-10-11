@@ -23,7 +23,10 @@ pub struct DealModel {
 impl DealModel {
     /// Construct the fact DP once; weights-only consumers do not pay for it.
     pub fn space(&self) -> &DealSpace {
-        self.space.get_or_init(|| self.knowledge.deals())
+        self.space.get_or_init(|| {
+            let _timing = crate::profile::scope("belief.deal_space");
+            self.knowledge.deals()
+        })
     }
 
     pub fn weights(&self) -> &DealWeights {
@@ -76,6 +79,7 @@ impl Mind {
     /// Construct independent weights for legacy callers. Use deal_model() when
     /// several reads should retain the same fact DP and exchange memoization.
     pub fn deal_weights(&self) -> DealWeights {
+        let _timing = crate::profile::scope("belief.weights");
         self.signals();
         let k = self.knowledge();
         let likelihoods = self.cache.borrow().signals.as_ref().expect("computed above").2.clone();

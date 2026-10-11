@@ -22,6 +22,7 @@ impl Default for Reads {
 
 impl Ctx<'_> {
     pub(crate) fn joint_probability(&self, query: &ConceptQuery) -> Option<f32> {
+        let _timing = beliefs::profile::scope("concept.joint");
         let mut reads = self.concepts.borrow_mut();
         if let Some((_, result)) = reads.results.iter().find(|(q, _)| q == query) {
             return *result;

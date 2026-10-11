@@ -396,6 +396,69 @@ fn a_partner_entry_does_not_replace_a_question_when_own_announcing_rights_are_sp
     assert_eq!(d.action.action_type, ActionType::Question(QuestionType::Yours), "{d:?}");
 }
 
+fn entry_to_ask_about_my_pair(me: u8, shared_pair: bool) -> Scene {
+    let seat = |offset| (me + offset) % 4;
+    // Both histories end with the same root hand and the same known partner
+    // entry. Only the provenance of the root's retained Red pair differs.
+    let mut s = Scene::new(
+        me,
+        if shared_pair {
+            &["e-A", "e-8", "r-A", "r-6", "r-7", "r-8", "g-6", "g-7", "s-O"]
+        } else {
+            &["e-A", "e-8", "r-A", "r-K", "r-O", "r-8", "g-6", "g-7", "s-O"]
+        },
+    );
+    s.auction(&[(me, Some(120)), (seat(1), None), (seat(2), None), (seat(3), None)]);
+    s.pass(
+        seat(2),
+        me,
+        Some(if shared_pair { &["r-K", "r-O", "e-Z", "e-U"] } else { &["r-6", "r-7", "e-Z", "e-U"] }),
+    );
+    s.pass(me, seat(2), Some(&["s-O", "e-A", "e-Z", "e-U"]));
+    trick(&mut s, &[(me, "r-A"), (seat(1), "r-U"), (seat(2), "g-U"), (seat(3), "r-9")]);
+    // An informational half question has already spent root's Own and Yours.
+    // The pair respondent needs neither of those rights to answer partner.
+    s.ev(SeatEvent::AskHalf { seat: me, suit: Suit::Green });
+    s.ev(SeatEvent::NoHalf { seat: seat(2), suit: Suit::Green });
+    s
+}
+
+#[test]
+fn a_known_partner_entry_can_activate_my_pair_after_my_rights_are_spent() {
+    for me in 0..4 {
+        let s = entry_to_ask_about_my_pair(me, true);
+        let k = s.tracker.knowledge();
+        assert!(!k.rights(me).may_announce());
+        assert!(!k.rights(me).may_ask_pair());
+        assert!(k.rights((me + 2) % 4).may_ask_pair());
+        let d = s.act(&ask_legal(&s, &[], false));
+        assert_eq!((played(&d), d.rule), (Some(c("e-8")), RuleId::HC4), "{d:?}");
+        assert_eq!(fact(&d, "partner_can_ask"), Some(1.0));
+        assert_eq!(fact(&d, "partner_can_announce"), Some(0.0));
+        assert_eq!(fact(&d, "pair_survives_entry"), Some(1.0));
+    }
+}
+
+#[test]
+fn the_same_private_pair_is_not_treated_as_partner_knowledge() {
+    let known = entry_to_ask_about_my_pair(0, true);
+    let private = entry_to_ask_about_my_pair(0, false);
+    assert_eq!(known.hand(), private.hand());
+    for (s, shared) in [(known, true), (private, false)] {
+        let d = s.act(&ask_legal(&s, &[], false));
+        assert_eq!(fact(&d, "pair_survives_entry") == Some(1.0), shared, "{d:?}");
+    }
+}
+
+#[test]
+fn an_entry_cannot_restore_the_partners_spent_question_right() {
+    let mut s = entry_to_ask_about_my_pair(0, true);
+    s.ev(SeatEvent::AskHalf { seat: 2, suit: Suit::Acorns });
+    s.ev(SeatEvent::NoHalf { seat: 0, suit: Suit::Acorns });
+    let d = s.act(&ask_legal(&s, &[], false));
+    assert_ne!(fact(&d, "pair_survives_entry"), Some(1.0), "{d:?}");
+}
+
 #[test]
 fn an_entry_is_not_certified_through_a_possible_ruff_or_a_consumed_winner() {
     let mut s = returned_entry(0);

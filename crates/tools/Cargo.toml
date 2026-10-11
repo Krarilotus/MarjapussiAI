@@ -59,3 +59,11 @@ bench = false
 name = "selfplay"
 test = false
 bench = false
+
+[features]
+profile = ["heuristic/profile", "beliefs/profile"]
+
+[[bin]]
+name = "dryrun"
+test = false
+bench = false

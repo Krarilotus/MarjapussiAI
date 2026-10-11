@@ -14,6 +14,7 @@ mod deals;
 pub mod factors;
 mod features;
 mod mind;
+pub mod profile;
 mod perspective;
 mod reads;
 pub mod record;

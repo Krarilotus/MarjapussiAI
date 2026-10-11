@@ -59,9 +59,9 @@ The AI is playable, but there is more to improve:
   profitable continuation. Explanations distinguish those cases. Hidden exchange
   histories, bid affordability and the 500-point series threshold need further
   modelling.
-- The latest fixed 64-game comparison is inconclusive on playing strength;
-  the [qualification record](docs/checkpoints/2026-10-10-joint-continuations.md)
-  reports outcomes, decision time and fallbacks.
+- Playing-strength qualification remains open. The
+  [targeted review](docs/checkpoints/2026-10-11-conditional-plan-dryrun.md)
+  records remaining control-sequence failures and measured performance improvements.
 - Agreement with human moves measures similarity, not playing strength.
 
 The [next steps](docs/NEXT_STEPS.md) and
@@ -85,6 +85,9 @@ For local policy comparisons, install the [self-play command](docs/SELFPLAY.md)
 from Git Bash with `bash marja-bench --install`. Then
 `marja-bench new old new old 4000` runs the two partnerships and produces a report
 with scores, decision times, contracts, raising and bidding diagnostics.
+
+The [targeted dry-run tool](docs/design/targeted-dryrun.md) compares policies at
+the same recorded decisions and follows their alternative plays to completion.
 
 Build and test one job at a time, reusing the target cache. Before contributing,
 read the [workflow](docs/WORKFLOW.md): major changes get a focused commit,

@@ -40,6 +40,7 @@ pub(super) struct Decisions {
 
 impl Decisions {
     pub fn decide(&mut self, player: &mut HeuristicAgent, view: &SeatView, legal: &[GameAction]) -> Decision {
+        let _timing = beliefs::profile::scope("forecast.cached_decision");
         let key = (view.seat, view.knowledge.certain(view.seat).0, view.events.len());
         // The endgame uses a wall-clock limit: even a fallback may have depended
         // on an interrupted solve. Do not memoize decisions in that region.

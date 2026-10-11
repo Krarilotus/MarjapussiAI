@@ -45,8 +45,45 @@ fn candidates(ctx: &Ctx, mut ranked: Vec<(GameAction, CardSet, f64)>, best: Game
                 && !(opening.allowed(hand - given) & CardSet::suit(suit)).is_empty()
         });
     }
+    add_connected_allocations(ctx, &mut result, &ranked);
     add_known_connection(ctx, &mut result, &ranked);
     result
+}
+
+/// Cover combined pair/control allocations missed by independent suit buckets.
+/// At most three allocations per suit, selected by the existing C42 ordering.
+/// These shapes nominate continuations; standing for the team is not a promise
+/// about the next leader, pair survival or what partner will choose to do.
+fn add_connected_allocations(ctx: &Ctx, result: &mut Vec<GameAction>, ranked: &[(GameAction, CardSet, f64)]) {
+    let hand = ctx.k.certain(ctx.me);
+    let mate = engine::partner(ctx.me);
+    let theirs = ctx.k.certain(mate);
+    let winners = (ctx.k.standing(ctx.me) | ctx.k.standing(mate)) - CardSet::HALVES;
+    let opening = engine::play_levels(&[], None, true);
+    for suit in SUITS.into_iter().filter(|&s| !ctx.k.is_called(s)) {
+        let halves = CardSet::halves(suit);
+        if !halves.is_subset(hand | theirs) {
+            continue;
+        }
+        add_candidate(result, ranked, |given| {
+            let kept = hand - given;
+            halves.is_subset(kept) && !(kept & winners).is_empty()
+        });
+        add_candidate(result, ranked, |given| {
+            let kept = hand - given;
+            let partner_winners = (theirs | given) & winners;
+            halves.is_subset(theirs | given)
+                && partner_winners.iter().any(|winner| {
+                    !(opening.allowed(kept) & (CardSet::suit(engine::suit_of(winner)) - CardSet::HALVES)).is_empty()
+                })
+        });
+        add_candidate(result, ranked, |given| {
+            let kept = hand - given;
+            (kept & halves).len() == 1
+                && ((theirs | given) & halves).len() == 1
+                && !(kept & (winners - CardSet::suit(suit))).is_empty()
+        });
+    }
 }
 
 /// Preserve a connected announcement resource and winner that partner knows

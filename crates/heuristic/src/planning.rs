@@ -14,11 +14,11 @@ use agent::{SeatView, Table};
 use engine::{ActionType, CardSet, GameAction, GameFinishedInfo, GameOutcome, QuestionType};
 use knowledge::World;
 
-use crate::{fact, Ctx, Decision, Fact, HeuristicAgent, Params, Rng, RuleId};
+use crate::{fact, Ctx, Decision, Fact, HeuristicAgent, Rng, RuleId};
 
 pub(crate) const BUDGET: Duration = Duration::from_millis(2_000);
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Outcome {
     pub score: f64,
     pub points: f64,
@@ -54,6 +54,10 @@ impl Default for Outcome {
 }
 
 impl Outcome {
+    fn made_given_declaring(&self) -> Option<f64> {
+        (self.declaring > 0.0).then(|| self.made / self.declaring)
+    }
+
     /// Expected tricks won by these allocated cards, before normalizing sample mass.
     pub fn wins(&self, cards: CardSet) -> f64 {
         cards.iter().map(|c| self.winners[c as usize]).sum()
@@ -90,13 +94,13 @@ impl Outcome {
 fn rollout(
     mut table: Table,
     action: GameAction,
-    params: &Params,
+    players: &mut [HeuristicAgent; 4],
     deadline: Instant,
     decisions: &mut cache::Decisions,
 ) -> Option<Outcome> {
+    let _timing = beliefs::profile::scope("forecast.rollout");
     let team = action.player.0 as usize % 2;
     table.apply(action);
-    let mut players: [HeuristicAgent; 4] = std::array::from_fn(|_| HeuristicAgent::new(params.clone()));
     let mut opening = match action.action_type {
         ActionType::CardPlayed(c) => Some(c.index()),
         _ => None,
@@ -170,7 +174,9 @@ fn rollout(
 /// evidence represented before spending the much larger rollout budget.
 pub(crate) struct Forecast {
     tables: Vec<(Table, f64)>,
-    params: Params,
+    // Actor views are resynchronized on every call. Reuse the bounded solver
+    // allocations and exact transposition entries across hypothesized branches.
+    players: RefCell<[HeuristicAgent; 4]>,
     deadline: Instant,
     pub ess: f64,
     decisions: RefCell<cache::Decisions>,
@@ -179,6 +185,7 @@ pub(crate) struct Forecast {
 
 impl Forecast {
     pub fn new(ctx: &Ctx, n: usize, deadline: Instant) -> Option<Self> {
+        let _timing = beliefs::profile::scope("forecast.build");
         if n == 0
             || Instant::now() >= deadline
             || ctx
@@ -261,7 +268,7 @@ impl Forecast {
         let outcomes = (0..tables.len()).map(|_| Vec::new()).collect();
         Some(Self {
             tables,
-            params,
+            players: RefCell::new(std::array::from_fn(|_| HeuristicAgent::new(params.clone()))),
             deadline,
             ess,
             decisions: RefCell::new(cache::Decisions::default()),
@@ -270,17 +277,19 @@ impl Forecast {
     }
 
     pub fn compare(&self, actions: &[GameAction]) -> Option<Comparison> {
+        let _timing = beliefs::profile::scope("forecast.compare");
         let mut means: Vec<Outcome> = actions.iter().map(|_| Outcome::default()).collect();
         let mut terminals: Vec<Vec<_>> = actions.iter().map(|_| Vec::new()).collect();
         let mut outcomes = self.outcomes.borrow_mut();
         let mut decisions = self.decisions.borrow_mut();
+        let mut players = self.players.borrow_mut();
         for (world, (table, weight)) in self.tables.iter().enumerate() {
             for (i, &action) in actions.iter().enumerate() {
                 if Instant::now() >= self.deadline || !table.to_act()?.1.contains(&action) {
                     return None;
                 }
                 if !outcomes[world].iter().any(|(a, _)| *a == action) {
-                    let result = rollout(table.clone(), action, &self.params, self.deadline, &mut decisions)?;
+                    let result = rollout(table.clone(), action, &mut players, self.deadline, &mut decisions)?;
                     outcomes[world].push((action, result));
                 }
                 let result = &outcomes[world].iter().find(|(a, _)| *a == action)?.1;
@@ -316,8 +325,8 @@ impl Forecast {
             fact("forecast_gain", chosen.score - comparison.means[0].score),
         ];
         facts.extend(self.work_facts());
-        if chosen.declaring > 0.0 {
-            facts.push(fact("forecast_made", chosen.made / chosen.declaring));
+        if let Some(made) = chosen.made_given_declaring() {
+            facts.push(fact("forecast_made", made));
         }
         facts
     }
@@ -333,6 +342,12 @@ impl Comparison {
         (0..self.means.len())
             .max_by(|&a, &b| self.means[a].score.total_cmp(&self.means[b].score).then(b.cmp(&a)))
             .unwrap_or(0)
+    }
+
+    fn alternative(&self, selected: usize) -> Option<usize> {
+        (0..self.means.len())
+            .filter(|&i| i != selected)
+            .max_by(|&a, &b| self.means[a].score.total_cmp(&self.means[b].score).then(b.cmp(&a)))
     }
 }
 
@@ -434,13 +449,30 @@ pub(crate) fn choose(ctx: &Ctx, legal: &[GameAction], mut baseline: Decision) ->
         baseline.why.clear();
     }
     baseline.why.extend(forecast.facts(&compared, best));
-    if let Some(other) = compared.means.get(1) {
+    if let Some(index) = compared.alternative(best) {
+        let other = &compared.means[index];
         baseline.why.extend([
+            fact("forecast_selected_index", best as u32),
+            fact("forecast_alternative_index", index as u32),
             fact("forecast_alternative_score", other.score),
             fact("forecast_alternative_points", other.points),
-            fact("forecast_alternative_made", other.made),
+            fact("forecast_alternative_declaring_share", other.declaring),
+            fact("forecast_alternative_joint_made", other.made),
             fact("forecast_alternative_pairs", other.pairs),
         ]);
+        if let Some(made) = other.made_given_declaring() {
+            baseline.why.push(fact("forecast_alternative_made", made));
+        }
+        let identity = match options[index].action_type {
+            ActionType::CardPlayed(c) => Some(fact("forecast_alternative_card", c.index())),
+            ActionType::AnnounceTrump(s) => Some(fact("forecast_alternative_announce", s as u8)),
+            ActionType::Question(QuestionType::Yours) => Some(fact("forecast_alternative_ask_pair", 1)),
+            ActionType::Question(QuestionType::YourHalf(s)) => Some(fact("forecast_alternative_ask_half", s as u8)),
+            ActionType::NewBid(value) => Some(fact("forecast_alternative_bid", value)),
+            ActionType::StopBidding => Some(fact("forecast_alternative_pass", 1)),
+            _ => None,
+        };
+        baseline.why.extend(identity);
     }
     baseline
 }
@@ -448,6 +480,7 @@ pub(crate) fn choose(ctx: &Ctx, legal: &[GameAction], mut baseline: Decision) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Params;
 
     #[test]
     fn repricing_reuses_completed_baseline_without_replaying_it() {
@@ -490,12 +523,12 @@ mod tests {
         ];
         let forecast = Forecast {
             tables: vec![(table, 1.0)],
-            params: Params {
+            players: RefCell::new(std::array::from_fn(|_| HeuristicAgent::new(Params {
                 plan_worlds: 0,
                 return_worlds: 0,
                 endgame_tricks: 0,
                 ..Params::default()
-            },
+            }))),
             deadline: Instant::now() + Duration::from_secs(30),
             ess: 1.0,
             decisions: RefCell::new(cache::Decisions::default()),
@@ -516,3 +549,7 @@ mod tests {
         assert_eq!(forecast.outcomes.borrow()[0].len(), 2);
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/internal/forecast_reuse.rs"]
+mod reuse_tests;
