@@ -419,3 +419,187 @@ fn exhausted_lanes_are_explicit_deferred_coverage_and_leaf_receives_the_remainin
     .unwrap();
     assert!(observed);
 }
+
+#[test]
+fn logical_budget_cached_nested_choices_match_uncached_values_receipts_and_leaf_allowances() {
+    let table = at_lead();
+    let (root, legal) = table.to_act().unwrap();
+    let cards: Vec<_> = legal
+        .iter()
+        .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+        .take(3)
+        .copied()
+        .collect();
+    assert_eq!(cards.len(), 3);
+    let inner = Candidate::new(Program {
+        name: "budget-inner-choice",
+        version: 1,
+        start: Stage(3),
+        nodes: vec![
+            Node::Tail,
+            Node::Action {
+                actions: Actions::Exact(cards[0].action_type),
+                next: Stage(0),
+            },
+            Node::Action {
+                actions: Actions::Exact(cards[1].action_type),
+                next: Stage(0),
+            },
+            Node::Choice(vec![Stage(1), Stage(2)]),
+        ],
+    });
+    let mut outer = inner.clone();
+    outer.program.name = "budget-outer-choice";
+    outer.program.nodes.push(Node::Choice(vec![Stage(3), Stage(1)]));
+    outer.program.start = Stage(4);
+    outer.stage = Stage(4);
+    let mut equivalent = outer.clone();
+    equivalent.program.name = "budget-equivalent-outer";
+    // Outer is first computed using the cached inner choice; then its own hit
+    // must include that nested comparison cost. The final, different action
+    // makes fresh response calls AFTER those hits, exercising remaining work.
+    let candidates = [inner, outer, equivalent, direct(cards[2])];
+    let cohort = [(table, 1.0)];
+    let context = context();
+    let run = |limits| {
+        let mut allowances = Vec::new();
+        let result = evaluate(
+            &candidates,
+            &cohort,
+            root,
+            provenance(),
+            &context,
+            limits,
+            &mut |view, legal, budget: LeafBudget| {
+                allowances.push((Information::of(view), budget.remaining_transitions));
+                leaf(view, legal, budget)
+            },
+        );
+        (result, allowances)
+    };
+    let (cold, cold_allowances) = run(Limits {
+        reuse_suffixes: false,
+        ..Limits::default()
+    });
+    let cold = cold.unwrap();
+    assert_eq!(cold.work.suffix_hits, 0);
+    assert_eq!(cold.work.transitions, cold.work.represented_transitions);
+    assert_eq!(cold.work.comparisons, cold.work.represented_comparisons);
+    let exact = Limits {
+        transitions: cold.work.represented_transitions,
+        comparisons: cold.work.represented_comparisons,
+        ..Limits::default()
+    };
+    let (cached, cached_allowances) = run(exact);
+    let cached = cached.unwrap();
+    // Leaf allowances depend on the total configured limit; compare with an
+    // uncached execution using that SAME exact allowance, not the larger probe.
+    let (matched_cold, matched_allowances) = run(Limits {
+        reuse_suffixes: false,
+        ..exact
+    });
+    let matched_cold = matched_cold.unwrap();
+    assert!(!cold_allowances.is_empty());
+    assert_eq!(cached_allowances, matched_allowances);
+    assert_eq!(cached.values, matched_cold.values);
+    assert_eq!(cached.receipt, matched_cold.receipt);
+    assert_eq!(cached.executions, matched_cold.executions);
+    assert_eq!(cached.prepared, matched_cold.prepared);
+    assert_eq!(cached.work.completed_candidates, candidates.len());
+    assert_eq!(cached.work.represented_transitions, exact.transitions);
+    assert_eq!(cached.work.represented_comparisons, exact.comparisons);
+    assert!(cached.work.transitions < matched_cold.work.transitions);
+    assert!(cached.work.comparisons < matched_cold.work.comparisons);
+    assert!(cached.work.suffix_hits > 0);
+
+    for insufficient in [
+        Limits {
+            transitions: exact.transitions - 1,
+            ..exact
+        },
+        Limits {
+            comparisons: exact.comparisons - 2,
+            ..exact
+        },
+        Limits {
+            comparisons: exact.comparisons - 1,
+            ..exact
+        },
+    ] {
+        let (cold, _) = run(Limits {
+            reuse_suffixes: false,
+            ..insufficient
+        });
+        let (cached, _) = run(insufficient);
+        let cold = cold.unwrap_err();
+        let cached = cached.unwrap_err();
+        assert_eq!(cold.reason, SequenceError::Budget);
+        assert_eq!(cached.reason, SequenceError::Budget);
+        assert_eq!(cached.work.completed_candidates, cold.work.completed_candidates);
+        assert_eq!(cached.total_candidates, cold.total_candidates);
+        assert!(cached.work.represented_transitions <= insufficient.transitions);
+        assert!(cached.work.represented_comparisons <= insufficient.comparisons);
+    }
+}
+
+#[test]
+fn logical_budget_tail_hits_cannot_complete_more_candidates_than_uncached_execution() {
+    let table = at_lead();
+    let (root, legal) = table.to_act().unwrap();
+    let first = *legal
+        .iter()
+        .find(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+        .unwrap();
+    let plain = direct(first);
+    let mut guarded = plain.clone();
+    guarded.program.name = "same-tail-different-consumed-guard";
+    guarded.program.nodes.push(Node::Guard {
+        predicate: Guard::OwnLead,
+        yes: Stage(0),
+        no: Stage(0),
+        unknown: Stage(0),
+    });
+    guarded.program.nodes[1] = Node::Action {
+        actions: Actions::Exact(first.action_type),
+        next: Stage(2),
+    };
+    // Different complete suffixes prevent a top-level hit; both eventually
+    // reach the identical named tail after their distinct dependency traces.
+    let candidates = [plain, guarded];
+    let context = context();
+    let cohort = [(table, 1.0)];
+    let run = |limits| evaluate(&candidates, &cohort, root, provenance(), &context, limits, &mut leaf);
+    let cold = run(Limits {
+        reuse_suffixes: false,
+        ..Limits::default()
+    })
+    .unwrap();
+    let exact = Limits {
+        transitions: cold.work.represented_transitions,
+        comparisons: cold.work.represented_comparisons,
+        ..Limits::default()
+    };
+    let cached = run(exact).unwrap();
+    assert!(cached.work.suffix_hits > 0);
+    assert!(cached.work.transitions < cold.work.transitions);
+    assert_eq!(cached.work.represented_transitions, cold.work.represented_transitions);
+    assert_eq!(cached.values, cold.values);
+    assert_eq!(cached.receipt, cold.receipt);
+    assert_eq!(cached.executions, cold.executions);
+    assert_eq!(cached.prepared, cold.prepared);
+    let insufficient = Limits {
+        transitions: exact.transitions - 1,
+        ..exact
+    };
+    let cold = run(Limits {
+        reuse_suffixes: false,
+        ..insufficient
+    })
+    .unwrap_err();
+    let cached = run(insufficient).unwrap_err();
+    assert_eq!(cold.reason, SequenceError::Budget);
+    assert_eq!(cached.reason, SequenceError::Budget);
+    assert_eq!(cold.work.completed_candidates, 1);
+    assert_eq!(cached.work.completed_candidates, 1);
+    assert!(cached.work.represented_transitions <= insufficient.transitions);
+}

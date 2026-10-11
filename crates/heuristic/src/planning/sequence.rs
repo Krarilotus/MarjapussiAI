@@ -41,10 +41,13 @@ pub struct Context {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
+    /// Logical work, including the work represented by completed memo hits.
     pub transitions: usize,
     pub comparisons: usize,
     pub memo_entries: usize,
     pub memo_bytes: usize,
+    /// Disable completed suffix/tail reuse without resampling frozen responses.
+    pub reuse_suffixes: bool,
     pub deadline: Option<Instant>,
 }
 impl Default for Limits {
@@ -54,6 +57,7 @@ impl Default for Limits {
             comparisons: 256,
             memo_entries: 128,
             memo_bytes: 16 * 1024 * 1024,
+            reuse_suffixes: true,
             deadline: None,
         }
     }
@@ -68,9 +72,12 @@ pub struct LeafBudget {
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Work {
+    /// Actual engine applications; cache hits only debit represented work.
     pub transitions: usize,
     pub represented_transitions: usize,
+    /// Actual value-store comparisons, separate from the logical limit.
     pub comparisons: usize,
+    pub represented_comparisons: usize,
     pub response_calls: usize,
     pub response_hits: usize,
     pub suffix_hits: usize,
@@ -293,6 +300,7 @@ struct CachedRun {
     programs: Vec<Program>,
     prepared: Vec<PreparedChoice>,
     transitions: usize,
+    comparisons: usize,
 }
 #[derive(Clone)]
 struct TailRun {
@@ -350,6 +358,27 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
         }
         Ok(())
     }
+    /// Completed cached units cost the same logical work as their expansion.
+    /// Reject an unaffordable unit before exposing any of its values or trace.
+    fn charge(&mut self, transitions: usize, comparisons: usize) -> Result<(), SequenceError> {
+        self.check()?;
+        if transitions
+            > self
+                .limits
+                .transitions
+                .saturating_sub(self.work.represented_transitions)
+            || comparisons
+                > self
+                    .limits
+                    .comparisons
+                    .saturating_sub(self.work.represented_comparisons)
+        {
+            return Err(SequenceError::Budget);
+        }
+        self.work.represented_transitions += transitions;
+        self.work.represented_comparisons += comparisons;
+        Ok(())
+    }
     fn retain(&mut self, bytes: usize) -> bool {
         if bytes > self.limits.memo_bytes.saturating_sub(self.work.retained_bytes) {
             return false;
@@ -359,6 +388,9 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
     }
     fn response(&mut self, table: &Table) -> Result<GameAction, SequenceError> {
         self.check()?;
+        if self.work.represented_transitions >= self.limits.transitions {
+            return Err(SequenceError::Budget);
+        }
         let (seat, legal) = table.to_act().ok_or(SequenceError::WrongContext)?;
         let view = table.view(seat);
         if let Some((_, action)) = self
@@ -384,7 +416,10 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             legal,
             LeafBudget {
                 deadline: self.limits.deadline,
-                remaining_transitions: self.limits.transitions.saturating_sub(self.work.transitions),
+                remaining_transitions: self
+                    .limits
+                    .transitions
+                    .saturating_sub(self.work.represented_transitions),
             },
         )?;
         self.work.response_calls += 1;
@@ -397,16 +432,13 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
     }
     fn apply(&mut self, branch: &mut Branch, action: GameAction) -> Result<(), SequenceError> {
         self.check()?;
-        if self.work.transitions >= self.limits.transitions {
-            return Err(SequenceError::Budget);
-        }
         if !branch.table.to_act().is_some_and(|(_, legal)| legal.contains(&action)) {
             return Err(SequenceError::IllegalAction);
         }
+        self.charge(1, 0)?;
         let before = branch.table.game.state.all_tricks.len();
         branch.table.apply(action);
         self.work.transitions += 1;
-        self.work.represented_transitions += 1;
         if branch.table.game.state.all_tricks.len() > before {
             let trick = branch
                 .table
@@ -585,8 +617,8 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             .find(|run| run.views == views && run.legal == legal)
             .cloned();
         let run = if let Some(run) = cached {
+            self.charge(run.transitions, 0)?;
             self.work.suffix_hits += 1;
-            self.work.represented_transitions += run.transitions;
             run
         } else {
             let before = self.work.transitions;
@@ -634,7 +666,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                     + run.tricks.iter().map(|trick| info_bytes(&trick.root)).sum::<usize>()
                     + vec_bytes(&run.consumed)
                     + run.consumed.iter().map(consumed_bytes).sum::<usize>());
-            if self.tails.len() < self.limits.memo_entries && self.retain(bytes) {
+            if self.limits.reuse_suffixes && self.tails.len() < self.limits.memo_entries && self.retain(bytes) {
                 self.tails.push(run.clone());
             }
             run
@@ -656,10 +688,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
         })
     }
     fn values(&mut self, executions: &[Vec<Terminal>]) -> Result<Assessment, SequenceError> {
-        self.check()?;
-        if self.work.comparisons >= self.limits.comparisons {
-            return Err(SequenceError::Budget);
-        }
+        self.charge(0, 1)?;
         self.work.comparisons += 1;
         let outcomes: Vec<Vec<_>> = executions
             .iter()
@@ -696,8 +725,8 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             .collect();
         let cached = self.memo.iter().find(|run| run.key == key).cloned();
         let mut terminals = if let Some(run) = cached {
+            self.charge(run.transitions, run.comparisons)?;
             self.work.suffix_hits += 1;
-            self.work.represented_transitions += run.transitions;
             prepared.extend(run.prepared);
             let mut terminals = run.terminals;
             for terminal in &mut terminals {
@@ -712,6 +741,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             terminals
         } else {
             let before = self.work.represented_transitions;
+            let comparisons_before = self.work.represented_comparisons;
             let mut records = Vec::new();
             let terminals = self.finish_uncached(branches, &mut records)?;
             let run = CachedRun {
@@ -720,8 +750,10 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                 programs,
                 prepared: records.clone(),
                 transitions: self.work.represented_transitions - before,
+                comparisons: self.work.represented_comparisons - comparisons_before,
             };
-            if self.memo.len() < self.limits.memo_entries && self.retain(run_bytes(&run)) {
+            if self.limits.reuse_suffixes && self.memo.len() < self.limits.memo_entries && self.retain(run_bytes(&run))
+            {
                 self.memo.push(run);
             }
             prepared.extend(records);
