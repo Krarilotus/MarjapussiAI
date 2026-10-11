@@ -130,6 +130,14 @@ pub struct Membership {
     pub legal: Vec<GameAction>,
     pub programs: Vec<Suffix>,
 }
+/// The live policy excludes takeback requests before choosing a game action.
+/// Keep that eligibility identity separate from the engine's raw legal list.
+fn policy_actions(legal: &[GameAction]) -> impl Iterator<Item = GameAction> + '_ {
+    legal
+        .iter()
+        .copied()
+        .filter(|action| action.action_type != engine::ActionType::UndoRequest)
+}
 impl Membership {
     pub fn from_candidates(legal: &[GameAction], candidates: &[Candidate]) -> Result<Self, SequenceError> {
         let mut programs = Vec::new();
@@ -140,7 +148,7 @@ impl Membership {
             }
         }
         Ok(Self {
-            legal: legal.to_vec(),
+            legal: policy_actions(legal).collect(),
             programs,
         })
     }
@@ -237,10 +245,27 @@ pub fn prepared_lookup(
     membership: &Membership,
     prepared: &[PreparedChoice],
 ) -> Result<Offer, NeedsReview> {
+    prepared_lookup_with_boundary(receipt, view, legal, mind, context, membership, None, prepared)
+}
+
+/// A composed initial comparison has its own complete domain (authored routes
+/// plus the retained child). Nested choices remain scoped to ordinary authored
+/// membership. Never rewrite stored records to pretend those domains agree.
+pub fn prepared_lookup_with_boundary(
+    receipt: &Receipt,
+    view: &SeatView<'_>,
+    legal: &[GameAction],
+    mind: &Mind,
+    context: &Context,
+    authored_membership: &Membership,
+    boundary_membership: Option<&Membership>,
+    prepared: &[PreparedChoice],
+) -> Result<Offer, NeedsReview> {
     if !receipt.accepted.matches(view) || receipt.pending.is_some() {
         return Err(NeedsReview);
     }
     let mut stage = receipt.stage;
+    let initial = receipt.program.suffix(stage).map_err(|_| NeedsReview)?;
     for _ in 0..crate::concepts::sequence::MAX_STAGES {
         let inspection = inspect(&receipt.program, stage, view, legal, mind).map_err(|_| NeedsReview)?;
         let offers = match inspection.frontier {
@@ -251,6 +276,11 @@ pub fn prepared_lookup(
         // Even a now-singleton choice must validate modeled scope: an
         // opportunity/evidence change cannot silently reuse its old assessment.
         let suffix = receipt.program.suffix(stage).map_err(|_| NeedsReview)?;
+        let membership = if suffix == initial {
+            boundary_membership.unwrap_or(authored_membership)
+        } else {
+            authored_membership
+        };
         let choice = prepared
             .iter()
             .find(|choice| {
@@ -511,11 +541,9 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
         Err(SequenceError::InvalidProgram)
     }
     fn membership(&mut self, view: &SeatView<'_>, legal: &[GameAction]) -> Result<Membership, SequenceError> {
-        if let Some(entry) = self
-            .memberships
-            .iter()
-            .find(|entry| entry.information.matches(view) && entry.membership.legal == legal)
-        {
+        if let Some(entry) = self.memberships.iter().find(|entry| {
+            entry.information.matches(view) && entry.membership.legal.iter().copied().eq(policy_actions(legal))
+        }) {
             return Ok(entry.membership.clone());
         }
         let mut programs = Vec::new();
@@ -526,7 +554,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             }
         }
         let membership = Membership {
-            legal: legal.to_vec(),
+            legal: policy_actions(legal).collect(),
             programs,
         };
         let bytes = 2
@@ -1074,7 +1102,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             Err(error) => return Err(error),
         };
         let membership = Membership {
-            legal: binding.legal.clone(),
+            legal: policy_actions(&binding.legal).collect(),
             programs: binding
                 .alternatives
                 .iter()
@@ -1647,8 +1675,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(failed.limit, Some(DeferredLimit::LeafUnavailable { .. })));
     }
-    #[test]
-    fn reconsideration_compares_one_joint_group_and_returns_the_actual_program_owner() {
+    fn two_cards_at_lead() -> Table {
         let mut table = at_lead();
         while table.view(0).knowledge.hand_len(0) > 2 || table.game.state.phase != GamePhase::StartTrick {
             let (actor, legal) = table.to_act().unwrap();
@@ -1663,6 +1690,11 @@ mod tests {
             .unwrap();
             table.apply(action);
         }
+        table
+    }
+    #[test]
+    fn reconsideration_compares_one_joint_group_and_returns_the_actual_program_owner() {
+        let table = two_cards_at_lead();
         let (root, legal) = table.to_act().unwrap();
         let view = table.view(root);
         let program = Program {
@@ -1727,6 +1759,174 @@ mod tests {
             .consumed
             .iter()
             .any(|c| matches!(&c.reading, ReadMeaning::Reconsider { .. })));
+    }
+    #[test]
+    fn boundary_membership_is_distinct_from_nested_membership_and_undo_eligibility() {
+        let table = two_cards_at_lead();
+        let (root, legal) = table.to_act().unwrap();
+        let view = table.view(root);
+        let eligible: Vec<_> = policy_actions(legal).collect();
+        assert!(legal.iter().any(|action| action.action_type == ActionType::UndoRequest));
+        let cards: Vec<_> = legal
+            .iter()
+            .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+            .take(2)
+            .copied()
+            .collect();
+        let program = Program {
+            name: "additional-retained-connection",
+            version: 1,
+            start: Stage(3),
+            nodes: vec![
+                Node::Tail,
+                Node::Action {
+                    actions: Actions::Exact(cards[1].action_type),
+                    next: Stage(0),
+                },
+                Node::Action {
+                    actions: Actions::Exact(cards[0].action_type),
+                    next: Stage(1),
+                },
+                Node::Reconsider {
+                    remaining: 1,
+                    retained: Stage(2),
+                },
+            ],
+        };
+        let mut binding = bind_reconsideration(&program, program.start, &view, legal).unwrap();
+        // Declare a complete fixture comparison with the direct card first.
+        // All bound routes remain. Stable equal-value ties select an executable
+        // action instead of the intentionally unwarm legacy Tail.
+        let first = binding
+            .alternatives
+            .iter()
+            .position(|stage| {
+                matches!(
+            binding.program.nodes[stage.0], Node::Action {
+                actions: Actions::Exact(kind), .. } if kind == cards[0].action_type)
+            })
+            .unwrap();
+        let stage = binding.alternatives.remove(first);
+        binding.alternatives.insert(0, stage);
+        binding.program.nodes[binding.program.start.0] = Node::Choice(binding.alternatives.clone());
+        let bound = binding
+            .alternatives
+            .iter()
+            .map(|stage| Candidate {
+                program: binding.program.clone(),
+                stage: *stage,
+            })
+            .collect::<Vec<_>>();
+        let context = context();
+        let result = evaluate(
+            &bound,
+            &[(table.clone(), 1.0 / 3.0), (table.clone(), 2.0 / 3.0)],
+            root,
+            provenance(),
+            &context,
+            Limits::default(),
+            &mut leaf,
+        )
+        .unwrap();
+        let authored = Membership::authored(&view, &eligible).unwrap();
+        assert_eq!(authored, Membership::authored(&view, legal).unwrap());
+        let boundary = Membership::from_candidates(legal, &bound).unwrap();
+        assert_ne!(
+            boundary, authored,
+            "retained connection is additional actual comparison coverage"
+        );
+        // This certificate uses the actual complete outer value comparison.
+        // Descendant records retain their original membership and assessment.
+        assert_eq!(result.values.selected, 0);
+        let mut prepared = vec![PreparedChoice {
+            information: Information::of(&view),
+            semantic_suffix: binding.program.suffix(binding.program.start).unwrap(),
+            context: context.clone(),
+            membership: boundary.clone(),
+            alternatives: binding
+                .alternatives
+                .iter()
+                .map(|stage| Selection::Stage(binding.program.suffix(*stage).unwrap()))
+                .collect(),
+            selected: result.values.selected,
+            assessment: Some(result.values.clone()),
+            consumed: vec![],
+            support: vec![(0, 1.0 / 3.0), (1, 2.0 / 3.0)],
+        }];
+        prepared.extend(result.prepared.iter().cloned());
+        let receipt = Receipt::new(binding.program.clone(), &view).unwrap();
+        let reader = mind(&view);
+        assert_eq!(
+            prepared_lookup(&receipt, &view, &eligible, &reader, &context, &authored, &prepared),
+            Err(NeedsReview)
+        );
+        let actual = prepared_lookup_with_boundary(
+            &receipt,
+            &view,
+            &eligible,
+            &reader,
+            &context,
+            &authored,
+            Some(&boundary),
+            &prepared,
+        )
+        .unwrap();
+        assert_eq!(actual.action, result.executions[0].first.action);
+        let mut wrong_retained = boundary.clone();
+        let retained = binding.program.suffix(binding.retained).unwrap();
+        let index = wrong_retained
+            .programs
+            .iter()
+            .position(|suffix| *suffix == retained)
+            .unwrap();
+        wrong_retained.programs[index] = Program {
+            name: "wrong-retained",
+            version: 1,
+            start: Stage(1),
+            nodes: vec![
+                Node::Tail,
+                Node::Guard {
+                    predicate: Guard::OwnCards(CardSet::ALL),
+                    yes: Stage(0),
+                    no: Stage(0),
+                    unknown: Stage(0),
+                },
+            ],
+        }
+        .suffix(Stage(1))
+        .unwrap();
+        assert_eq!(
+            prepared_lookup_with_boundary(
+                &receipt,
+                &view,
+                &eligible,
+                &reader,
+                &context,
+                &authored,
+                Some(&wrong_retained),
+                &prepared
+            ),
+            Err(NeedsReview)
+        );
+        assert_eq!(
+            prepared_lookup_with_boundary(
+                &receipt,
+                &view,
+                legal,
+                &reader,
+                &context,
+                &authored,
+                Some(&boundary),
+                &prepared
+            )
+            .unwrap(),
+            actual
+        );
+        // The stored nested fixed/action records keep the ordinary domain,
+        // independently of the extra retained connection at the root Choice.
+        assert!(result.prepared.iter().any(|p| p.information.matches(&view)
+            && p.semantic_suffix != receipt.program.suffix(receipt.stage).unwrap()
+            && p.membership == authored));
     }
 }
 
