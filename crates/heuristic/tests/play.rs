@@ -283,9 +283,14 @@ fn root_keeps_unknown_half_questions_but_drops_a_known_yes_without_own_half() {
         assert_eq!(s.tracker.knowledge().known_half(mate, Suit::Green), None);
         let unknown = s.act(&ask_legal(&s, &[], true));
         assert_eq!(unknown.rule, RuleId::HE1);
-        assert_eq!(
-            unknown.action.action_type,
-            ActionType::Question(QuestionType::YourHalf(Suit::Green))
+        // The unknown half question stays in the solver's root; a card that does as well wins
+        // the tie (a question spends rights and tells the table).
+        assert!(
+            matches!(
+                unknown.action.action_type,
+                ActionType::Question(QuestionType::YourHalf(Suit::Green)) | ActionType::CardPlayed(_)
+            ),
+            "{unknown:?}"
         );
         s.ev(SeatEvent::YesHalf {
             seat: mate,
@@ -380,8 +385,15 @@ fn a_known_partner_entry_preserves_its_own_announcement_before_creating_trump() 
     for me in 0..4 {
         let s = returned_entry(me);
         let d = s.act(&ask_legal(&s, &[], true));
-        assert_eq!((played(&d), d.rule), (Some(c("e-8")), RuleId::HC4), "{d:?}");
-        assert_eq!(fact(&d, "partner_entry"), Some(c("e-A") as f32));
+        // No question or announcement of mine creates trump first. Owner #80: cash the
+        // standing card, then hand the partner the entry to its own announcement.
+        match d.rule {
+            RuleId::HL2 => assert_eq!(played(&d), Some(c("r-Z")), "{d:?}"),
+            _ => {
+                assert_eq!((played(&d), d.rule), (Some(c("e-8")), RuleId::HC4), "{d:?}");
+                assert_eq!(fact(&d, "partner_entry"), Some(c("e-A") as f32));
+            }
+        }
     }
 }
 
@@ -522,10 +534,23 @@ fn an_unreachable_whole_pair_does_not_block_cashing_its_suit() {
 }
 
 #[test]
-fn hq3_asks_yours_when_the_partner_showed_a_pair() {
-    // The partner's +15 showed a big pair; I hold no pair and no standing card.
+fn hq3_leaves_a_shown_pair_to_the_partner_who_can_announce_it() {
+    // The partner's +15 showed a big pair (believed, not known); I hold no pair and no standing
+    // card. The partner keeps its right and probably gets a lead: I don't spend my rights on
+    // "Yours" (the human games: 0 of 1,021; owner #175).
     let mut s = Scene::new(0, &["s-A", "g-8", "e-6", "e-7", "e-8", "r-6", "r-7", "g-9", "g-U"]);
     s.auction(&[(0, None), (1, None), (2, Some(130)), (3, None)]);
+    trick(&mut s, &[(1, "s-6"), (2, "s-7"), (3, "s-8"), (0, "s-A")]);
+    let d = s.act(&ask_legal(&s, &[], true));
+    assert!(matches!(d.action.action_type, ActionType::CardPlayed(_)), "{d:?}");
+}
+
+#[test]
+fn hq3_asks_yours_when_the_partner_cannot_announce_itself() {
+    // The same believed pair, but the partner spent its own right by asking me first.
+    let mut s = Scene::new(0, &["s-A", "g-8", "e-6", "e-7", "e-8", "r-6", "r-7", "g-9", "g-U"]);
+    s.auction(&[(0, None), (1, None), (2, Some(130)), (3, None)]);
+    s.ev(SeatEvent::AskPair { seat: 2 }).ev(SeatEvent::NoPair { seat: 0 });
     trick(&mut s, &[(1, "s-6"), (2, "s-7"), (3, "s-8"), (0, "s-A")]);
     let d = s.act(&ask_legal(&s, &[], true));
     assert_eq!(
@@ -542,7 +567,10 @@ fn p10a_a_half_question_does_not_spend_the_yours_the_partners_pair_needs() {
     s.auction(&[(0, None), (1, None), (2, Some(130)), (3, None)]);
     trick(&mut s, &[(1, "s-6"), (2, "s-7"), (3, "s-8"), (0, "s-A")]);
     let d = s.act(&ask_legal(&s, &[], true));
-    assert_eq!(d.action.action_type, ActionType::Question(QuestionType::Yours), "{d:?}");
+    assert!(
+        !matches!(d.action.action_type, ActionType::Question(QuestionType::YourHalf(_))),
+        "{d:?}"
+    );
 }
 
 #[test]
@@ -590,7 +618,11 @@ fn hc13_skips_the_half_the_partner_said_it_lacks() {
             seat: 2,
             suit: Suit::Green,
         });
-    let d = s.act(&ask_legal(&s, &[], false));
+    let params = heuristic::Params {
+        half_question_min: 0.0,
+        ..heuristic::Params::default()
+    };
+    let d = s.act_with(params, &ask_legal(&s, &[], false));
     assert_eq!(
         (d.action.action_type, d.rule),
         (ActionType::Question(QuestionType::YourHalf(Suit::Acorns)), RuleId::HQ3),
