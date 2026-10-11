@@ -144,6 +144,67 @@ const P_TAKE_140: QuietWeights = QuietWeights {
     aces: 0.76,
 };
 
+/// KB `take_vs_defend` (B-take): the log-odds of P(bid on rather than pass) at 140 or more
+/// against an opponent's bid. From the human-game analysis (3,124 decisions, 35 % bid on;
+/// `tools/kbstudy/overbid.py`), owner-requested. Not tuned. The bid level itself had no
+/// measurable weight; `contract_estimate` bounds it instead.
+struct TakeWeights {
+    intercept: f32,
+    standing: f32,
+    aces: f32,
+    own_pair_per_100: f32,
+    /// `team_pair_cover(145)`.
+    cover_145: f32,
+    potential: f32,
+    partner_passed: f32,
+}
+
+const TAKE_OVER_140: TakeWeights = TakeWeights {
+    intercept: -5.30,
+    standing: 0.22,
+    aces: 0.31,
+    own_pair_per_100: 0.46,
+    cover_145: 5.45,
+    potential: 0.24,
+    partner_passed: -0.25,
+};
+
+/// B-take: bid the next step over an opponent's contract at 140 or more when
+/// P(take) >= 0.5 and `contract_estimate` gives at least an even chance to make it.
+fn take_over_140(
+    ctx: &Ctx,
+    legal: &[GameAction],
+    class: HandClass,
+    value: i32,
+    mate: PartnerCalls,
+    why: &mut Vec<Fact>,
+) -> Option<Decision> {
+    let w = &TAKE_OVER_140;
+    let (k, me) = (ctx.k, ctx.me);
+    let hand = k.certain(me);
+    let own_pairs = uncalled_pair_value(k, class);
+    let x = w.intercept
+        + w.standing * k.own_standing(me).len() as f32
+        + w.aces * (hand & CardSet::ACES).len() as f32
+        + w.own_pair_per_100 * own_pairs as f32 / 100.0
+        + w.cover_145 * ctx.mind.team_pair_cover(PAIR_LINE + 5)
+        + w.potential * knowledge::standing_potential_of(hand) as f32
+        + if mate.passed { w.partner_passed } else { 0.0 };
+    let p_take = 1.0 / (1.0 + (-x).exp());
+    let bid = value + 5;
+    let estimate = crate::raising::contract_estimate(hand, own_pairs, ctx.mind.derived_pair_value());
+    let p_make = crate::raising::p_make(estimate, bid);
+    why.extend([
+        fact("p_take", p_take),
+        fact("contract_estimate", estimate),
+        fact("p_make", p_make),
+    ]);
+    if p_take < 0.5 || p_make < 0.5 {
+        return None;
+    }
+    find(legal, Some(bid)).map(|a| decision(a, RuleId::BTake, why.clone()))
+}
+
 fn uncalled_pair_value(k: &knowledge::Knowledge, class: HandClass) -> i32 {
     SUITS
         .into_iter()
@@ -320,8 +381,9 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     let p = ctx.params.conv();
     let class = HandClass::of(ctx.k.certain(ctx.me));
     // Read the record once (the believed reads below recompute the Mind's cache).
-    let (bctx, calls, plan_formed, opponents_stepped, mate) = {
+    let (bctx, calls, plan_formed, opponents_stepped, mate, opponent_holds) = {
         let record = ctx.mind.record();
+        let holder = record.auction.iter().rev().find_map(|&(s, b)| b.map(|_| s));
         let bids = &record.seats[engine::partner(ctx.me) as usize].bids;
         (
             next_context(&record.auction, ctx.me, p),
@@ -335,6 +397,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
                     .iter()
                     .any(|b| b.nominal.is_some_and(|m| PAIR_MESSAGES & m.bit() != 0)),
             },
+            holder.is_some_and(|s| s % 2 != ctx.me % 2),
         )
     };
     let v = bctx.value;
@@ -433,6 +496,13 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
             if let Some(a) = find(legal, Some(PAIR_LINE)) {
                 return decision(a, RuleId::BGate, why);
             }
+        }
+    }
+    // B-take (KB `take_vs_defend`; owner: "often better to take than be played"): at 140 or
+    // more against an opponent's bid.
+    if v >= PAIR_LINE && opponent_holds {
+        if let Some(d) = take_over_140(ctx, legal, class, v, mate, &mut why) {
+            return d;
         }
     }
     // B-quiet (B-over140 when it held a message back).

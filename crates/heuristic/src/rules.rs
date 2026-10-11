@@ -59,6 +59,7 @@ rules! {
     BDefend "B-defend" Bidding 3 1 "[O]" "nothing to tell, the partner passed first, many cards standing against us: 140, then +5 up to the limit";
     BQuiet "B-quiet" Bidding 5 1 "[O]" "nothing to tell: pass";
     HB8 "HB-8" Bidding 7 3 "[D]" "nothing left to tell: +5 to take the game (off until KB batch 2)";
+    BTake "B-take" Bidding 6 1 "[O] [A]" "at 140 or more against an opponent: bid on when P(take) >= 0.5 (human analysis) and contract_estimate gives P(make) >= 0.5";
     HB140c "HB-140c" Bidding 10 3 "[O]" "bid exactly 140 to claim or defend without a known pair (off until KB batch 2)";
     HBB1 "HB-B1" Bidding 11 3 "[O]" "barrier bids 180/200/220 against schwarz";
     HS1 "HS-1" Bidding 12 3 "[O]" "series objective: risk from the series score";

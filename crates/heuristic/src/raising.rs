@@ -109,6 +109,28 @@ impl TeamPoints {
     }
 }
 
+/// HZ-1 `contract_estimate` for a hand: my standing, aces, trump length, voids and potential,
+/// my own complete pairs, and the partner's pair points (certain when passed back; in the
+/// auction, the believed `derived_pair_value`).
+pub(crate) fn contract_estimate(hand: CardSet, own_pairs: i32, partner_pairs: f32) -> f32 {
+    let t = &TEAM_POINTS;
+    let trump_len = hand.pair_suits().map(|s| (hand & CardSet::suit(s)).len()).max().unwrap_or(0);
+    let voids = SUITS.into_iter().filter(|&s| (hand & CardSet::suit(s)).is_empty()).count();
+    t.intercept
+        + t.per_standing * knowledge::own_standing_of(hand).len() as f32
+        + t.per_ace * (hand & CardSet::ACES).len() as f32
+        + t.per_trump_card * trump_len as f32
+        + t.per_void * voids as f32
+        + t.per_potential * knowledge::standing_potential_of(hand) as f32
+        + t.own_pairs_share * own_pairs as f32
+        + t.given_pairs_share * partner_pairs
+}
+
+/// P(the team makes `target`) given `contract_estimate`, from the observed spread.
+pub(crate) fn p_make(estimate: f32, target: i32) -> f32 {
+    TEAM_POINTS.p_reach(estimate, target)
+}
+
 /// The cards I passed back to my partner: certain to the partner and to me.
 fn given_back(ctx: &Ctx) -> CardSet {
     let mut given = CardSet::EMPTY;
@@ -136,17 +158,8 @@ fn estimated_raise(ctx: &Ctx, legal: &[GameAction]) -> Option<(GameAction, i32, 
     let given = given_back(ctx);
     let own_pairs: i32 = hand.pair_suits().map(beliefs::conventions::pair_value).sum();
     let given_pairs: i32 = given.pair_suits().map(beliefs::conventions::pair_value).sum();
-    let trump_len = hand.pair_suits().map(|s| (hand & CardSet::suit(s)).len()).max().unwrap_or(0);
-    let voids = SUITS.into_iter().filter(|&s| (hand & CardSet::suit(s)).is_empty()).count();
     let t = &TEAM_POINTS;
-    let estimate = t.intercept
-        + t.per_standing * knowledge::own_standing_of(hand).len() as f32
-        + t.per_ace * (hand & CardSet::ACES).len() as f32
-        + t.per_trump_card * trump_len as f32
-        + t.per_void * voids as f32
-        + t.per_potential * knowledge::standing_potential_of(hand) as f32
-        + t.own_pairs_share * own_pairs as f32
-        + t.given_pairs_share * given_pairs as f32;
+    let estimate = contract_estimate(hand, own_pairs, given_pairs as f32);
     let value = ctx.k.value();
     // HZ-3 [O]: never raise across 140 without a certain team pair.
     let cap = if value < 140 && own_pairs + given_pairs == 0 { 140 } else { i32::MAX };
