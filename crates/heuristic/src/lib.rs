@@ -401,10 +401,20 @@ impl HeuristicAgent {
         }
         if let Some(pending) = self
             .pending_decision
-            .as_ref()
+            .as_mut()
             .filter(|p| retain_retry && p.matches(view, &legal, &self.params))
         {
             self.assessment = pending.assessment.clone();
+            if let Some(sequence) = &mut pending.sequence {
+                // Lazily retain the retry projection after its first hit. This
+                // avoids cloning all current-step evidence on every retry while
+                // preserving any externally shared original trace via COW.
+                if sequence.mode != PlanMode::Retry || sequence.work != planning::sequence::Work::default() {
+                    let retry = std::sync::Arc::make_mut(sequence);
+                    retry.mode = PlanMode::Retry;
+                    retry.work = planning::sequence::Work::default();
+                }
+            }
             self.sequence = pending.sequence.clone();
             return pending.decision.clone();
         }

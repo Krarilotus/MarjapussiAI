@@ -903,6 +903,8 @@ pub(super) fn export(input: &Value, index: Option<u64>, step: Option<u64>) -> Re
         "step": decision.map(|d| &d["step"]), "seat": decision.map(|d| &d["seat"]).unwrap_or(&sequence_data["identity"]["seat"]),
         "action": action, "event_count": decision.map(|d| &d["event_count"]).unwrap_or(&sequence_data["identity"]["event_count"])});
     let operations = json!({"mode": sequence_data["mode"], "failure": sequence_data["failure"], "work": sequence_data["work"],
+        "work_accounting_model": sequence_data["work"]["accounting"],
+        "work_accounting_meaning": tools::selfplay::SEQUENCE_WORK_ACCOUNTING_MEANING,
         "solver_effort_meaning": tools::selfplay::SEQUENCE_SOLVER_EFFORT_MEANING,
         "solver_node_limit": {"status": "not recorded by SequenceTrace",
             "meaning": "Limits::solver_nodes is optional; neither a configured ceiling nor None/uncapped can be inferred from these counters. Recorded deferral details describe only the stopping lane."},
@@ -1383,6 +1385,7 @@ mod tests {
         let original = export(&input, None, None).unwrap();
         input["assessment"]["extensions"]["sequence"]["work"] = json!({
             "actual_solver_nodes": 0, "represented_solver_nodes": u64::MAX,
+            "accounting": "sibling-tail-dag-v1", "tail_aliases": 3, "tail_alias_transitions": 17, "tail_alias_solver_nodes": u64::MAX,
             "deferred_limit_detail": {"kind": "represented_solver_nodes", "required": u64::MAX, "remaining": 0}});
         let output = export(&input, None, None).unwrap();
         let semantic_nodes = |value: &Value| {
@@ -1407,6 +1410,10 @@ mod tests {
         );
         let details = &output["views"][0]["operational_details"];
         assert_eq!(details["work"]["actual_solver_nodes"], 0);
+        assert_eq!(details["work_accounting_model"], "sibling-tail-dag-v1");
+        assert_eq!(details["work"]["tail_alias_transitions"], 17);
+        assert!(original["views"][0]["operational_details"]["work_accounting_model"].is_null(),
+            "older captures must not inherit the current model label");
         assert_eq!(details["work"]["represented_solver_nodes"].as_u64(), Some(u64::MAX));
         assert_eq!(details["solver_node_limit"]["status"], "not recorded by SequenceTrace");
         assert!(details["solver_effort_meaning"]

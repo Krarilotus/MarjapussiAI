@@ -362,3 +362,16 @@ it does not recreate the evaluator's reachability proof. Missing authorization o
 scope in older captures stays unrecorded. An incomplete/deferred trace cannot
 claim selected-plan authorization. No generated HTML or live capture is qualified
 by these source-only capture changes; root validates/integrates before generation.
+
+
+The separately integrated `sibling-tail-dag-v1` work-accounting adapter exports
+`Work::accounting()` plus actual attached tail aliases and their avoided expansion
+transitions/solver nodes. It applies only to same-comparison sibling alternatives
+that resolve through guards or empty action domains to the same unchanged-cohort
+Tail before any engine action. Original values/order and each prefix's reads and
+interrupted flag remain separate. Mandatory dependency sharing has the same logical
+charging with optional caches off/cold/warm. These versioned bounded-work counters
+are operational evidence, not probability, concept quality, total CPU or general
+DAG uniqueness. Older captures without a label remain unknown. Apply the adapter
+only alongside C's new charging implementation; it does not establish old-policy
+cache equivalence or measured speed improvement.

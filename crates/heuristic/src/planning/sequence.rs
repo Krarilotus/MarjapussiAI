@@ -11,6 +11,7 @@ use beliefs::Mind;
 use engine::{GameAction, GameFinishedInfo, GameOutcome, PlayPhase, PublicState};
 use std::time::Instant;
 
+mod normalization;
 mod reuse;
 pub use reuse::CompletedCache;
 mod selection;
@@ -49,7 +50,8 @@ pub struct Context {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
-    /// Logical work, including the work represented by completed memo hits.
+    /// Logical work under Work::accounting(), including completed memo hits.
+    /// Identical sibling tail dependencies are charged once, with caches on/off.
     pub transitions: usize,
     pub comparisons: usize,
     /// Canonical completed-response solver work; None imposes no node cap.
@@ -130,8 +132,19 @@ pub struct Work {
     pub response_calls: usize,
     pub response_hits: usize,
     pub suffix_hits: usize,
+    /// Actual sibling edges attached to an already evaluated tail dependency.
+    pub tail_aliases: usize,
+    /// Expansion work avoided by those edges, not additional serving allowance.
+    pub tail_alias_transitions: usize,
+    pub tail_alias_solver_nodes: u64,
     pub retained_bytes: usize,
     pub completed_candidates: usize,
+}
+impl Work {
+    /// Deterministic bounded-work policy, independent of optional memo capacity.
+    pub const fn accounting(&self) -> &'static str {
+        "sibling-tail-dag-v1"
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrickOutcome {
@@ -1425,12 +1438,16 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
         let consumed = first.consumed.clone();
         let mut outcomes = Vec::new();
         let mut records = Vec::new();
+        // Mandatory local DAG sharing, not an optional memo: no engine action
+        // may occur between this group's input and a shared tail frontier.
+        let mut tail_dependency = None;
         let support = group
             .iter()
             .map(|waiting| (waiting.branch.origin, waiting.branch.weight))
             .collect();
-        // Lazy depth-first demand, one child cohort at a time. Equal semantic
-        // alternatives/suffixes use finish memo; unfinished children never rank.
+        // Lazy depth-first demand. Equal no-action tail frontiers share one
+        // dependency; other suffixes use optional finish memo. Every original
+        // alternative still has complete values and retains its ordered edge.
         for index in 0..alternatives.len() {
             let children = {
                 let _timing = beliefs::profile::scope("sequence.child_cohort");
@@ -1449,7 +1466,35 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
                 children
             };
             let mut child_records = Vec::new();
-            outcomes.push(self.finish(children, &mut child_records)?);
+            let normalized = if matches!(group[0].alternatives[index], Alternative::Stage(_)) {
+                self.normalized_tail_edges(&children)?
+            } else {
+                None
+            };
+            let terminals = if let Some(edges) = normalized {
+                if let Some(dependency) = &tail_dependency {
+                    self.alias_tail(&children, &edges, dependency, &outcomes)?
+                } else {
+                    let before = self.work.represented_transitions;
+                    let solver_before = self.work.represented_solver_nodes;
+                    let read_starts = children
+                        .iter()
+                        .zip(&edges)
+                        .map(|(branch, edge)| (branch.origin, branch.consumed.len() + edge.consumed.len()))
+                        .collect();
+                    let terminals = self.finish_normalized_tails(children, edges)?;
+                    tail_dependency = Some(normalization::TailDependency {
+                        outcome_index: outcomes.len(),
+                        read_starts,
+                        transitions: self.work.represented_transitions - before,
+                        solver_nodes: self.work.represented_solver_nodes - solver_before,
+                    });
+                    terminals
+                }
+            } else {
+                self.finish(children, &mut child_records)?
+            };
+            outcomes.push(terminals);
             records.push(child_records);
         }
         let assessment = self.values(outcomes.iter().map(Vec::as_slice))?;

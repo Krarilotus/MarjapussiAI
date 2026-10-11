@@ -35,6 +35,8 @@ pub const SCHEMA: &str = "marjapussi.selfplay/1";
 /// Canonical response-solver counters do not measure the policy's total CPU work.
 pub const SEQUENCE_SOLVER_EFFORT_MEANING: &str = "Canonical response-solver search nodes: actual_solver_nodes counts attempted callbacks including failures; represented_solver_nodes also charges completed memo hits. These are algorithm-specific effort, not wall time, total CPU, complete policy work or value-graph node counts.";
 
+pub const SEQUENCE_WORK_ACCOUNTING_MEANING: &str = "sibling-tail-dag-v1 shares only one unchanged joint cohort's sibling alternatives resolving through guards or empty legal domains to the same Tail before any engine action. Original alternative order, values and per-edge consumed/interrupted evidence remain separate. Unique tail dependency effort is charged once with optional caches off/cold/warm; memo hits still charge represented dependency effort. This is versioned bounded-work accounting, not general DAG/CPU accounting, probability or concept quality. An absent model in an older capture remains unknown.";
+
 /// Structured recorded stopping reason; this does not reconstruct the full Limits.
 pub fn deferred_limit_json(limit: heuristic::sequence_evaluation::DeferredLimit) -> Value {
     use heuristic::sequence_evaluation::DeferredLimit;
@@ -577,7 +579,10 @@ pub fn sequence_json(trace: &SequenceTrace, value_assessment: Option<&PlanningAs
         "information": information, "belief_scope": scope, "program": program,
         "value_nodeId": value_assessment.map(|a| format!("value/{}", a.values.root.0)),
         "authorization": authorization, "choices": choices, "terminals": terminals,
-        "work": {"transitions": work.transitions, "represented_transitions": work.represented_transitions,
+        "work": {"accounting": work.accounting(),
+            "tail_aliases": work.tail_aliases, "tail_alias_transitions": work.tail_alias_transitions,
+            "tail_alias_solver_nodes": work.tail_alias_solver_nodes,
+            "transitions": work.transitions, "represented_transitions": work.represented_transitions,
             "comparisons": work.comparisons, "represented_comparisons": work.represented_comparisons, "response_calls": work.response_calls,
             "actual_solver_nodes": work.actual_solver_nodes, "represented_solver_nodes": work.represented_solver_nodes,
             "response_hits": work.response_hits, "suffix_hits": work.suffix_hits,
@@ -1695,6 +1700,16 @@ mod tests {
         let row = sequence_json(&trace, None);
         assert_eq!(row["work"]["actual_solver_nodes"].as_u64(), Some(3));
         assert_eq!(row["work"]["represented_solver_nodes"].as_u64(), Some(u64::MAX));
+        assert_eq!(row["work"]["accounting"], "sibling-tail-dag-v1");
+        trace.work.tail_aliases = 3;
+        trace.work.tail_alias_transitions = 17;
+        trace.work.tail_alias_solver_nodes = u64::MAX;
+        let aliases = sequence_json(&trace, None);
+        assert_eq!(aliases["work"]["tail_aliases"], 3);
+        assert_eq!(aliases["work"]["tail_alias_transitions"], 17);
+        assert_eq!(aliases["work"]["tail_alias_solver_nodes"].as_u64(), Some(u64::MAX));
+        assert_eq!(aliases["work"]["actual_solver_nodes"], row["work"]["actual_solver_nodes"]);
+        assert_eq!(aliases["work"]["represented_solver_nodes"], row["work"]["represented_solver_nodes"]);
         assert_eq!(row["work"]["represented_comparisons"], 5);
         assert_eq!(row["work"]["deferred_limit_detail"]["required"].as_u64(), Some(u64::MAX));
         assert_eq!(row["work"]["deferred_limit_detail"]["remaining"], 7);

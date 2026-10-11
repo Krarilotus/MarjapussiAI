@@ -150,6 +150,88 @@ fn retry_and_clone_preserve_private_intent_without_spending_cards_or_replanning(
 }
 
 #[test]
+fn outer_pending_decision_retry_zeroes_new_work_and_preserves_original_local_evidence() {
+    use crate::planning::sequence::{evaluate, Candidate, ChoiceScope, LeafBudget, LeafResponse, Limits, Work};
+    use std::sync::Arc;
+    let table = table();
+    let (seat, legal) = table.to_act().unwrap();
+    let eligible = crate::legal_actions::eligible(legal);
+    assert!(eligible.len() >= 2);
+    let view = table.view(seat);
+    let (mut policy, _) = planned(&table);
+    let (origin, context) = {
+        let plan = policy.intent.borrow();
+        let plan = plan.as_ref().unwrap();
+        (plan.origin.clone(), plan.context.clone())
+    };
+    // Seed the transaction cache from a real, complete evaluator result with a
+    // local choice. No production forecast/deadline is needed to test a retry.
+    let program = Program {
+        name: "outer-retry-local-evidence", version: 1, start: Stage(3),
+        nodes: vec![Node::Tail,
+            Node::Action { actions: Actions::Exact(eligible[0].action_type), next: Stage(0) },
+            Node::Action { actions: Actions::Exact(eligible[1].action_type), next: Stage(0) },
+            Node::Choice(vec![Stage(1), Stage(2)])],
+    };
+    let mut leaf = |_: &SeatView<'_>, legal: &[GameAction], _: LeafBudget| {
+        Ok(LeafResponse::unit(*legal.iter()
+            .find(|action| matches!(action.action_type, ActionType::CardPlayed(_) | ActionType::Answer(_)))
+            .unwrap_or(&legal[0])))
+    };
+    let compared = evaluate(&[Candidate::new(program)], &[(table.clone(), 1.0)], seat,
+        context.provenance, &context, Limits { memo_bytes: 0, ..Limits::default() }, &mut leaf).unwrap();
+    let information = Information::of(&view);
+    let original_trace = Arc::new(SequenceTrace {
+        mode: PlanMode::Formation, authorization: Some(compared.selection.authorization(&information)),
+        information: information.clone(), scope: BeliefScope::CurrentInformation,
+        program: compared.receipt.program.suffix(compared.receipt.stage).ok(),
+        choices: compared.selection.records().iter().filter(|record| record.information == information).cloned().collect(),
+        terminals: Arc::new(compared.executions[compared.values.selected].terminals.clone()),
+        work: compared.work, failure: None, deferred_limit: None,
+        total_candidates: Some(compared.executions.len()),
+    });
+    assert!(original_trace.work.transitions > 0, "the regression must contain real original evaluation work");
+    assert!(original_trace.choices.iter().any(|choice| choice.scope == ChoiceScope::Local));
+    let original_assessment = Arc::new(PlanningAssessment {
+        actions: compared.executions.iter().map(|execution| execution.first.action).collect(),
+        values: compared.values.clone(), context: origin,
+    });
+    let expected_action = original_assessment.actions[original_assessment.values.selected];
+    let original_decision = decision(&expected_action, RuleId::HP1, vec![fact("sequence_complete", 1)]);
+    {
+        let plan = policy.intent.get_mut().as_mut().unwrap();
+        plan.receipt = compared.receipt;
+        plan.selection = Some(compared.selection);
+    }
+    let receipt_before = policy.intent.borrow().as_ref().unwrap().receipt.clone();
+    policy.pending_decision = Some(PendingDecision {
+        information, legal: eligible, parameters: policy.params.clone(), decision: original_decision.clone(),
+        assessment: Some(original_assessment.clone()), sequence: Some(original_trace.clone()),
+    });
+    let mut expected_trace = original_trace.as_ref().clone();
+    expected_trace.mode = PlanMode::Retry;
+    expected_trace.work = Work::default();
+    // This is the real public decide -> outer PendingDecision path, not a direct
+    // retained::prepared call or a mocked trace serializer.
+    assert_eq!(policy.decide(&view, legal), original_decision);
+    assert_eq!(policy.last_sequence(), Some(&expected_trace));
+    assert_eq!(policy.last_assessment(), Some(original_assessment.as_ref()));
+    assert_eq!(policy.intent.borrow().as_ref().unwrap().receipt, receipt_before);
+    assert!(Arc::ptr_eq(&policy.last_sequence().unwrap().authorization.as_ref().unwrap().parent,
+        &original_trace.authorization.as_ref().unwrap().parent));
+    assert_eq!(original_trace.mode, PlanMode::Formation, "COW must preserve externally held original metadata");
+    let projected = policy.sequence.clone().unwrap();
+    assert_eq!(policy.decide(&view, legal), original_decision);
+    assert!(Arc::ptr_eq(&projected, policy.sequence.as_ref().unwrap()), "repeated hits reuse the diagnostic projection");
+    assert_eq!(policy.last_sequence(), Some(&expected_trace));
+    assert_eq!(policy.intent.borrow().as_ref().unwrap().receipt, receipt_before);
+    let mut fork = policy.clone();
+    assert_eq!(fork.decide(&view, legal), original_decision);
+    assert_eq!(fork.last_sequence(), Some(&expected_trace));
+    assert_eq!(fork.intent.borrow().as_ref().unwrap().receipt, receipt_before);
+}
+
+#[test]
 fn retained_retry_requires_the_complete_original_eligible_domain() {
     let table = table();
     let (seat, raw_legal) = table.to_act().unwrap();

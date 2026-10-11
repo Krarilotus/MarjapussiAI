@@ -15,7 +15,11 @@ COMPATIBLE_CORE = "b3abdaf1f5e47111904db442ce36db7dc4ae9e0b"
 HISTORICAL = {"old": OLD, "previous": COMPATIBLE_CORE}
 # Source-reviewed additive knowledge helpers; existing core algorithms unchanged.
 # Keep this exact anchor so any subsequent core change requires another review.
-COMPATIBLE_CORES = (COMPATIBLE_CORE, "bcf567164d142c969ace2ed63b14e0e6ddedde2e")
+COMPATIBLE_CORES = (
+    COMPATIBLE_CORE,
+    "bcf567164d142c969ace2ed63b14e0e6ddedde2e",
+    "4bff913bead8f33bcdce27751cfa0cb6e2296e71",
+)
 SHARED = ("engine", "observation", "knowledge", "agent")
 FROZEN = ("heuristic", "beliefs", "solver")
 POLICIES = {
