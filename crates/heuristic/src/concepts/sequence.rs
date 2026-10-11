@@ -148,6 +148,12 @@ impl Program {
     /// nodes are excluded; alternative order remains semantic (stable ties).
     pub fn suffix(&self, start: Stage) -> Result<Suffix, SequenceError> {
         self.validate()?;
+        self.suffix_validated(start)
+    }
+
+    /// Comparison-local callers may reuse validation of this exact immutable
+    /// program. Keep the public entry point validating untrusted authored data.
+    pub(crate) fn suffix_validated(&self, start: Stage) -> Result<Suffix, SequenceError> {
         fn copy(
             program: &Program,
             stage: Stage,

@@ -270,39 +270,32 @@ struct BranchKey {
     pending: Option<Selection>,
 }
 impl BranchKey {
-    fn of(branch: &Branch) -> Result<Self, SequenceError> {
+    fn of(branch: &Branch, suffix: Suffix, pending: Option<Selection>) -> Self {
         let (actor, legal) = branch
             .table
             .to_act()
             .map(|(seat, legal)| (Some(seat), legal.to_vec()))
             .unwrap_or_default();
-        Ok(Self {
+        Self {
             views: std::array::from_fn(|seat| Information::of(&branch.table.view(seat as u8))),
             actor,
             legal,
             origin: branch.origin,
             weight: branch.weight,
-            suffix: branch.receipt.program.suffix(branch.receipt.stage)?,
+            suffix,
             accepted: branch.receipt.accepted.clone(),
-            pending: branch
-                .receipt
-                .pending
-                .as_ref()
-                .map(|offer| selection(&branch.receipt.program, &Alternative::Offer(offer.clone())))
-                .transpose()?,
-        })
+            pending,
+        }
     }
 }
-#[derive(Clone)]
 struct CachedRun {
     key: Vec<BranchKey>,
     terminals: Vec<Terminal>,
-    programs: Vec<Program>,
+    program: Program,
     prepared: Vec<PreparedChoice>,
     transitions: usize,
     comparisons: usize,
 }
-#[derive(Clone)]
 struct TailRun {
     views: [Information; 4],
     legal: Vec<GameAction>,
@@ -311,6 +304,16 @@ struct TailRun {
     tricks: Vec<TrickOutcome>,
     consumed: Vec<Consumed>,
     transitions: usize,
+}
+/// Exact authored input, with validation and demanded canonical stages reused.
+/// Slots are filled lazily; no eager compilation of every possible suffix.
+struct CanonicalProgram {
+    program: Program,
+    suffixes: Vec<Option<Suffix>>,
+}
+struct AuthoredMembership {
+    information: Information,
+    membership: Membership,
 }
 struct Session<'a, F> {
     root: u8,
@@ -323,6 +326,8 @@ struct Session<'a, F> {
     hard_reads: Vec<(Information, beliefs::ConceptQuery, Option<bool>)>,
     memo: Vec<CachedRun>,
     tails: Vec<TailRun>,
+    canonical: Vec<CanonicalProgram>,
+    memberships: Vec<AuthoredMembership>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Alternative {
@@ -341,16 +346,6 @@ fn find_stage(program: &Program, suffix: &Suffix) -> Result<Stage, SequenceError
     }
     Err(SequenceError::InvalidProgram)
 }
-fn selection(program: &Program, alternative: &Alternative) -> Result<Selection, SequenceError> {
-    Ok(match alternative {
-        Alternative::Stage(stage) => Selection::Stage(program.suffix(*stage)?),
-        Alternative::Offer(offer) => Selection::Offer {
-            action: offer.action,
-            next: program.suffix(offer.next)?,
-        },
-    })
-}
-
 impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, SequenceError>> Session<'_, F> {
     fn check(&self) -> Result<(), SequenceError> {
         if self.limits.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
@@ -385,6 +380,87 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
         }
         self.work.retained_bytes += bytes;
         true
+    }
+    fn suffix(&mut self, program: &Program, stage: Stage) -> Result<Suffix, SequenceError> {
+        let mut cached = self.canonical.iter().position(|entry| entry.program == *program);
+        if let Some(index) = cached {
+            if let Some(suffix) = self.canonical[index].suffixes.get(stage.0).and_then(Option::as_ref) {
+                return Ok(suffix.clone());
+            }
+        } else {
+            program.validate()?;
+            let bytes = 2
+                * (std::mem::size_of::<CanonicalProgram>()
+                    + program_bytes(program)
+                    + std::mem::size_of::<Vec<Option<Suffix>>>()
+                    + program.nodes.len() * std::mem::size_of::<Option<Suffix>>());
+            if self.canonical.len() < self.limits.memo_entries && self.retain(bytes) {
+                cached = Some(self.canonical.len());
+                self.canonical.push(CanonicalProgram {
+                    program: program.clone(),
+                    suffixes: vec![None; program.nodes.len()],
+                });
+            }
+        }
+        // Either this exact input was validated above, or it equals a validated
+        // cache entry. Lack of cache space never skips validation or a stage.
+        let suffix = program.suffix_validated(stage)?;
+        if let Some(index) = cached {
+            if self.retain(2 * suffix_bytes(&suffix)) {
+                self.canonical[index].suffixes[stage.0] = Some(suffix.clone());
+            }
+        }
+        Ok(suffix)
+    }
+    fn selection(&mut self, program: &Program, alternative: &Alternative) -> Result<Selection, SequenceError> {
+        Ok(match alternative {
+            Alternative::Stage(stage) => Selection::Stage(self.suffix(program, *stage)?),
+            Alternative::Offer(offer) => Selection::Offer {
+                action: offer.action,
+                next: self.suffix(program, offer.next)?,
+            },
+        })
+    }
+    fn find_stage(&mut self, program: &Program, suffix: &Suffix) -> Result<Stage, SequenceError> {
+        for stage in 0..program.nodes.len() {
+            if self.suffix(program, Stage(stage))? == *suffix {
+                return Ok(Stage(stage));
+            }
+        }
+        Err(SequenceError::InvalidProgram)
+    }
+    fn membership(&mut self, view: &SeatView<'_>, legal: &[GameAction]) -> Result<Membership, SequenceError> {
+        if let Some(entry) = self
+            .memberships
+            .iter()
+            .find(|entry| entry.information.matches(view) && entry.membership.legal == legal)
+        {
+            return Ok(entry.membership.clone());
+        }
+        let mut programs = Vec::new();
+        for program in authored_programs(view, legal) {
+            let suffix = self.suffix(&program, program.start)?;
+            if !programs.contains(&suffix) {
+                programs.push(suffix);
+            }
+        }
+        let membership = Membership {
+            legal: legal.to_vec(),
+            programs,
+        };
+        let bytes = 2
+            * (std::mem::size_of::<AuthoredMembership>()
+                + std::mem::size_of::<Information>()
+                + std::mem::size_of::<Vec<observation::SeatEvent>>()
+                + std::mem::size_of_val(view.events)
+                + membership_bytes(&membership));
+        if self.memberships.len() < self.limits.memo_entries && self.retain(bytes) {
+            self.memberships.push(AuthoredMembership {
+                information: Information::of(view),
+                membership: membership.clone(),
+            });
+        }
+        Ok(membership)
     }
     fn response(&mut self, table: &Table) -> Result<GameAction, SequenceError> {
         self.check()?;
@@ -545,7 +621,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             for read in &inspection.consumed {
                 branch.consumed.push(Consumed {
                     information: information.clone(),
-                    suffix: branch.receipt.program.suffix(read.stage)?,
+                    suffix: self.suffix(&branch.receipt.program, read.stage)?,
                     reading: read.meaning.clone(),
                 });
             }
@@ -568,10 +644,10 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                     let legal = branch.table.to_act().ok_or(SequenceError::WrongContext)?.1;
                     let fixed = PreparedChoice {
                         information: information.clone(),
-                        semantic_suffix: branch.receipt.program.suffix(branch.receipt.stage)?,
+                        semantic_suffix: self.suffix(&branch.receipt.program, branch.receipt.stage)?,
                         context: self.context.clone(),
-                        membership: Membership::authored(&branch.table.view(self.root), legal)?,
-                        alternatives: vec![selection(&branch.receipt.program, &Alternative::Offer(offer.clone()))?],
+                        membership: self.membership(&branch.table.view(self.root), legal)?,
+                        alternatives: vec![self.selection(&branch.receipt.program, &Alternative::Offer(offer.clone()))?],
                         selected: 0,
                         assessment: None,
                         consumed: branch.consumed.clone(),
@@ -614,12 +690,12 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
         let cached = self
             .tails
             .iter()
-            .find(|run| run.views == views && run.legal == legal)
-            .cloned();
-        let run = if let Some(run) = cached {
-            self.charge(run.transitions, 0)?;
+            .position(|run| run.views == views && run.legal == legal);
+        let (outcome, first, tricks, consumed) = if let Some(index) = cached {
+            self.charge(self.tails[index].transitions, 0)?;
             self.work.suffix_hits += 1;
-            run
+            let run = &self.tails[index];
+            (run.outcome, run.first, run.tricks.clone(), run.consumed.clone())
         } else {
             let before = self.work.transitions;
             let trick_start = branch.tricks.len();
@@ -667,31 +743,42 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                     + vec_bytes(&run.consumed)
                     + run.consumed.iter().map(consumed_bytes).sum::<usize>());
             if self.limits.reuse_suffixes && self.tails.len() < self.limits.memo_entries && self.retain(bytes) {
-                self.tails.push(run.clone());
+                self.tails.push(TailRun {
+                    views: run.views,
+                    legal: run.legal,
+                    outcome: run.outcome,
+                    first: run.first,
+                    tricks: run.tricks.clone(),
+                    consumed: run.consumed.clone(),
+                    transitions: run.transitions,
+                });
             }
-            run
+            (run.outcome, run.first, run.tricks, run.consumed)
         };
         branch.first.get_or_insert(Offer {
-            action: run.first,
+            action: first,
             next: tail,
         });
-        branch.tricks.extend(run.tricks);
-        branch.consumed.extend(run.consumed);
+        branch.tricks.extend(tricks);
+        branch.consumed.extend(consumed);
         Ok(Terminal {
             origin: branch.origin,
             weight: branch.weight,
-            outcome: run.outcome,
+            outcome,
             tricks: branch.tricks,
             consumed: branch.consumed,
             interrupted: branch.interrupted,
             first: branch.first,
         })
     }
-    fn values(&mut self, executions: &[Vec<Terminal>]) -> Result<Assessment, SequenceError> {
+    fn values<'t>(
+        &mut self,
+        executions: impl IntoIterator<Item = &'t [Terminal]>,
+    ) -> Result<Assessment, SequenceError> {
         self.charge(0, 1)?;
         self.work.comparisons += 1;
         let outcomes: Vec<Vec<_>> = executions
-            .iter()
+            .into_iter()
             .map(|run| run.iter().map(|t| (t.outcome, t.weight)).collect())
             .collect();
         let slices: Vec<_> = outcomes.iter().map(Vec::as_slice).collect();
@@ -709,8 +796,23 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
     ) -> Result<Vec<Terminal>, SequenceError> {
         self.check()?;
         branches.sort_by_key(|branch| branch.origin);
-        let key = branches.iter().map(BranchKey::of).collect::<Result<Vec<_>, _>>()?;
-        let programs: Vec<_> = branches.iter().map(|branch| branch.receipt.program.clone()).collect();
+        let key = branches
+            .iter()
+            .map(|branch| {
+                let suffix = self.suffix(&branch.receipt.program, branch.receipt.stage)?;
+                let pending = branch
+                    .receipt
+                    .pending
+                    .as_ref()
+                    .map(|offer| self.selection(&branch.receipt.program, &Alternative::Offer(offer.clone())))
+                    .transpose()?;
+                Ok(BranchKey::of(branch, suffix, pending))
+            })
+            .collect::<Result<Vec<_>, SequenceError>>()?;
+        // A finish cohort comes from one candidate: children vary only stage,
+        // intent and observations, never the immutable authored program.
+        let program = branches[0].receipt.program.clone();
+        debug_assert!(branches.iter().all(|branch| branch.receipt.program == program));
         let prefixes: Vec<_> = branches
             .iter_mut()
             .map(|branch| {
@@ -723,19 +825,17 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
                 )
             })
             .collect();
-        let cached = self.memo.iter().find(|run| run.key == key).cloned();
-        let mut terminals = if let Some(run) = cached {
-            self.charge(run.transitions, run.comparisons)?;
+        let cached = self.memo.iter().position(|run| run.key == key);
+        let mut terminals = if let Some(index) = cached {
+            self.charge(self.memo[index].transitions, self.memo[index].comparisons)?;
             self.work.suffix_hits += 1;
-            prepared.extend(run.prepared);
-            let mut terminals = run.terminals;
+            prepared.extend(self.memo[index].prepared.iter().cloned());
+            let cached_program = self.memo[index].program.clone();
+            let mut terminals = self.memo[index].terminals.clone();
             for terminal in &mut terminals {
-                let i = prefixes
-                    .iter()
-                    .position(|prefix| prefix.0 == terminal.origin)
-                    .ok_or(SequenceError::InvalidCohort)?;
                 if let Some(first) = &mut terminal.first {
-                    first.next = find_stage(&programs[i], &run.programs[i].suffix(first.next)?)?;
+                    let suffix = self.suffix(&cached_program, first.next)?;
+                    first.next = self.find_stage(&program, &suffix)?;
                 }
             }
             terminals
@@ -744,17 +844,18 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             let comparisons_before = self.work.represented_comparisons;
             let mut records = Vec::new();
             let terminals = self.finish_uncached(branches, &mut records)?;
-            let run = CachedRun {
-                key,
-                terminals: terminals.clone(),
-                programs,
-                prepared: records.clone(),
-                transitions: self.work.represented_transitions - before,
-                comparisons: self.work.represented_comparisons - comparisons_before,
-            };
-            if self.limits.reuse_suffixes && self.memo.len() < self.limits.memo_entries && self.retain(run_bytes(&run))
+            if self.limits.reuse_suffixes
+                && self.memo.len() < self.limits.memo_entries
+                && self.retain(run_bytes(&key, &terminals, &program, &records))
             {
-                self.memo.push(run);
+                self.memo.push(CachedRun {
+                    key,
+                    terminals: terminals.clone(),
+                    program,
+                    prepared: records.clone(),
+                    transitions: self.work.represented_transitions - before,
+                    comparisons: self.work.represented_comparisons - comparisons_before,
+                });
             }
             prepared.extend(records);
             terminals
@@ -779,32 +880,24 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
         prepared: &mut Vec<PreparedChoice>,
     ) -> Result<Vec<Terminal>, SequenceError> {
         let mut completed = Vec::new();
-        let mut groups: Vec<Vec<Waiting>> = Vec::new();
+        let mut groups: Vec<(Suffix, Vec<Waiting>)> = Vec::new();
         for branch in branches {
             match self.drive(branch, prepared)? {
                 Ok(terminal) => completed.push(terminal),
                 Err(waiting) => {
-                    let suffix = waiting.branch.receipt.program.suffix(waiting.branch.receipt.stage)?;
-                    let group = groups.iter().position(|group| {
-                        group[0].branch.receipt.accepted == waiting.branch.receipt.accepted
-                            && group[0]
-                                .branch
-                                .receipt
-                                .program
-                                .suffix(group[0].branch.receipt.stage)
-                                .ok()
-                                .as_ref()
-                                == Some(&suffix)
+                    let suffix = self.suffix(&waiting.branch.receipt.program, waiting.branch.receipt.stage)?;
+                    let group = groups.iter().position(|(old, group)| {
+                        group[0].branch.receipt.accepted == waiting.branch.receipt.accepted && *old == suffix
                     });
                     if let Some(group) = group {
-                        groups[group].push(waiting);
+                        groups[group].1.push(waiting);
                     } else {
-                        groups.push(vec![waiting]);
+                        groups.push((suffix, vec![waiting]));
                     }
                 }
             }
         }
-        for group in groups {
+        for (_, group) in groups {
             completed.extend(self.choose(group, prepared)?);
         }
         completed.sort_by_key(|terminal| terminal.origin);
@@ -817,24 +910,24 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
     ) -> Result<Vec<Terminal>, SequenceError> {
         let first = &group[0].branch;
         let view = first.table.view(self.root);
-        let semantic_suffix = first.receipt.program.suffix(first.receipt.stage)?;
+        let semantic_suffix = self.suffix(&first.receipt.program, first.receipt.stage)?;
         let alternatives = group[0]
             .alternatives
             .iter()
-            .map(|a| selection(&first.receipt.program, a))
+            .map(|a| self.selection(&first.receipt.program, a))
             .collect::<Result<Vec<_>, _>>()?;
         for waiting in &group {
             let own = waiting
                 .alternatives
                 .iter()
-                .map(|a| selection(&waiting.branch.receipt.program, a))
+                .map(|a| self.selection(&waiting.branch.receipt.program, a))
                 .collect::<Result<Vec<_>, _>>()?;
             if own != alternatives {
                 return Err(SequenceError::WrongContext);
             }
         }
         let information = Information::of(&view);
-        let membership = Membership::authored(&view, first.table.to_act().ok_or(SequenceError::WrongContext)?.1)?;
+        let membership = self.membership(&view, first.table.to_act().ok_or(SequenceError::WrongContext)?.1)?;
         let consumed = first.consumed.clone();
         let mut outcomes = Vec::new();
         let mut records = Vec::new();
@@ -858,7 +951,7 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<GameAction, Se
             outcomes.push(self.finish(children, &mut child_records)?);
             records.push(child_records);
         }
-        let assessment = self.values(&outcomes)?;
+        let assessment = self.values(outcomes.iter().map(Vec::as_slice))?;
         let selected = assessment.selected;
         prepared.push(PreparedChoice {
             information,
@@ -898,6 +991,8 @@ pub fn evaluate<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Gam
         hard_reads: Vec::new(),
         memo: Vec::new(),
         tails: Vec::new(),
+        canonical: Vec::new(),
+        memberships: Vec::new(),
     };
     let result = (|| -> Result<Comparison, SequenceError> {
         if root >= 4
@@ -936,17 +1031,16 @@ pub fn evaluate<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Gam
         }
         let mut executions = Vec::new();
         for candidate in candidates {
-            candidate.program.validate()?;
-            candidate.program.suffix(candidate.stage)?;
+            session.suffix(&candidate.program, candidate.stage)?;
+            let mut initial_receipt = Receipt::new(candidate.program.clone(), &original)?;
+            initial_receipt.stage = candidate.stage;
             let mut branches = Vec::new();
             for (origin, (table, weight)) in cohort.iter().enumerate() {
-                let mut receipt = Receipt::new(candidate.program.clone(), &original)?;
-                receipt.stage = candidate.stage;
                 branches.push(Branch {
                     table: table.clone(),
                     origin,
                     weight: *weight,
-                    receipt,
+                    receipt: initial_receipt.clone(),
                     first: None,
                     tricks: Vec::new(),
                     consumed: Vec::new(),
@@ -970,13 +1064,12 @@ pub fn evaluate<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Gam
             });
             session.work.completed_candidates += 1;
         }
-        let outcomes = executions.iter().map(|run| run.terminals.clone()).collect::<Vec<_>>();
-        let values = session.values(&outcomes)?;
+        let values = session.values(executions.iter().map(|run| run.terminals.as_slice()))?;
         let selected = &executions[values.selected];
         let mut receipt = Receipt::new(selected.candidate.program.clone(), &original)?;
         receipt.stage = selected.candidate.stage;
         receipt.propose(selected.first.clone(), &original, legal)?;
-        let mut prepared = selected.prepared.clone();
+        let prepared = selected.prepared.clone();
         Ok(Comparison {
             executions,
             values,
@@ -1018,6 +1111,15 @@ fn node_bytes(node: &crate::concepts::sequence::Node) -> usize {
 }
 fn suffix_bytes(suffix: &Suffix) -> usize {
     std::mem::size_of_val(suffix) + vec_bytes(&suffix.nodes) + suffix.nodes.iter().map(node_bytes).sum::<usize>()
+}
+fn program_bytes(program: &Program) -> usize {
+    std::mem::size_of_val(program) + vec_bytes(&program.nodes) + program.nodes.iter().map(node_bytes).sum::<usize>()
+}
+fn membership_bytes(membership: &Membership) -> usize {
+    std::mem::size_of_val(membership)
+        + vec_bytes(&membership.legal)
+        + vec_bytes(&membership.programs)
+        + membership.programs.iter().map(suffix_bytes).sum::<usize>()
 }
 fn selection_bytes(selection: &Selection) -> usize {
     std::mem::size_of_val(selection)
@@ -1067,9 +1169,7 @@ fn prepared_bytes(p: &PreparedChoice) -> usize {
     std::mem::size_of_val(p)
         + info_bytes(&p.information)
         + suffix_bytes(&p.semantic_suffix)
-        + vec_bytes(&p.membership.legal)
-        + vec_bytes(&p.membership.programs)
-        + p.membership.programs.iter().map(suffix_bytes).sum::<usize>()
+        + membership_bytes(&p.membership)
         + vec_bytes(&p.alternatives)
         + p.alternatives.iter().map(selection_bytes).sum::<usize>()
         + p.assessment.as_ref().map(assessment_bytes).unwrap_or(0)
@@ -1077,11 +1177,16 @@ fn prepared_bytes(p: &PreparedChoice) -> usize {
         + p.consumed.iter().map(consumed_bytes).sum::<usize>()
         + vec_bytes(&p.support)
 }
-fn run_bytes(run: &CachedRun) -> usize {
-    2 * (std::mem::size_of_val(run)
-        + vec_bytes(&run.key)
-        + run
-            .key
+/// Estimate the owned cache payload from borrowed results, BEFORE cloning it.
+fn run_bytes(
+    key: &Vec<BranchKey>,
+    terminals: &Vec<Terminal>,
+    program: &Program,
+    prepared: &Vec<PreparedChoice>,
+) -> usize {
+    2 * (std::mem::size_of::<CachedRun>()
+        + vec_bytes(key)
+        + key
             .iter()
             .map(|k| {
                 k.views.iter().map(info_bytes).sum::<usize>()
@@ -1091,9 +1196,8 @@ fn run_bytes(run: &CachedRun) -> usize {
                     + k.pending.as_ref().map(selection_bytes).unwrap_or(0)
             })
             .sum::<usize>()
-        + vec_bytes(&run.terminals)
-        + run
-            .terminals
+        + vec_bytes(terminals)
+        + terminals
             .iter()
             .map(|t| {
                 vec_bytes(&t.tricks)
@@ -1102,16 +1206,180 @@ fn run_bytes(run: &CachedRun) -> usize {
                     + t.consumed.iter().map(consumed_bytes).sum::<usize>()
             })
             .sum::<usize>()
-        + vec_bytes(&run.programs)
-        + run
-            .programs
-            .iter()
-            .map(|p| vec_bytes(&p.nodes) + p.nodes.iter().map(node_bytes).sum::<usize>())
-            .sum::<usize>()
-        + vec_bytes(&run.prepared)
-        + run.prepared.iter().map(prepared_bytes).sum::<usize>())
+        + program_bytes(program)
+        + vec_bytes(prepared)
+        + prepared.iter().map(prepared_bytes).sum::<usize>())
 }
 
 #[cfg(test)]
 #[path = "../../tests/internal/sequence_execution.rs"]
 mod tests;
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use crate::concepts::sequence::{Actions, Node};
+    use crate::concepts::value::CohortMethod;
+    use engine::{ActionType, Card};
+
+    fn context() -> Context {
+        Context {
+            params: crate::Params::default(),
+            seed: 7,
+            posterior_revision: 1,
+            provenance: Provenance {
+                belief_model: "fixture-joint",
+                response_model: "unused",
+                cohort: CohortMethod::Enumerated,
+            },
+        }
+    }
+    fn no_leaf(_: &SeatView<'_>, _: &[GameAction], _: LeafBudget) -> Result<GameAction, SequenceError> {
+        panic!("pure dependency queries must not invoke a response")
+    }
+    fn session<'a, F>(context: &'a Context, leaf: &'a mut F, limits: Limits) -> Session<'a, F> {
+        Session {
+            root: 0,
+            provenance: context.provenance,
+            context,
+            limits,
+            work: Work::default(),
+            leaf,
+            responses: Vec::new(),
+            hard_reads: Vec::new(),
+            memo: Vec::new(),
+            tails: Vec::new(),
+            canonical: Vec::new(),
+            memberships: Vec::new(),
+        }
+    }
+    fn program() -> Program {
+        Program {
+            name: "ordered-options",
+            version: 1,
+            start: Stage(2),
+            nodes: vec![
+                Node::Tail,
+                Node::Action {
+                    actions: Actions::Exact(ActionType::CardPlayed(Card::from_index(0))),
+                    next: Stage(0),
+                },
+                Node::Choice(vec![Stage(0), Stage(1)]),
+            ],
+        }
+    }
+    #[test]
+    fn canonical_cache_preserves_order_and_rejects_changed_invalid_input() {
+        let context = context();
+        let mut leaf = no_leaf;
+        let mut session = session(&context, &mut leaf, Limits::default());
+        let program = program();
+        for stage in 0..program.nodes.len() {
+            assert_eq!(
+                session.suffix(&program, Stage(stage)).unwrap(),
+                program.suffix(Stage(stage)).unwrap()
+            );
+        }
+        let bytes = session.work.retained_bytes;
+        for stage in 0..program.nodes.len() {
+            assert_eq!(
+                session.suffix(&program, Stage(stage)).unwrap(),
+                program.suffix(Stage(stage)).unwrap()
+            );
+        }
+        assert_eq!(session.work.retained_bytes, bytes);
+        assert_eq!(session.canonical.len(), 1);
+        let mut reordered = program.clone();
+        reordered.nodes[2] = Node::Choice(vec![Stage(1), Stage(0)]);
+        assert_ne!(
+            session.suffix(&reordered, reordered.start).unwrap(),
+            program.suffix(program.start).unwrap()
+        );
+        let mut invalid = program.clone();
+        invalid.nodes[2] = Node::Choice(vec![Stage(2)]);
+        assert_eq!(
+            session.suffix(&invalid, invalid.start),
+            Err(SequenceError::InvalidProgram)
+        );
+        assert_eq!(
+            session.suffix(&program, Stage(program.nodes.len())),
+            Err(SequenceError::InvalidProgram)
+        );
+        assert!(session.work.retained_bytes <= session.limits.memo_bytes);
+    }
+    #[test]
+    fn membership_reuse_requires_exact_private_view_and_ordered_legal_actions() {
+        let context = context();
+        let mut leaf = no_leaf;
+        let mut session = session(&context, &mut leaf, Limits::default());
+        let mut hands: [Vec<Card>; 4] =
+            std::array::from_fn(|seat| (0..9).map(|i| Card::from_index((9 * seat + i) as u8)).collect());
+        let table = Table::new(&hands);
+        let (root, legal) = table.to_act().unwrap();
+        let view = table.view(root);
+        let expected = Membership::authored(&view, legal).unwrap();
+        assert_eq!(session.membership(&view, legal).unwrap(), expected);
+        let entries = session.memberships.len();
+        let bytes = session.work.retained_bytes;
+        assert_eq!(session.membership(&view, legal).unwrap(), expected);
+        assert_eq!(session.memberships.len(), entries);
+        assert_eq!(session.work.retained_bytes, bytes);
+        let mut reordered = legal.to_vec();
+        assert!(reordered.len() > 1);
+        reordered.reverse();
+        assert_eq!(
+            session.membership(&view, &reordered).unwrap(),
+            Membership::authored(&view, &reordered).unwrap()
+        );
+        assert_eq!(session.memberships.len(), entries + 1);
+        let card = hands[0][0];
+        hands[0][0] = hands[1][0];
+        hands[1][0] = card;
+        let changed = Table::new(&hands);
+        let (root, legal) = changed.to_act().unwrap();
+        let view = changed.view(root);
+        assert_eq!(
+            session.membership(&view, legal).unwrap(),
+            Membership::authored(&view, legal).unwrap()
+        );
+        assert_eq!(session.memberships.len(), entries + 2);
+    }
+    #[test]
+    fn dependency_cache_exhaustion_falls_back_without_retaining_or_skipping_validation() {
+        let context = context();
+        let mut leaf = no_leaf;
+        let mut session = session(
+            &context,
+            &mut leaf,
+            Limits {
+                memo_bytes: 0,
+                ..Limits::default()
+            },
+        );
+        let program = program();
+        assert_eq!(
+            session.suffix(&program, program.start).unwrap(),
+            program.suffix(program.start).unwrap()
+        );
+        let mut invalid = program;
+        invalid.nodes[2] = Node::Choice(vec![Stage(2)]);
+        assert_eq!(
+            session.suffix(&invalid, invalid.start),
+            Err(SequenceError::InvalidProgram)
+        );
+        let hands: [Vec<Card>; 4] =
+            std::array::from_fn(|seat| (0..9).map(|i| Card::from_index((9 * seat + i) as u8)).collect());
+        let table = Table::new(&hands);
+        let (root, legal) = table.to_act().unwrap();
+        let view = table.view(root);
+        assert_eq!(
+            session.membership(&view, legal).unwrap(),
+            Membership::authored(&view, legal).unwrap()
+        );
+        assert!(session.canonical.is_empty());
+        assert!(session.memberships.is_empty());
+        assert_eq!(session.work.retained_bytes, 0);
+        assert_eq!(session.work.represented_transitions, 0);
+        assert_eq!(session.work.represented_comparisons, 0);
+    }
+}
