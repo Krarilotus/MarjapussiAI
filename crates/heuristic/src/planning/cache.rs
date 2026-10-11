@@ -44,7 +44,8 @@ impl Decisions {
         let key = (view.seat, view.knowledge.certain(view.seat).0, view.events.len());
         // The endgame uses a wall-clock limit: even a fallback may have depended
         // on an interrupted solve. Do not memoize decisions in that region.
-        let reusable = view.knowledge.hand_len(view.seat) as u32 > player.params.endgame_tricks;
+        let reusable = player.intent.borrow().is_none()
+            && view.knowledge.hand_len(view.seat) as u32 > player.params.endgame_tricks;
         if reusable {
             if let Some(cached) = self
                 .entries
@@ -56,7 +57,7 @@ impl Decisions {
             }
         }
         self.evaluated += 1;
-        let decision = player.decide(view, legal);
+        let decision = player.decide_before(view, legal, None);
         if reusable && self.count < 4096 {
             self.entries.entry(key).or_default().push(Observation {
                 knowledge: *view.knowledge,

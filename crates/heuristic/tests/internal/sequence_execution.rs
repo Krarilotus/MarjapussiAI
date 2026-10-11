@@ -304,11 +304,21 @@ fn group_choice_uses_one_joint_expectation_and_preserves_identical_world_weights
     });
     // Unequal nondyadic weights retain cohort alignment. This fixture tests the
     // conditional-integration invariant, not a claim of calibrated probability.
-    let mut alternate_hands = hands();
-    let one = alternate_hands[1][0];
-    alternate_hands[1][0] = alternate_hands[3][0];
-    alternate_hands[3][0] = one;
-    let alternate = at_lead_with(alternate_hands);
+    let original_view = table.view(root);
+    let remaining: [CardSet; 4] = std::array::from_fn(|seat| table.view(seat as u8).knowledge.certain(seat as u8));
+    let mut alternate = None;
+    'pairs: for left in remaining[1].iter() {
+        for right in remaining[3].iter() {
+            let mut changed = remaining;
+            changed[1] = (changed[1] - CardSet::single(left)) | CardSet::single(right);
+            changed[3] = (changed[3] - CardSet::single(right)) | CardSet::single(left);
+            if let Some(candidate) = Table::from_view(&original_view, changed) {
+                alternate = Some(candidate);
+                break 'pairs;
+            }
+        }
+    }
+    let alternate = alternate.expect("legal hidden swap preserving the recorded observer prefix");
     assert!(Information::of(&table.view(root)).matches(&alternate.view(root)));
     assert!(
         !Information::of(&table.view(1)).matches(&alternate.view(1)),

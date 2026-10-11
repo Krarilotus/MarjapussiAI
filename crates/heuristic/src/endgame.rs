@@ -25,7 +25,11 @@ const TT_BITS: u32 = 16;
 
 pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option<Decision> {
     let _timing = beliefs::profile::scope("endgame");
-    let deadline = Instant::now() + Duration::from_millis(45);
+    let own_deadline = Instant::now() + Duration::from_millis(45);
+    let deadline = ctx.deadline.map_or(own_deadline, |outer| outer.min(own_deadline));
+    if Instant::now() >= deadline {
+        return None;
+    }
     let k = ctx.k;
     let tricks_left = k.hand_len(ctx.me) as u32;
     if tricks_left == 0 || tricks_left > ctx.params.endgame_tricks {

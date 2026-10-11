@@ -9,6 +9,9 @@ use std::{
 };
 
 mod cache;
+pub mod retained;
+pub mod sequence;
+mod strategic;
 
 use agent::{SeatView, Table};
 use engine::{ActionType, CardSet, GameAction, GameFinishedInfo, GameOutcome, QuestionType};
@@ -19,11 +22,22 @@ use crate::{fact, Ctx, Decision, Fact, HeuristicAgent, Rng, RuleId};
 
 pub(crate) const BUDGET: Duration = Duration::from_millis(2_000);
 
+/// A prepared future comparison conditions the original cohort and response
+/// model. It is not silently relabeled as a newly constructed Mind posterior.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BeliefScope {
+    CurrentInformation,
+    PreparedConditional {
+        origin: crate::concepts::sequence::Information,
+    },
+}
+
 /// Inputs of the original forecast. These are observer-visible context and
 /// model settings, never another actual player's private Mind or intentions.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlanningContext {
     pub observer: u8,
+    pub belief_scope: BeliefScope,
     pub knowledge: knowledge::Knowledge,
     pub events: Vec<observation::SeatEvent>,
     pub kinds: [agent::SeatKind; 4],
@@ -296,6 +310,7 @@ impl Forecast {
         let outcomes = (0..tables.len()).map(|_| Vec::new()).collect();
         let context = PlanningContext {
             observer: ctx.me,
+            belief_scope: BeliefScope::CurrentInformation,
             knowledge: *ctx.k,
             events: ctx.mind.events().to_vec(),
             kinds: ctx.mind.kinds(),
@@ -433,7 +448,7 @@ fn useful(ctx: &Ctx, action: &GameAction) -> bool {
 /// Existing early-auction signals, certified follow-through and small-endgame
 /// search remain their respective owners. A partial batch never changes a move.
 pub(crate) fn choose(ctx: &Ctx, legal: &[GameAction], mut baseline: Decision) -> Decision {
-    if ctx.params.plan_worlds == 0 || baseline.rule == RuleId::HE1 {
+    if ctx.params.plan_worlds == 0 {
         return baseline;
     }
     let auction = legal.iter().any(|a| a.action_type == ActionType::StopBidding);
@@ -441,9 +456,18 @@ pub(crate) fn choose(ctx: &Ctx, legal: &[GameAction], mut baseline: Decision) ->
     if auction && baseline.action.action_type != ActionType::StopBidding {
         return baseline;
     }
-    if !auction && !raising && (!ctx.k.trick().is_empty() || ctx.k.hand_len(ctx.me) as u32 <= ctx.params.endgame_tricks)
+    let retained = ctx.intent.borrow().is_some();
+    if !auction
+        && !raising
+        && !retained
+        && (baseline.rule == RuleId::HE1
+            || !ctx.k.trick().is_empty()
+            || ctx.k.hand_len(ctx.me) as u32 <= ctx.params.endgame_tricks)
     {
         return baseline;
+    }
+    if !auction && !raising {
+        return strategic::choose(ctx, legal, baseline);
     }
     let deadline = Instant::now() + BUDGET;
     let Some(forecast) = Forecast::new(ctx, ctx.params.plan_worlds as usize, deadline) else {
@@ -597,6 +621,7 @@ mod tests {
         let view = table.view(actions[0].player.0);
         let context = PlanningContext {
             observer: view.seat,
+            belief_scope: BeliefScope::CurrentInformation,
             knowledge: *view.knowledge,
             events: view.events.to_vec(),
             kinds: view.kinds,

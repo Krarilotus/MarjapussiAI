@@ -11,8 +11,18 @@ fn combined_shortlist_keeps_pair_and_control_together_without_a_score_bonus() {
     };
     let low = set("g-6 g-7 g-8 g-9 e-6 e-7 r-6 r-7 r-8");
     let resources = set("s-A s-K s-O e-A");
-    let mut mind = Mind::new(0, low, [crate::SeatKind::Unknown; 4], beliefs::BeliefParams::base_only());
-    mind.apply(&SeatEvent::Pass { from: 2, to: 0, cards: Some(resources) }).unwrap();
+    let mut mind = Mind::new(
+        0,
+        low,
+        [crate::SeatKind::Unknown; 4],
+        beliefs::BeliefParams::base_only(),
+    );
+    mind.apply(&SeatEvent::Pass {
+        from: 2,
+        to: 0,
+        cards: Some(resources),
+    })
+    .unwrap();
     let params = Params::default();
     let solver = RefCell::new(None);
     let ctx = Ctx {
@@ -22,7 +32,10 @@ fn combined_shortlist_keeps_pair_and_control_together_without_a_score_bonus() {
         params: &params,
         solver: &solver,
         seed: 7,
+        deadline: None,
+        raw_events: mind.events(),
         routes: RefCell::new(None),
+        intent: &RefCell::new(None),
         concepts: RefCell::new(crate::concepts::Reads::default()),
         series: crate::SeriesScore::default(),
     };
@@ -46,7 +59,10 @@ fn combined_shortlist_keeps_pair_and_control_together_without_a_score_bonus() {
     assert_eq!(ranked[0].2, 3.0);
     add_connected_allocations(&ctx, &mut selected, &ranked);
     assert_eq!(selected.len(), 3);
-    assert!(ctx.routes.borrow().is_none(), "shape coverage needs no sampled entry evaluation");
+    assert!(
+        ctx.routes.borrow().is_none(),
+        "shape coverage needs no sampled entry evaluation"
+    );
 }
 
 #[test]
@@ -92,7 +108,10 @@ fn shortlist_preserves_a_joint_partner_known_resource_only_when_missing() {
             params: &params,
             solver: &RefCell::new(None),
             seed: 7,
+            deadline: None,
+            raw_events: mind.events(),
             routes: RefCell::new(None),
+            intent: &RefCell::new(None),
             concepts: RefCell::new(crate::concepts::Reads::default()),
             series: crate::SeriesScore::default(),
         };
@@ -144,7 +163,10 @@ fn expired_comparison_retains_c42_without_publishing_partial_outcomes() {
         params: &params,
         solver: &RefCell::new(None),
         seed: 7,
+        deadline: None,
+        raw_events: mind.events(),
         routes: RefCell::new(None),
+        intent: &RefCell::new(None),
         concepts: RefCell::new(crate::concepts::Reads::default()),
         series: view.series,
     };

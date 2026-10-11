@@ -30,9 +30,12 @@ use engine::{ActionType, CardSet, GameAction};
 use knowledge::Knowledge;
 use observation::{Seat, SeatEvent};
 
+pub use concepts::sequence as sequence_concepts;
 pub use concepts::value as value_concepts;
 pub use params::{Params, Selection};
-pub use planning::{PlanningAssessment, PlanningContext};
+pub use planning::retained::{PlanMode, SequenceTrace};
+pub use planning::sequence as sequence_evaluation;
+pub use planning::{BeliefScope, PlanningAssessment, PlanningContext};
 pub use rules::{Phase, Rule, RuleId, RULES};
 
 pub(crate) fn fact(key: &'static str, value: impl Into<f64>) -> Fact {
@@ -89,8 +92,13 @@ pub(crate) struct Ctx<'a> {
     pub solver: &'a RefCell<Option<solver::Solver>>,
     /// Seed for `Params.sample_temperature > 0` (deterministic per seat and event count).
     pub seed: u64,
+    /// A caller-owned soft deadline, propagated to bounded primitive searches.
+    pub deadline: Option<std::time::Instant>,
+    /// Received history including undo markers; semantic queries use Mind::events().
+    pub raw_events: &'a [observation::SeatEvent],
     pub routes: RefCell<Option<routes::Routes>>,
     pub concepts: RefCell<concepts::Reads>,
+    pub intent: &'a RefCell<Option<planning::retained::RetainedPlan>>,
     pub series: SeriesScore,
 }
 
@@ -162,19 +170,44 @@ struct Synced {
     mind: Mind,
 }
 
+/// Transaction retry state, distinct from a strategic plan step. A fallback
+/// can be retried without advancing or certifying the retained program.
+#[derive(Clone)]
+struct PendingDecision {
+    information: concepts::sequence::Information,
+    legal: Vec<GameAction>,
+    parameters: Params,
+    decision: Decision,
+    assessment: Option<std::sync::Arc<PlanningAssessment>>,
+    sequence: Option<std::sync::Arc<SequenceTrace>>,
+}
+impl PendingDecision {
+    fn matches(&self, view: &SeatView<'_>, legal: &[GameAction], parameters: &Params) -> bool {
+        self.information.matches(view) && self.legal == legal && &self.parameters == parameters
+    }
+}
+
 /// HP1.
 #[derive(Default)]
 pub struct HeuristicAgent {
     pub params: Params,
     mind: Option<Synced>,
     solver: RefCell<Option<solver::Solver>>,
-    assessment: Option<PlanningAssessment>,
+    assessment: Option<std::sync::Arc<PlanningAssessment>>,
+    sequence: Option<std::sync::Arc<SequenceTrace>>,
+    pending_decision: Option<PendingDecision>,
+    intent: RefCell<Option<planning::retained::RetainedPlan>>,
 }
 
 impl Clone for HeuristicAgent {
-    /// The parameters only: the clone builds its own `Mind` from its first view.
+    /// Preserve private semantic intent across an explicit policy fork. The
+    /// clone reconstructs its own Mind and disposable solver scratch. A different
+    /// seat/history/model invalidates the copied intent before it can be used.
     fn clone(&self) -> Self {
-        HeuristicAgent::new(self.params.clone())
+        let mut cloned = HeuristicAgent::new(self.params.clone());
+        cloned.intent = RefCell::new(self.intent.borrow().clone());
+        cloned.pending_decision = self.pending_decision.clone();
+        cloned
     }
 }
 
@@ -195,6 +228,9 @@ impl HeuristicAgent {
             mind: None,
             solver: RefCell::new(None),
             assessment: None,
+            sequence: None,
+            pending_decision: None,
+            intent: RefCell::new(None),
         }
     }
 
@@ -206,8 +242,12 @@ impl HeuristicAgent {
 
     /// The completed forecast assessment used by the last decision, if any.
     /// Uses the original decision context, not hindsight or another evaluation.
+    pub fn last_sequence(&self) -> Option<&SequenceTrace> {
+        self.sequence.as_deref()
+    }
+
     pub fn last_assessment(&self) -> Option<&PlanningAssessment> {
-        self.assessment.as_ref()
+        self.assessment.as_deref()
     }
 }
 
@@ -258,22 +298,69 @@ impl Agent for HeuristicAgent {
 impl HeuristicAgent {
     /// The decision with its typed rule ID (`rules.rs`).
     pub fn decide(&mut self, view: &SeatView, legal: &[GameAction]) -> Decision {
+        self.decide_scoped(view, legal, None, true)
+    }
+
+    pub(crate) fn decide_before(
+        &mut self,
+        view: &SeatView,
+        legal: &[GameAction],
+        deadline: Option<std::time::Instant>,
+    ) -> Decision {
+        self.decide_scoped(view, legal, deadline, false)
+    }
+
+    fn decide_scoped(
+        &mut self,
+        view: &SeatView,
+        legal: &[GameAction],
+        deadline: Option<std::time::Instant>,
+        retain_retry: bool,
+    ) -> Decision {
         let _timing = beliefs::profile::scope("policy.decide");
         self.assessment = None;
+        self.sequence = None;
+        // Ordinary play shares one soft lane across its solver and plan repair.
+        let deadline = deadline.or_else(|| {
+            (!view.knowledge.played().is_empty() || self.intent.borrow().is_some())
+                .then(|| std::time::Instant::now() + std::time::Duration::from_millis(50))
+        });
         let legal: Vec<GameAction> = legal
             .iter()
             .filter(|a| a.action_type != ActionType::UndoRequest)
             .cloned()
             .collect();
         assert!(!legal.is_empty(), "no legal action for seat {}", view.seat);
-        if let Some(a) = legal.iter().find(|a| a.action_type == ActionType::UndoDecline) {
-            return decision(a, RuleId::HX2, vec![]);
+        // Forced actions also accept the current observation prefix. Intent and
+        // cached evidence must never lag merely because this turn has no choice.
+        let mind = sync(&mut self.mind, &self.params, view);
+        let canonical_view = SeatView {
+            seat: view.seat,
+            knowledge: mind.knowledge(),
+            events: mind.events(),
+            series: view.series,
+            kinds: view.kinds,
+        };
+        let intent_reset = self
+            .intent
+            .get_mut()
+            .as_mut()
+            .and_then(|plan| plan.synchronize(view, &canonical_view, &self.params).err());
+        if intent_reset.is_some() {
+            // Rewind, rejected/forked history or changed configuration requires
+            // explicit recovery. Previous values cannot justify today's move.
+            *self.intent.get_mut() = None;
         }
-        if legal.len() == 1 {
-            return decision(&legal[0], RuleId::HX1, vec![]);
+        if let Some(pending) = self
+            .pending_decision
+            .as_ref()
+            .filter(|p| retain_retry && p.matches(view, &legal, &self.params))
+        {
+            self.assessment = pending.assessment.clone();
+            self.sequence = pending.sequence.clone();
+            return pending.decision.clone();
         }
         let seed = self.params.seed ^ (view.seat as u64) << 56 ^ view.events.len() as u64;
-        let mind = sync(&mut self.mind, &self.params, view);
         let ctx = Ctx {
             me: view.seat,
             k: mind.knowledge(),
@@ -281,17 +368,34 @@ impl HeuristicAgent {
             params: &self.params,
             solver: &self.solver,
             seed,
+            deadline,
+            raw_events: view.events,
             routes: RefCell::new(None),
             concepts: RefCell::new(concepts::Reads::default()),
+            intent: &self.intent,
             series: view.series,
         };
-        let decision = (|| {
+        let mut decision = (|| {
+            if let Some(a) = legal.iter().find(|a| a.action_type == ActionType::UndoDecline) {
+                return decision(a, RuleId::HX2, vec![]);
+            }
+            if legal.len() == 1 {
+                planning::retained::forced(&ctx, &legal);
+                return decision(&legal[0], RuleId::HX1, vec![]);
+            }
+            if let Some(decision) = planning::retained::prepared(&ctx, &legal) {
+                return decision;
+            }
             let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));
             if has(|t| matches!(t, ActionType::Pass(_))) {
                 return passing::decide(&ctx, &legal);
             }
             if let Some(d) = raising::follow(&ctx, &legal) {
-                return d;
+                return if ctx.intent.borrow().is_some() {
+                    planning::choose(&ctx, &legal, d)
+                } else {
+                    d
+                };
             }
             if has(|t| matches!(t, ActionType::NewBid(_))) {
                 if has(|t| matches!(t, ActionType::CardPlayed(_))) {
@@ -313,7 +417,60 @@ impl HeuristicAgent {
             let baseline = play::decide(&ctx, &legal);
             planning::choose(&ctx, &legal, baseline)
         })();
-        self.assessment = ctx.concepts.borrow_mut().assessment.take();
+        if intent_reset.is_some() {
+            decision.why.push(fact("sequence_context_reset", 1));
+        }
+        self.assessment = ctx.concepts.borrow_mut().assessment.take().map(std::sync::Arc::new);
+        self.sequence = ctx.concepts.borrow_mut().sequence.take().map(std::sync::Arc::new);
+        if retain_retry {
+            self.pending_decision = Some(PendingDecision {
+                information: concepts::sequence::Information::of(view),
+                legal,
+                parameters: self.params.clone(),
+                decision: decision.clone(),
+                assessment: self.assessment.clone(),
+                sequence: self.sequence.clone(),
+            });
+        }
         decision
     }
 }
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+
+    #[test]
+    fn forced_decisions_synchronize_the_accepted_observation_prefix() {
+        let hands = std::array::from_fn(|s| (0..9).map(|c| engine::Card::from_index((s * 9 + c) as u8)).collect());
+        let mut table = agent::Table::new(&hands);
+        for kind in [
+            ActionType::NewBid(120),
+            ActionType::StopBidding,
+            ActionType::StopBidding,
+            ActionType::StopBidding,
+        ] {
+            let action = *table
+                .to_act()
+                .unwrap()
+                .1
+                .iter()
+                .find(|a| a.action_type == kind)
+                .unwrap();
+            table.apply(action);
+        }
+        let (seat, legal) = table.to_act().unwrap();
+        let mut policy = HeuristicAgent::default();
+        let view = table.view(seat);
+        let selected = policy.decide(&view, &legal[..1]);
+        assert_eq!(selected.rule, RuleId::HX1);
+        let synced = policy.mind.as_ref().expect("forced decision synchronized evidence");
+        assert_eq!(synced.history, view.events);
+        assert_eq!(synced.mind.knowledge(), view.knowledge);
+        assert!(policy.last_assessment().is_none());
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/internal/sequence_policy.rs"]
+mod sequence_policy_tests;

@@ -19,7 +19,17 @@ fn fnv(bytes: &[u8]) -> u64 {
 }
 
 fn main() {
-    let cli = Cli::parse(&["--games", "--out", "--repeat", "--params", "--profile-out"], &[]);
+    let cli = Cli::parse(
+        &[
+            "--games",
+            "--out",
+            "--repeat",
+            "--params",
+            "--profile-out",
+            "--timings-out",
+        ],
+        &[],
+    );
     let (games, repeat) = (cli.get("--games", 2_000u64), cli.get("--repeat", 3usize));
     let out = cli.str("--out").unwrap_or_default().to_string();
     let params = cli.params("--params");
@@ -29,12 +39,14 @@ fn main() {
     beliefs::profile::reset();
     let mut overall_best = f64::MAX;
     let mut log = String::new();
+    let mut observations = Vec::new();
     for r in 0..repeat {
         let mut times: BTreeMap<&'static str, Vec<u64>> = BTreeMap::new();
         log.clear();
         for seed in 0..games {
             let mut table = Table::new(&deal(seed));
             let mut players: Vec<HeuristicAgent> = (0..4).map(|_| HeuristicAgent::new(params.clone())).collect();
+            let mut decision_index = 0;
             while let Some((seat, legal)) = table.to_act() {
                 let phase = if legal.len() == 1 {
                     "forced"
@@ -46,6 +58,34 @@ fn main() {
                 let d = players[seat as usize].decide(&view, legal);
                 let ns = t0.elapsed().as_nanos() as u64;
                 times.entry(phase).or_default().push(ns);
+                if cli.str("--timings-out").is_some() {
+                    let assessment = players[seat as usize].last_assessment();
+                    let sequence = players[seat as usize].last_sequence();
+                    observations.push(serde_json::json!({
+                        "repeat": r, "game_seed": seed, "decision": decision_index,
+                        "seat": seat, "phase": phase, "nanoseconds": ns,
+                        "legal_actions": legal.len(), "remaining_cards": view.knowledge.hand_len(seat),
+                        "action": tools::record::action_json(&d.action, view.knowledge.declarer().is_some()),
+                        "rule": d.rule.code(),
+                        "sequence": sequence.map(|s| serde_json::json!({
+                            "mode": format!("{:?}", s.mode), "failure": s.failure.map(|e| format!("{e:?}")),
+                            "transitions": s.work.transitions, "represented_transitions": s.work.represented_transitions,
+                            "comparisons": s.work.comparisons, "represented_comparisons": s.work.represented_comparisons,
+                            "completed_candidates": s.work.completed_candidates,
+                            "response_calls": s.work.response_calls, "response_hits": s.work.response_hits,
+                            "suffix_hits": s.work.suffix_hits, "retained_bytes": s.work.retained_bytes,
+                        })),
+                        "assessment": assessment.map(|a| serde_json::json!({
+                            "evaluated_nodes": a.values.evaluated_nodes,
+                            "memo_hits": a.values.memo_hits,
+                            "candidates": a.actions.len(),
+                            "cohort_size": a.values.cohort_size,
+                            "response_model": a.values.provenance.response_model,
+                        })),
+                        "facts": d.why.iter().map(|f| (f.key, f.value)).collect::<BTreeMap<_, _>>(),
+                    }));
+                }
+                decision_index += 1;
                 if r == 0 {
                     let why: Vec<String> = d.why.iter().map(|f| format!("{}={:?}", f.key, f.value)).collect();
                     let _ = writeln!(
@@ -116,6 +156,13 @@ fn main() {
         println!("| {phase} | {n} | {mean:.1} | {p99:.1} | {max:.1} |");
     }
     println!("mean over all non-forced decisions: {overall_best:.1} µs");
+    if let Some(path) = cli.str("--timings-out") {
+        let record = serde_json::json!({
+            "schema": "marjapussi.decision-timings/1", "games": games, "repeats": repeat,
+            "parameters": params.to_toml(), "decisions": observations,
+        });
+        std::fs::write(path, serde_json::to_vec(&record).unwrap()).expect("write --timings-out");
+    }
     #[cfg(feature = "profile")]
     if let Some(path) = cli.str("--profile-out") {
         let data: serde_json::Map<String, serde_json::Value> = beliefs::profile::snapshot().into_iter().map(|(name, t)| {
@@ -123,5 +170,4 @@ fn main() {
         }).collect();
         std::fs::write(path, serde_json::to_vec_pretty(&data).unwrap()).expect("write --profile-out");
     }
-
 }

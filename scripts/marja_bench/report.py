@@ -9,21 +9,106 @@ from pathlib import Path
 import statistics
 
 
+SEQUENCE_MODES = ("formation", "repair", "prepared", "retry", "deferred")
+SEQUENCE_COUNTERS = ("transitions", "represented_transitions", "comparisons", "response_calls",
+                     "response_hits", "suffix_hits", "retained_bytes", "completed_candidates",
+                     "attempted_candidates", "total_candidates")
+
+
+def value_assessment_presence(decision):
+    """Classify actual value data; an extension-only envelope is not a ranking."""
+    assessment = decision.get("assessment")
+    for source in (decision, assessment if isinstance(assessment, dict) else {}):
+        if "value_assessment_present" in source:
+            value = source["value_assessment_present"]
+            return value if type(value) is bool else None
+    # Legacy full value envelopes expose a real ranking/candidate binding. Old
+    # compact presence flags alone cannot distinguish an extension-only capture.
+    if isinstance(assessment, dict):
+        if (type(assessment.get("selected")) is int and type(assessment.get("ranking")) is int
+                and isinstance(assessment.get("candidates"), list)):
+            return True
+        return None
+    if "assessment" in decision and assessment is None:
+        return False
+    return None
+
+
+def value_rank_complete(decision):
+    present = value_assessment_presence(decision)
+    if present is not True:
+        return False if present is False else None
+    if "value_rank_complete" in decision:
+        value = decision["value_rank_complete"]
+        return value if type(value) is bool else None
+    assessment = decision.get("assessment")
+    if not isinstance(assessment, dict):
+        return None
+    if assessment.get("cohort_complete") is False:
+        return False
+    if assessment.get("cohort_complete") is not True:
+        return None
+    selected, ranking, candidates = (assessment.get(k) for k in ("selected", "ranking", "candidates"))
+    if type(selected) is int and type(ranking) is int and isinstance(candidates, list):
+        return 0 <= selected < len(candidates) and ranking >= 0
+    return None
+
+
+def compact_sequence(decision):
+    """Bounded scalar projection only. Do not copy programs, worlds or views."""
+    if "sequence" in decision:  # Already compacted: preserve exact report inputs.
+        return decision["sequence"]
+    assessment = decision.get("assessment")
+    extensions = assessment.get("extensions", {}) if isinstance(assessment, dict) else {}
+    sequence = extensions.get("sequence") if isinstance(extensions, dict) else None
+    if not isinstance(sequence, dict):
+        return None
+    work = sequence.get("work")
+    work = work if isinstance(work, dict) else {}
+    counters, invalid = {}, []
+    for key in SEQUENCE_COUNTERS:
+        # Optional future count fields must be explicit, never guessed from a
+        # mode, partial completed count, candidate catalogue or list of choices.
+        source = work if key in work else sequence
+        value = source.get(key)
+        valid = type(value) is int and value >= 0
+        counters[key] = value if valid else None
+        if key in source and value is not None and not valid:
+            invalid.append(key)
+    failure = sequence.get("failure")
+    scope = sequence.get("belief_scope")
+    failure_kind = failure.get("kind") if isinstance(failure, dict) else failure
+    scope_kind = scope.get("kind") if isinstance(scope, dict) else None
+    return {"mode": sequence.get("mode") if sequence.get("mode") in SEQUENCE_MODES else None,
+            "belief_scope": scope_kind if scope_kind in ("current_information", "prepared_conditional") else None,
+            "failure_present": failure is not None if "failure" in sequence else None,
+            "failure": failure_kind if isinstance(failure_kind, str) else None,
+            "work": counters, "invalid_work_fields": invalid}
+
+
+def compact_decision(decision):
+    sequence = compact_sequence(decision)
+    return {**{k: decision[k] for k in ("seat", "ms", "phase", "rule")},
+            "assessment_recorded": decision.get("assessment_recorded"),
+            "assessment_present": decision.get("assessment") is not None or decision.get("assessment_present", False),
+            "value_assessment_present": value_assessment_presence(decision),
+            "value_rank_complete": value_rank_complete(decision),
+            "assessment_matches_chosen_action": decision.get("assessment_matches_chosen_action"),
+            "sequence_present": sequence is not None or decision.get("sequence_present") is True,
+            "sequence": sequence,
+            "capture_ms": decision.get("capture_ms"),
+            "assessment_serialization_ms": decision.get("assessment_serialization_ms"),
+            "facts": [f for f in decision["facts"] if f["key"] in
+                      ("forecast_complete", "forecast_decisions", "forecast_reused_decisions")]}
+
+
 def compact_game(game):
     """Keep report inputs only; full hands, actions and explanations stay on disk."""
     row = {k: game[k] for k in ("index", "deal_index", "deal_seed", "rotation", "lineup", "metrics")}
-    row.update({k: game[k] for k in ("rotation_mode", "games_per_deal", "hands_turned") if k in game})
+    row.update({k: game[k] for k in ("rotation_mode", "games_per_deal", "hands_turned", "policy_seeds") if k in game})
     if "policies" in game:
         row["policy_seeds"] = [p.get("policy_seed", p.get("stream_seed")) for p in game["policies"]]
-    row["decisions"] = [{**{k: d[k] for k in ("seat", "ms", "phase", "rule")},
-                         "assessment_recorded": d.get("assessment_recorded"),
-                         "assessment_present": (d.get("assessment") is not None or d.get("assessment_present", False)),
-                         "assessment_matches_chosen_action": d.get("assessment_matches_chosen_action"),
-                         "capture_ms": d.get("capture_ms", 0),
-                         "assessment_serialization_ms": d.get("assessment_serialization_ms", 0),
-                         "facts": [f for f in d["facts"] if f["key"] in
-                                   ("forecast_complete", "forecast_decisions", "forecast_reused_decisions")]}
-                        for d in game["decisions"]]
+    row["decisions"] = [compact_decision(d) for d in game["decisions"]]
     return row
 
 
@@ -68,6 +153,53 @@ def team_index(game, physical_team):
 
 def team_value(game, values, team):
     return values[next(t for t in (0, 1) if team_index(game, t) == team)]
+
+
+def sequence_metrics(decisions):
+    records = [compact_sequence(d) for d in decisions]
+    records = [r for r in records if r is not None]
+    present = sum(compact_sequence(d) is not None or d.get("sequence_present") is True for d in decisions)
+
+    def counter(key, memory=False):
+        values = [r["work"][key] for r in records if r["work"][key] is not None]
+        result = {"recorded_decisions": len(values), "missing_decisions": present - len(values),
+                  "invalid_decisions": sum(key in r["invalid_work_fields"] for r in records)}
+        if memory:
+            result.update(max_bytes=max(values) if values else None, mean_bytes=mean(values))
+        else:
+            result["total"] = sum(values) if values else None
+        return result
+
+    paired = [r["work"] for r in records if r["work"]["completed_candidates"] is not None
+              and r["work"]["attempted_candidates"] is not None]
+    completed = sum(w["completed_candidates"] for w in paired) if paired else None
+    attempted = sum(w["attempted_candidates"] for w in paired) if paired else None
+    consistent = all(w["completed_candidates"] <= w["attempted_candidates"] for w in paired)
+    return {"recorded_decisions": present, "total_decisions": len(decisions),
+            "modes": {mode: sum(r["mode"] == mode for r in records) for mode in SEQUENCE_MODES},
+            "mode_unknown_decisions": present - sum(r["mode"] is not None for r in records),
+            "belief_scopes": dict(Counter(r["belief_scope"] for r in records if r["belief_scope"] is not None)),
+            "belief_scope_unknown_decisions": present - sum(r["belief_scope"] is not None for r in records),
+            "failures": dict(Counter(r["failure"] for r in records if r["failure"] is not None)),
+            "failure_present_decisions": sum(r["failure_present"] is True for r in records),
+            "failure_kind_unknown_decisions": sum(r["failure_present"] is True and r["failure"] is None for r in records),
+            "failure_status_unknown_decisions": present - sum(r["failure_present"] is not None for r in records),
+            "candidate_counts": {key: counter(key) for key in
+                                 ("completed_candidates", "attempted_candidates", "total_candidates")},
+            "paired_completed_attempted": {"recorded_decisions": len(paired), "completed": completed,
+                                           "attempted": attempted, "consistent": consistent if paired else None,
+                                           "completion_rate": ratio(completed, attempted) if consistent else None},
+            "actual_work": {key: counter(key) for key in ("transitions", "comparisons", "response_calls")},
+            "represented_work": {"transitions": counter("represented_transitions")},
+            "reuse": {key: counter(key) for key in ("response_hits", "suffix_hits")},
+            "retained_memory": counter("retained_bytes", memory=True)}
+
+
+def recorded_timing(decisions, key):
+    values = [d[key] for d in decisions if type(d.get(key)) in (int, float)
+              and math.isfinite(d[key]) and d[key] >= 0]
+    return {"recorded_decisions": len(values), "missing_decisions": len(decisions) - len(values),
+            "seconds": sum(values) / 1000 if values else None}
 
 
 def summarize(games, manifest):
@@ -170,6 +302,8 @@ def summarize(games, manifest):
                 recorded += 1
                 evaluated += facts["forecast_decisions"]
                 reused += facts.get("forecast_reused_decisions", 0)
+        capture_timing = recorded_timing(decisions, "capture_ms")
+        serialization_timing = recorded_timing(decisions, "assessment_serialization_ms")
         slots.append({"slot": slot, "policy": manifest["policies"][slot],
                       "all_decisions": latency([d["ms"] for d in decisions]),
                       "nonforced_decisions": latency([d["ms"] for d in decisions if d["rule"] != "HX-1"]),
@@ -178,11 +312,16 @@ def summarize(games, manifest):
                       "complete_forecasts": complete, "incomplete_forecasts": incomplete,
                       "assessments": {
                           "instrumented_decisions": sum(d.get("assessment_recorded") is True for d in decisions),
-                          "completed_assessments": sum(d.get("assessment_present", d.get("assessment") is not None) for d in decisions),
-                          "selected_action_matches": sum(d.get("assessment_matches_chosen_action") is True for d in decisions),
-                          "selected_action_differs": sum(d.get("assessment_matches_chosen_action") is False for d in decisions),
-                          "capture_seconds": sum(d.get("capture_ms", 0) for d in decisions) / 1000,
-                          "serialization_seconds": sum(d.get("assessment_serialization_ms", 0) for d in decisions) / 1000},
+                          "value_assessments_present": sum(value_assessment_presence(d) is True for d in decisions),
+                          "value_presence_unknown_decisions": sum(value_assessment_presence(d) is None for d in decisions),
+                          "completed_assessments": sum(value_rank_complete(d) is True for d in decisions),
+                          "completion_unknown_decisions": sum(value_rank_complete(d) is None for d in decisions),
+                          "selected_action_matches": sum(value_rank_complete(d) is True and d.get("assessment_matches_chosen_action") is True for d in decisions),
+                          "selected_action_differs": sum(value_rank_complete(d) is True and d.get("assessment_matches_chosen_action") is False for d in decisions),
+                          "capture_seconds": capture_timing["seconds"],
+                          "serialization_seconds": serialization_timing["seconds"],
+                          "capture_timing": capture_timing, "serialization_timing": serialization_timing},
+                      "sequences": sequence_metrics(decisions),
                       "forecast_reuse": {"recorded_forecasts": recorded,
                                          "evaluated_decisions": evaluated, "reused_decisions": reused,
                                          "hit_rate": ratio(reused, evaluated + reused)}})
@@ -258,6 +397,37 @@ def markdown(report):
         reuse = slot["forecast_reuse"]
         lines.append(f"| {slot['slot']}: {slot['policy']} | {reuse['recorded_forecasts']} | {number(reuse['evaluated_decisions'])} | {number(reuse['reused_decisions'])} | {percent(reuse['hit_rate'])} |")
     lines += ["", "Reuse counts include completed and interrupted comparisons when the policy records them. Older policies may omit these counters.", "",
+              "## Recorded value rankings and sequence execution", "",
+              "| Slot / policy | Complete value ranks | Value completion unknown | Sequence traces | Formation | Repair | Prepared | Retry | Deferred | Mode unknown |",
+              "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    for slot in report["slots"]:
+        sequence, assessment = slot["sequences"], slot["assessments"]
+        modes = sequence["modes"]
+        lines.append(f"| {slot['slot']}: {slot['policy']} | {assessment['completed_assessments']} | {assessment['completion_unknown_decisions']} | "
+                     f"{sequence['recorded_decisions']}/{sequence['total_decisions']} | " +
+                     " | ".join(str(modes[m]) for m in SEQUENCE_MODES) + f" | {sequence['mode_unknown_decisions']} |")
+    lines += ["", "A sequence-only prepared/retry step does not count as a newly completed value ranking. "
+              "Counts describe exported evidence, not absence of internal reasoning in uninstrumented policies.", "",
+              "| Slot / policy | Completed candidates | Attempted candidates | Total candidates | Executed transitions | Represented transitions |",
+              "|---|---:|---:|---:|---:|---:|---:|"]
+
+    def observed(counter):
+        value = counter["total"]
+        if value is None:
+            return "— (not recorded)"
+        return f"{value:,} ({counter['recorded_decisions']} recorded, {counter['missing_decisions']} missing)"
+
+    for slot in report["slots"]:
+        sequence = slot["sequences"]
+        counts = sequence["candidate_counts"]
+        cells = [counts[k] for k in ("completed_candidates", "attempted_candidates", "total_candidates")]
+        cells += [sequence["actual_work"]["transitions"], sequence["represented_work"]["transitions"]]
+        lines.append(f"| {slot['slot']}: {slot['policy']} | " + " | ".join(observed(c) for c in cells) + " |")
+    lines += ["", "Work totals use recorded counters only: executed transitions and represented logical transitions are separate. "
+              "Missing attempted/total counts stay unknown; neither completed candidates nor available programs establish those counts. "
+              "A completion rate uses only decisions recording both completed and attempted counts. "
+              "Response calls/hits, suffix hits, comparison calls and maximum reported cache-retention bytes are in summary.json. "
+              "Retention bytes are a per-trace cache ledger, not process peak memory. Full traces remain in games NDJSON.", "",
               "## Bidding communication", "",
               "These are common-convention content checks against the speaker’s hand. They do not measure whether the receiver understood, "
               "or whether a strategic overbid was good. Ambiguous and unrecognized bids remain separate.", "",

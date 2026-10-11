@@ -17,8 +17,10 @@ use eval::{
     suite::DealSuite,
     RandomAgent, Rng,
 };
-use heuristic::value_concepts::{CohortMethod, NodeValue};
-use heuristic::{HeuristicAgent, Params, PlanningAssessment};
+use heuristic::sequence_concepts::{Actions, Guard, Information, Node, ReadMeaning, Suffix};
+use heuristic::sequence_evaluation::{Consumed, Selection};
+use heuristic::value_concepts::{Assessment, CohortMethod, NodeValue};
+use heuristic::{BeliefScope, HeuristicAgent, Params, PlanMode, PlanningAssessment, SequenceTrace};
 use serde_json::{json, Value};
 
 use crate::{
@@ -47,6 +49,7 @@ struct CapturedDecision {
     action: engine::GameAction,
     policy_nanos: u128,
     assessment: Option<PlanningAssessment>,
+    sequence: Option<SequenceTrace>,
 }
 
 struct RecordingAgent {
@@ -65,6 +68,7 @@ impl Agent for RecordingAgent {
             action: decision.action,
             policy_nanos,
             assessment: self.agent.last_assessment().cloned(),
+            sequence: self.agent.last_sequence().cloned(),
         });
         decision
     }
@@ -80,11 +84,26 @@ pub fn record_current(agent: HeuristicAgent, recorder: AssessmentRecorder) -> Bo
 }
 
 /// Serialize the consumed evaluator result, never rerun an evaluator for diagnostics.
-/// Runtime refs are scoped to this decision. `extensions` is reserved for the next
-/// actual sequence receipt/trace; absence does not imply a sequence was evaluated.
+/// Runtime refs are scoped to this decision; nested comparisons have distinct namespaces.
 pub fn assessment_json(a: &PlanningAssessment, raising: bool) -> Value {
-    let v = &a.values;
-    let cohort = match v.provenance.cohort {
+    let mut result = values_json(&a.values, Some(&a.actions), raising, "value");
+    let context = &a.context;
+    result["schema"] = json!("marjapussi.planning-assessment/1");
+    result["value_assessment_present"] = json!(true);
+    result["context"] = json!({"observer": context.observer, "event_count": context.events.len(),
+        "belief_scope": belief_scope_json(&context.belief_scope),
+        "events_debug": format!("{:?}", context.events), "knowledge_debug": format!("{:?}", context.knowledge),
+        "kinds": format!("{:?}", context.kinds),
+        "series": {"team_totals": context.series.team_totals, "games_left": context.series.games_left},
+        "response_params": context.response_params.to_toml(), "response_beliefs_debug": format!("{:?}", context.response_params.beliefs),
+        "seed": context.seed, "possible_allocations": context.possible_allocations,
+        "requested_worlds": context.requested_worlds, "proposal_draws": context.proposal_draws});
+    result["extensions"] = json!({});
+    result
+}
+
+fn cohort_json(method: CohortMethod) -> Value {
+    match method {
         CohortMethod::Enumerated => json!({"method": "enumerated"}),
         CohortMethod::ImportanceSampled { draws, proposal_ess } => {
             json!({"method": "importance_sampled", "draws": draws, "proposal_ess": proposal_ess})
@@ -92,12 +111,17 @@ pub fn assessment_json(a: &PlanningAssessment, raising: bool) -> Value {
         CohortMethod::Resampled { draws, proposal_ess } => {
             json!({"method": "resampled", "draws": draws, "proposal_ess": proposal_ess})
         }
-    };
+    }
+}
+
+fn values_json(v: &Assessment, actions: Option<&[engine::GameAction]>, raising: bool, namespace: &str) -> Value {
+    let cohort = cohort_json(v.provenance.cohort);
     let trace: Vec<_> = v
         .trace
         .iter()
         .map(|n| {
             let value = match &n.value {
+                NodeValue::Assessment => json!({"kind": "assessment"}),
                 NodeValue::Number(x) => json!({"number": x}),
                 NodeValue::Weights(x) => json!({"weights": x}),
                 NodeValue::ConditionalScores(x) => json!({"conditional_engine_scores": x}),
@@ -109,12 +133,12 @@ pub fn assessment_json(a: &PlanningAssessment, raising: bool) -> Value {
                 NodeValue::Ranking { selected, alternative } => {
                     json!({"selected": selected, "alternative": alternative})
                 }
-                // Preserve additional actual evaluator outputs without inventing semantics.
-                other => json!({"debug": format!("{other:?}")}),
             };
-            json!({"ref": n.reference.0, "name": n.name, "meaning": format!("{:?}", n.meaning),
+            json!({"ref": n.reference.0, "nodeId": format!("{namespace}/{}", n.reference.0),
+            "name": n.name, "meaning": format!("{:?}", n.meaning),
             "operator": format!("{:?}", n.operator),
-            "dependencies": n.dependencies.iter().map(|r| r.0).collect::<Vec<_>>(), "value": value})
+            "dependencies": n.dependencies.iter().map(|r| r.0).collect::<Vec<_>>(),
+            "dependency_nodeIds": n.dependencies.iter().map(|r| format!("{namespace}/{}", r.0)).collect::<Vec<_>>(), "value": value})
         })
         .collect();
     let candidates: Vec<_> = v
@@ -123,7 +147,7 @@ pub fn assessment_json(a: &PlanningAssessment, raising: bool) -> Value {
         .enumerate()
         .map(|(i, c)| {
             json!({
-                "index": i, "action": action_json(&a.actions[i], raising),
+                "index": i, "action": actions.and_then(|a| a.get(i)).map(|a| action_json(a, raising)),
                 "our_score": c.our_score, "opponent_score": c.opponent_score, "difference": c.difference,
                 "declaring": c.declaring, "joint_made": c.joint_made, "made_given_declaring": c.made_given_declaring,
                 "refs": {"scores": c.refs.scores.0.0, "our_score": c.refs.our_score.0.0,
@@ -133,24 +157,314 @@ pub fn assessment_json(a: &PlanningAssessment, raising: bool) -> Value {
             })
         })
         .collect();
-    let context = &a.context;
     json!({
-        "schema": "marjapussi.planning-assessment/1", "root": v.root.0, "ranking": v.ranking.0.0,
+        "root": v.root.0, "nodeId": format!("{namespace}/{}", v.root.0), "ranking": v.ranking.0.0,
         "selected": v.selected, "alternative": v.alternative, "root_team": v.root_team,
         "provenance": {"belief_model": v.provenance.belief_model, "response_model": v.provenance.response_model,
             "cohort": cohort, "limit": "numerical model integration, not proof or calibrated probability"},
         "definition": {"opponent_weight": v.definition.opponent_weight},
         "cohort_size": v.cohort_size, "cohort_weight": v.cohort_weight, "cohort_complete": v.cohort_complete,
         "evaluated_nodes": v.evaluated_nodes, "memo_hits": v.memo_hits,
-        "context": {"observer": context.observer, "event_count": context.events.len(),
-            "events_debug": format!("{:?}", context.events), "knowledge_debug": format!("{:?}", context.knowledge),
-            "kinds": format!("{:?}", context.kinds),
-            "series": {"team_totals": context.series.team_totals, "games_left": context.series.games_left},
-            "response_params": context.response_params.to_toml(), "response_beliefs_debug": format!("{:?}", context.response_params.beliefs),
-            "seed": context.seed, "possible_allocations": context.possible_allocations,
-            "requested_worlds": context.requested_worlds, "proposal_draws": context.proposal_draws},
-        "candidates": candidates, "trace": trace, "extensions": {},
+        "candidates": candidates, "trace": trace,
     })
+}
+
+fn cards_json(cards: engine::CardSet) -> Value {
+    json!(cards.iter().collect::<Vec<_>>())
+}
+
+fn rights_json(rights: engine::PlayerTrumpPossibilities) -> Value {
+    json!(match rights {
+        engine::PlayerTrumpPossibilities::Own => "own",
+        engine::PlayerTrumpPossibilities::Yours => "yours",
+        engine::PlayerTrumpPossibilities::Ours => "ours",
+    })
+}
+
+fn event_json(event: &observation::SeatEvent) -> Value {
+    use observation::SeatEvent::*;
+    match event {
+        Bid { seat, value } => json!({"kind": "bid", "seat": seat, "value": value}),
+        StopBidding { seat } => json!({"kind": "stop_bidding", "seat": seat}),
+        Pass { from, to, cards } => json!({"kind": "pass", "from": from, "to": to,
+            "cards": cards.map(cards_json)}),
+        CardPlayed { seat, card } => json!({"kind": "card_played", "seat": seat, "card": card}),
+        AnnounceTrump { seat, suit } => {
+            json!({"kind": "announce_trump", "seat": seat, "suit": suit.code().to_string()})
+        }
+        AskPair { seat } => json!({"kind": "ask_pair", "seat": seat}),
+        AskHalf { seat, suit } => json!({"kind": "ask_half", "seat": seat, "suit": suit.code().to_string()}),
+        YesPair { seat, suit } => json!({"kind": "yes_pair", "seat": seat, "suit": suit.code().to_string()}),
+        NoPair { seat } => json!({"kind": "no_pair", "seat": seat}),
+        YesHalf {
+            seat,
+            suit,
+            asker_has_half,
+        } => json!({"kind": "yes_half", "seat": seat,
+            "suit": suit.code().to_string(), "asker_has_half": asker_has_half}),
+        NoHalf { seat, suit } => json!({"kind": "no_half", "seat": seat, "suit": suit.code().to_string()}),
+        Undone => json!({"kind": "undone"}),
+    }
+}
+
+fn information_json(info: &Information) -> Value {
+    let k = &info.knowledge;
+    json!({"seat": info.seat, "event_count": info.events.len(),
+        "events": info.events.iter().map(event_json).collect::<Vec<_>>(),
+        "kinds": info.kinds.map(|kind| format!("{kind:?}")),
+        "series": {"team_totals": info.series.team_totals, "games_left": info.series.games_left},
+        "knowledge": {"observer": k.me(),
+            "seats": (0..4).map(|seat| json!({"seat": seat,
+                "certain": cards_json(k.certain(seat)), "possible": cards_json(k.possible(seat)),
+                "hand_len": k.hand_len(seat), "rights": rights_json(k.rights(seat))})).collect::<Vec<_>>(),
+            "played": cards_json(k.played()), "trick": k.trick(),
+            "trump": k.trump().map(|s| s.code().to_string()),
+            "called": engine::SUITS.into_iter().filter(|&s| k.is_called(s)).map(|s| s.code().to_string()).collect::<Vec<_>>(),
+            "constraints": k.constraints().iter().map(|c| json!({"seat": c.seat,
+                "cards": cards_json(c.mask), "min": c.lo, "max": c.hi})).collect::<Vec<_>>()}})
+}
+
+fn belief_scope_json(scope: &BeliefScope) -> Value {
+    match scope {
+        BeliefScope::CurrentInformation => json!({"kind": "current_information"}),
+        BeliefScope::PreparedConditional { origin } => json!({"kind": "prepared_conditional",
+            "origin": information_json(origin),
+            "meaning": "original joint model conditioned on modeled observation; not a rebuilt live posterior"}),
+    }
+}
+
+fn actions_json(actions: &Actions) -> Value {
+    match actions {
+        Actions::Exact(kind) => json!({"operator": "exact_action_type",
+            "action_type": kind}),
+        Actions::Cards(cards) => json!({"operator": "legal_cards", "cards": cards_json(*cards)}),
+        Actions::Standing(cards) => json!({"operator": "known_team_winning_legal_cards",
+            "cards": cards_json(*cards), "limit": "does not prove this seat keeps the lead"}),
+    }
+}
+
+fn guard_json(guard: &Guard) -> Value {
+    let query = |query: &beliefs::ConceptQuery| {
+        let literal = |literal: &beliefs::Literal| {
+            use beliefs::Concept;
+            let predicate = match literal.concept {
+                Concept::Card { seat, card } => json!({"operator": "card", "seat": seat, "card": card}),
+                Concept::Void { seat, suit } => {
+                    json!({"operator": "void", "seat": seat, "suit": suit.code().to_string()})
+                }
+                Concept::Pair { seat, suit } => {
+                    json!({"operator": "pair", "seat": seat, "suit": suit.code().to_string()})
+                }
+                Concept::Count { seat, cards, min, max } => json!({"operator": "count", "seat": seat,
+                    "cards": cards_json(cards), "min": min, "max": max}),
+            };
+            json!({"predicate": predicate, "value": literal.value})
+        };
+        json!({"event": query.event.iter().map(literal).collect::<Vec<_>>(),
+            "given": query.given.iter().map(literal).collect::<Vec<_>>()})
+    };
+    match guard {
+        Guard::OwnLead => json!({"operator": "own_lead"}),
+        Guard::Leader(seat) => json!({"operator": "leader", "seat": seat}),
+        Guard::Trump(suit) => json!({"operator": "trump", "suit": suit.code().to_string()}),
+        Guard::OwnCards(cards) => json!({"operator": "own_cards", "cards": cards_json(*cards)}),
+        Guard::Known(q) => json!({"operator": "unconditional_hard_truth", "query": query(q),
+            "unknown_is_distinct": true}),
+    }
+}
+
+// Exact-equality interning is diagnostic only. It preserves shared semantic
+// suffixes/information once, without creating a second evaluator or a digest key.
+#[derive(Default)]
+struct SequenceJson<'a> {
+    information: Vec<&'a Information>,
+    programs: Vec<&'a Suffix>,
+}
+
+impl<'a> SequenceJson<'a> {
+    fn information(&mut self, info: &'a Information) -> String {
+        let index = self.information.iter().position(|old| *old == info).unwrap_or_else(|| {
+            self.information.push(info);
+            self.information.len() - 1
+        });
+        format!("sequence/information/{index}")
+    }
+
+    fn program(&mut self, suffix: &'a Suffix) -> Value {
+        let index = self.programs.iter().position(|old| *old == suffix).unwrap_or_else(|| {
+            self.programs.push(suffix);
+            self.programs.len() - 1
+        });
+        json!({"id": format!("sequence/program/{index}"),
+            "nodeId": format!("sequence/program/{index}/{}", suffix.start.0)})
+    }
+
+    fn selection(&mut self, selection: &'a Selection) -> Value {
+        match selection {
+            Selection::Stage(suffix) => json!({"kind": "stage", "program": self.program(suffix)}),
+            Selection::Offer { action, next } => json!({"kind": "offer", "action": action_json(action, false),
+                "next": self.program(next)}),
+        }
+    }
+
+    fn consumed(&mut self, read: &'a Consumed) -> Value {
+        let information = self.information(&read.information);
+        let program = self.program(&read.suffix);
+        let reading = match &read.reading {
+            ReadMeaning::Guard { predicate, truth } => json!({"kind": "guard", "predicate": guard_json(predicate),
+                "truth": truth, "branch": match truth {Some(true) => "yes", Some(false) => "no", None => "unknown"}}),
+            ReadMeaning::Binding { actions, legal_members } => {
+                json!({"kind": "binding", "actions": actions_json(actions),
+                "legal_members": legal_members.iter().map(|a| action_json(a, false)).collect::<Vec<_>>()})
+            }
+            ReadMeaning::Alternatives(stages) => json!({"kind": "alternatives",
+                "alternative_nodeIds": match read.suffix.nodes.get(read.suffix.start.0) {
+                    Some(Node::Choice(stages)) => Some(stages.iter().map(|s|
+                        format!("{}/{}", program["id"].as_str().unwrap(), s.0)).collect::<Vec<_>>()),
+                    _ => None,
+                },
+                "source_program_stages": stages.iter().map(|s| s.0).collect::<Vec<_>>(),
+                "limit": "source stage indices are not remapped suffix node IDs"}),
+            ReadMeaning::ResponseLeaf => json!({"kind": "response_leaf"}),
+        };
+        json!({"information": information, "program": program, "nodeId": program["nodeId"], "reading": reading})
+    }
+
+    fn programs_json(&self) -> Vec<Value> {
+        self.programs.iter().enumerate().map(|(i, program)| {
+            let id = |stage: usize| format!("sequence/program/{i}/{stage}");
+            let nodes: Vec<_> = program.nodes.iter().enumerate().map(|(stage, node)| {
+                let definition = match node {
+                    Node::Action { actions, next } => json!({"operator": "action_binding",
+                        "actions": actions_json(actions), "next": id(next.0)}),
+                    Node::Guard { predicate, yes, no, unknown } => json!({"operator": "guard",
+                        "predicate": guard_json(predicate), "yes": id(yes.0), "no": id(no.0), "unknown": id(unknown.0)}),
+                    Node::Choice(alternatives) => json!({"operator": "value_comparison",
+                        "alternatives": alternatives.iter().map(|s| id(s.0)).collect::<Vec<_>>()}),
+                    Node::Tail => json!({"operator": "response_leaf"}),
+                };
+                json!({"nodeId": id(stage), "definition": definition})
+            }).collect();
+            json!({"id": format!("sequence/program/{i}"), "root": id(program.start.0), "nodes": nodes,
+                "edge_semantics": "conditional control flow; value dependencies are in assessment.trace"})
+        }).collect()
+    }
+}
+
+/// Only serialize the actual trace. Terminal worlds are model hypotheses,
+/// observer projections never expose another actor's private reasoning state.
+pub fn sequence_json(trace: &SequenceTrace, value_assessment: Option<&PlanningAssessment>) -> Value {
+    let mut refs = SequenceJson::default();
+    let information = refs.information(&trace.information);
+    let program = trace.program.as_ref().map(|p| refs.program(p));
+    let scope = match &trace.scope {
+        BeliefScope::CurrentInformation => json!({"kind": "current_information"}),
+        BeliefScope::PreparedConditional { origin } => json!({"kind": "prepared_conditional",
+            "origin": refs.information(origin), "meaning": "original joint model conditioned on modeled observation"}),
+    };
+    let choices: Vec<_> = trace.choices.iter().enumerate().map(|(i, choice)| {
+        let info = refs.information(&choice.information);
+        let suffix = refs.program(&choice.semantic_suffix);
+        let alternatives: Vec<_> = choice.alternatives.iter().map(|a| refs.selection(a)).collect();
+        let consumed: Vec<_> = choice.consumed.iter().map(|r| refs.consumed(r)).collect();
+        let programs: Vec<_> = choice.membership.programs.iter().map(|p| refs.program(p)).collect();
+        let values = choice.assessment.as_ref().map(|a| values_json(a, None, false, &format!("sequence/choice/{i}/value")));
+        json!({"id": format!("sequence/choice/{i}"), "information": info, "program": suffix,
+            "context": {"params": choice.context.params.to_toml(), "seed": choice.context.seed,
+                "posterior_revision": choice.context.posterior_revision,
+                "belief_model": choice.context.provenance.belief_model, "response_model": choice.context.provenance.response_model,
+                "cohort": cohort_json(choice.context.provenance.cohort)},
+            "membership": {"legal": choice.membership.legal.iter().map(|a| action_json(a, false)).collect::<Vec<_>>(), "programs": programs},
+            "alternatives": alternatives, "selected": choice.selected,
+            "value_nodeId": values.as_ref().map(|v| v["nodeId"].clone()), "assessment": values,
+            "consumed": consumed, "support": choice.support.iter().map(|(origin, weight)| json!({"origin": origin, "weight": weight})).collect::<Vec<_>>(),
+            "support_meaning": "unnormalized original cohort mass; not hard impossibility evidence"})
+    }).collect();
+    let terminals: Vec<_> = trace.terminals.iter().map(|terminal| {
+        let tricks: Vec<_> = terminal.tricks.iter().map(|trick| {
+            let p = &trick.successor;
+            json!({"leader": trick.leader, "winner": trick.winner, "cards": trick.cards, "points": trick.points,
+                "information": refs.information(&trick.root),
+                "successor": {"leader": p.leader, "trick": p.trick(), "trump": p.trump.map(|s| s.code().to_string()),
+                    "called_mask": p.called, "rights": p.rights.map(rights_json),
+                    "phase": match p.phase {
+                        engine::PlayPhase::Cards => json!({"kind": "cards"}),
+                        engine::PlayPhase::Start => json!({"kind": "start"}),
+                        engine::PlayPhase::Answer(question) => json!({"kind": "answer", "question": question}),
+                    },
+                    "tricks_done": p.tricks_done, "team_tricks": p.tricks,
+                    "card_points": p.card_points, "pair_points": p.pair_points}})
+        }).collect();
+        let consumed: Vec<_> = terminal.consumed.iter().map(|r| refs.consumed(r)).collect();
+        // A final recorded observer snapshot permits mechanical resource accounting;
+        // no hidden hands or replayed strategy are needed. Absence stays explicit.
+        let final_info = terminal.tricks.last().map(|t| &t.root);
+        let resources = final_info.filter(|info| info.events.starts_with(&trace.information.events)).map(|info| {
+            let delta = &info.events[trace.information.events.len()..];
+            json!({"from_information": information, "to_information": refs.information(info),
+                "played_cards": delta.iter().filter_map(|e| match e {
+                    observation::SeatEvent::CardPlayed {seat, card} => Some(json!({"seat": seat, "card": card})), _ => None,
+                }).collect::<Vec<_>>(),
+                "question_and_pair_events": delta.iter().filter(|e| matches!(e,
+                    observation::SeatEvent::AskPair {..} | observation::SeatEvent::AskHalf {..}
+                    | observation::SeatEvent::YesPair {..} | observation::SeatEvent::NoPair {..}
+                    | observation::SeatEvent::YesHalf {..} | observation::SeatEvent::NoHalf {..}
+                    | observation::SeatEvent::AnnounceTrump {..})).map(event_json).collect::<Vec<_>>(),
+                "remaining_own_cards": cards_json(info.knowledge.certain(info.seat)),
+                "rights_before": (0..4).map(|s| rights_json(trace.information.knowledge.rights(s))).collect::<Vec<_>>(),
+                "rights_after": (0..4).map(|s| rights_json(info.knowledge.rights(s))).collect::<Vec<_>>()})
+        });
+        let o = &terminal.outcome;
+        json!({"origin": terminal.origin, "weight": terminal.weight, "interrupted": terminal.interrupted,
+            "first": terminal.first.as_ref().map(|offer| json!({"action": action_json(&offer.action, false), "source_program_next_stage": offer.next.0})),
+            "outcome": {"playing_team": o.playing_team, "game_value": o.game_value,
+                "team_points": o.team_points, "team_tricks": o.team_tricks,
+                "card_points": terminal.tricks.last().map(|t| t.successor.card_points),
+                "pair_points": terminal.tricks.last().map(|t| t.successor.pair_points),
+                "engine_scores": engine::game_scores(o, engine::SCHWARZ_FACTOR_FIFTHS)},
+            "tricks": tricks, "consumed": consumed, "consumed_resources": resources,
+            "meaning": "conditionally exact engine terminal under a model hypothesis, not a live outcome"})
+    }).collect();
+    let work = &trace.work;
+    json!({"schema": "marjapussi.sequence-trace/1",
+        "mode": match trace.mode {PlanMode::Formation => "formation", PlanMode::Repair => "repair",
+            PlanMode::Prepared => "prepared", PlanMode::Retry => "retry", PlanMode::Deferred => "deferred"},
+        "information": information, "belief_scope": scope, "program": program,
+        "value_nodeId": value_assessment.map(|a| format!("value/{}", a.values.root.0)),
+        "choices": choices, "terminals": terminals,
+        "work": {"transitions": work.transitions, "represented_transitions": work.represented_transitions,
+            "comparisons": work.comparisons, "represented_comparisons": work.represented_comparisons, "response_calls": work.response_calls,
+            "response_hits": work.response_hits, "suffix_hits": work.suffix_hits,
+            "retained_bytes": work.retained_bytes, "completed_candidates": work.completed_candidates},
+        "failure": trace.failure.map(|reason| json!({"kind": match reason {
+            heuristic::sequence_concepts::SequenceError::InvalidProgram => "invalid_program",
+            heuristic::sequence_concepts::SequenceError::HistoryChanged => "history_changed",
+            heuristic::sequence_concepts::SequenceError::WrongContext => "wrong_context",
+            heuristic::sequence_concepts::SequenceError::IllegalAction => "illegal_action",
+            heuristic::sequence_concepts::SequenceError::Budget => "budget",
+            heuristic::sequence_concepts::SequenceError::InvalidCohort => "invalid_cohort",
+            heuristic::sequence_concepts::SequenceError::InvalidValue => "invalid_value",
+        }})),
+        "information_sets": refs.information.iter().enumerate().map(|(i, info)| json!({
+            "id": format!("sequence/information/{i}"), "value": information_json(info)})).collect::<Vec<_>>(),
+        "programs": refs.programs_json(),
+        "limits": "only recorded observer projections and evaluated choices; absence is not proof; no live posterior recomputation"})
+}
+
+fn captured_json(capture: &CapturedDecision, raising: bool) -> Option<Value> {
+    let mut assessment = capture.assessment.as_ref().map(|a| assessment_json(a, raising));
+    if let Some(sequence) = &capture.sequence {
+        let envelope = assessment.get_or_insert_with(|| {
+            json!({
+                "schema": "marjapussi.planning-assessment/1", "value_assessment_present": false, "extensions": {},
+            })
+        });
+        let mut serialized = sequence_json(sequence, capture.assessment.as_ref());
+        serialized["identity"] = json!({"seat": capture.seat, "event_count": capture.event_count,
+            "action": action_json(&capture.action, raising)});
+        envelope["extensions"]["sequence"] = serialized;
+    }
+    assessment
 }
 
 fn hp1(name: &str, params: Params, recorder: Option<AssessmentRecorder>) -> Policy {
@@ -417,7 +731,10 @@ fn game(
                 && a.context.events.as_slice() == view.events
                 && a.context.kinds == view.kinds
                 && a.context.series == view.series
-        });
+        }) && captured
+            .as_ref()
+            .and_then(|c| c.sequence.as_ref())
+            .is_none_or(|s| s.information.matches(&view));
         let selected_matches = captured
             .as_ref()
             .and_then(|c| c.assessment.as_ref())
@@ -425,8 +742,7 @@ fn game(
         let serialization_started = Instant::now();
         let assessment = captured
             .as_ref()
-            .and_then(|c| c.assessment.as_ref())
-            .map(|a| assessment_json(a, table.game.state.phase == GamePhase::Raising));
+            .and_then(|c| captured_json(c, table.game.state.phase == GamePhase::Raising));
         let serialization_nanos = if assessment.is_some() {
             serialization_started.elapsed().as_nanos()
         } else {
@@ -435,6 +751,7 @@ fn game(
         // Retain one serialized result per decision, not a second raw assessment copy.
         if let Some(c) = &mut captured {
             c.assessment = None;
+            c.sequence = None;
         }
         captures.push((
             event_count,
@@ -480,6 +797,8 @@ fn game(
         "capture_ms": l.nanos.saturating_sub(policy_nanos) as f64 / 1_000_000.0,
         "assessment_serialization_ms": serialization_nanos as f64 / 1_000_000.0,
         "assessment_recorded": capture.is_some(), "assessment": assessment,
+        "value_assessment_present": assessment.as_ref().is_some_and(|a| a["value_assessment_present"] == true),
+        "sequence_present": assessment.as_ref().is_some_and(|a| a["extensions"]["sequence"].is_object()),
         "assessment_matches_chosen_action": selected_matches,
         "rule": l.decision.explanation.label,
         "facts": l.decision.explanation.facts.iter().map(|f| json!({"key": f.key, "value": f.value})).collect::<Vec<_>>(),
@@ -775,6 +1094,7 @@ mod tests {
             (seat, view.events.len(), decision.action)
         );
         assert!(capture.assessment.is_none());
+        assert!(capture.sequence.is_none());
         recorder.0.borrow_mut().push_back(capture);
         assert!(
             game(&policies(), &options(0), 0, 0, 0, Some(&recorder)).is_err(),
@@ -825,6 +1145,7 @@ mod tests {
             values,
             context: heuristic::PlanningContext {
                 observer: seat,
+                belief_scope: BeliefScope::CurrentInformation,
                 knowledge: *view.knowledge,
                 events: view.events.to_vec(),
                 kinds: view.kinds,
@@ -837,6 +1158,8 @@ mod tests {
             },
         };
         let row = assessment_json(&assessment, false);
+        assert_eq!(row["value_assessment_present"], true);
+        assert_eq!(row["context"]["belief_scope"]["kind"], "current_information");
         assert_eq!(
             row["candidates"][0]["difference"],
             json!(assessment.values.candidates[0].difference)
@@ -860,5 +1183,270 @@ mod tests {
                 .iter()
                 .all(|r| ids.contains(&r.as_u64().unwrap())));
         }
+        let sequence = SequenceTrace {
+            mode: PlanMode::Formation,
+            information: Information::of(&view),
+            scope: BeliefScope::CurrentInformation,
+            program: None,
+            choices: Vec::new(),
+            terminals: Default::default(),
+            work: Default::default(),
+            failure: None,
+        };
+        let sequence = sequence_json(&sequence, Some(&assessment));
+        assert_eq!(sequence["value_nodeId"], row["nodeId"]);
+        assert!(row["trace"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["nodeId"] == sequence["value_nodeId"]));
+    }
+
+    // A bounded engine-only fixture builder for serializer tests, not a second policy evaluator.
+    fn sequence_fixture() -> (eval::Table, SequenceTrace, engine::GameAction) {
+        use heuristic::sequence_concepts::Stage;
+        use heuristic::sequence_evaluation::{Context, Membership, PreparedChoice};
+        use heuristic::value_concepts::Provenance;
+        let mut table = eval::Table::new(&eval::deal(5));
+        let bid = *table
+            .to_act()
+            .unwrap()
+            .1
+            .iter()
+            .find(|a| matches!(a.action_type, engine::ActionType::NewBid(_)))
+            .unwrap();
+        table.apply(bid);
+        for _ in 0..32 {
+            if table
+                .to_act()
+                .unwrap()
+                .1
+                .iter()
+                .any(|a| matches!(a.action_type, engine::ActionType::CardPlayed(_)))
+            {
+                break;
+            }
+            let action = table.to_act().unwrap().1[0];
+            table.apply(action);
+        }
+        let (seat, legal) = table.to_act().unwrap();
+        let action = *legal
+            .iter()
+            .find(|a| matches!(a.action_type, engine::ActionType::CardPlayed(_)))
+            .unwrap();
+        let information = Information::of(&table.view(seat));
+        let guard = Guard::Known(beliefs::ConceptQuery::new(beliefs::Concept::Pair {
+            seat: engine::partner(seat),
+            suit: engine::Suit::Bells,
+        }));
+        let program = Suffix {
+            start: Stage(2),
+            nodes: vec![
+                Node::Tail,
+                Node::Action {
+                    actions: Actions::Exact(action.action_type),
+                    next: Stage(0),
+                },
+                Node::Guard {
+                    predicate: guard.clone(),
+                    yes: Stage(1),
+                    no: Stage(0),
+                    unknown: Stage(0),
+                },
+            ],
+        };
+        let choice = PreparedChoice {
+            information: information.clone(),
+            semantic_suffix: program.clone(),
+            context: Context {
+                params: Params::default(),
+                seed: 0,
+                posterior_revision: 7,
+                provenance: Provenance {
+                    belief_model: "serializer-fixture",
+                    response_model: "fixture-only",
+                    cohort: CohortMethod::Enumerated,
+                },
+            },
+            membership: Membership {
+                legal: legal.to_vec(),
+                programs: vec![program.clone(), program.clone()],
+            },
+            alternatives: vec![Selection::Offer {
+                action,
+                next: Suffix {
+                    start: Stage(0),
+                    nodes: vec![Node::Tail],
+                },
+            }],
+            selected: 0,
+            assessment: None,
+            // Explicit stored unknown tests serialization, not this fixture's inferred probability.
+            consumed: vec![Consumed {
+                information: information.clone(),
+                suffix: program.clone(),
+                reading: ReadMeaning::Guard {
+                    predicate: guard,
+                    truth: None,
+                },
+            }],
+            support: vec![(0, 0.123456789012345)],
+        };
+        let trace = SequenceTrace {
+            mode: PlanMode::Prepared,
+            scope: BeliefScope::PreparedConditional {
+                origin: information.clone(),
+            },
+            information,
+            program: Some(program),
+            choices: vec![choice],
+            terminals: Default::default(),
+            work: Default::default(),
+            failure: None,
+        };
+        (table, trace, action)
+    }
+
+    #[test]
+    fn sequence_without_values_retains_unknown_guard_shared_nodes_scope_and_hidden_pass_privacy() {
+        let (_, trace, action) = sequence_fixture();
+        let captured = CapturedDecision {
+            seat: trace.information.seat,
+            event_count: trace.information.events.len(),
+            action,
+            policy_nanos: 17,
+            assessment: None,
+            sequence: Some(trace),
+        };
+        let envelope = captured_json(&captured, false).unwrap();
+        assert_eq!(envelope["value_assessment_present"], false);
+        assert!(envelope.get("candidates").is_none());
+        let sequence = &envelope["extensions"]["sequence"];
+        assert_eq!(sequence["mode"], "prepared");
+        assert!(sequence["value_nodeId"].is_null());
+        assert_eq!(sequence["belief_scope"]["kind"], "prepared_conditional");
+        assert_eq!(sequence["information_sets"].as_array().unwrap().len(), 1);
+        assert_eq!(sequence["programs"].as_array().unwrap().len(), 2);
+        let choice = &sequence["choices"][0];
+        assert_eq!(choice["membership"]["programs"][0], choice["membership"]["programs"][1]);
+        assert_eq!(choice["support"][0]["weight"], json!(0.123456789012345));
+        assert!(choice["consumed"][0]["reading"]["truth"].is_null());
+        assert_eq!(choice["consumed"][0]["reading"]["branch"], "unknown");
+        assert_eq!(choice["consumed"][0]["nodeId"], sequence["program"]["nodeId"]);
+        let nodes = sequence["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|p| p["nodes"].as_array().unwrap())
+            .collect::<Vec<_>>();
+        let ids = nodes
+            .iter()
+            .map(|n| n["nodeId"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(ids.len(), nodes.len());
+        for n in nodes {
+            let definition = &n["definition"];
+            for edge in ["next", "yes", "no", "unknown"] {
+                if let Some(target) = definition[edge].as_str() {
+                    assert!(ids.contains(target));
+                }
+            }
+        }
+        let hidden = event_json(&observation::SeatEvent::Pass {
+            from: 1,
+            to: 3,
+            cards: None,
+        });
+        assert!(hidden["cards"].is_null());
+        assert_eq!(
+            captured.policy_nanos, 17,
+            "serialization does not rewrite the inner act measurement"
+        );
+    }
+
+    #[test]
+    fn terminal_serialization_keeps_engine_tricks_points_resources_and_work_without_replanning() {
+        use heuristic::sequence_evaluation::{Terminal, TrickOutcome};
+        let (mut table, mut trace, action) = sequence_fixture();
+        let seat = trace.information.seat;
+        let mut tricks = Vec::new();
+        for step in 0..96 {
+            if table.game.ended() {
+                break;
+            }
+            let (_, legal) = table.to_act().unwrap();
+            let chosen = if step == 0 {
+                action
+            } else {
+                *legal
+                    .iter()
+                    .find(|a| matches!(a.action_type, engine::ActionType::CardPlayed(_)))
+                    .unwrap_or(&legal[0])
+            };
+            assert!(legal.contains(&chosen));
+            let before = table.game.state.all_tricks.len();
+            table.apply(chosen);
+            if table.game.state.all_tricks.len() > before {
+                let trick = table.game.state.all_tricks.last().unwrap();
+                let (actor, phase) = table
+                    .to_act()
+                    .map(|(actor, legal)| (actor, engine::PlayPhase::from_actions(legal)))
+                    .unwrap_or((seat, engine::PlayPhase::Cards));
+                tricks.push(TrickOutcome {
+                    leader: trick.leader.0,
+                    winner: trick.winner.0,
+                    cards: trick.cards.map(|c| c.index()),
+                    points: trick.points.0,
+                    successor: table.view(seat).knowledge.public_state(actor, phase),
+                    root: Information::of(&table.view(seat)),
+                });
+            }
+        }
+        assert!(table.game.ended());
+        let outcome = engine::GameFinishedInfo::from(table.game.clone()).outcome();
+        trace.terminals = std::sync::Arc::new(vec![Terminal {
+            origin: 0,
+            weight: 1.0,
+            outcome,
+            tricks,
+            consumed: Vec::new(),
+            interrupted: false,
+            first: None,
+        }]);
+        trace.work.transitions = 36;
+        trace.work.represented_transitions = 72;
+        trace.work.suffix_hits = 1;
+        let row = sequence_json(&trace, None);
+        let terminal = &row["terminals"][0];
+        assert_eq!(
+            terminal["outcome"]["engine_scores"],
+            json!(engine::game_scores(&outcome, engine::SCHWARZ_FACTOR_FIFTHS))
+        );
+        assert_eq!(terminal["tricks"].as_array().unwrap().len(), 9);
+        assert_eq!(
+            terminal["consumed_resources"]["played_cards"].as_array().unwrap().len(),
+            36
+        );
+        assert_eq!(terminal["consumed_resources"]["remaining_own_cards"], json!([]));
+        for (recorded, actual) in terminal["tricks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(&trace.terminals[0].tricks)
+        {
+            assert_eq!(recorded["winner"], actual.winner);
+            assert_eq!(recorded["points"], actual.points);
+            assert_eq!(
+                recorded["successor"]["card_points"],
+                json!(actual.successor.card_points)
+            );
+            assert_eq!(
+                recorded["successor"]["pair_points"],
+                json!(actual.successor.pair_points)
+            );
+        }
+        assert_eq!(row["work"]["transitions"], 36);
+        assert_eq!(row["work"]["represented_transitions"], 72);
+        assert_eq!(row["work"]["suffix_hits"], 1);
     }
 }

@@ -6,12 +6,14 @@ use beliefs::{ConceptBudget, ConceptQuery};
 
 use crate::Ctx;
 
+pub mod sequence;
 pub mod value;
 
 pub(crate) struct Reads {
     remaining: usize,
     results: Vec<(ConceptQuery, Option<f32>)>,
     pub assessment: Option<crate::planning::PlanningAssessment>,
+    pub sequence: Option<crate::planning::retained::SequenceTrace>,
 }
 
 impl Default for Reads {
@@ -20,6 +22,7 @@ impl Default for Reads {
             remaining: 2048,
             results: vec![],
             assessment: None,
+            sequence: None,
         }
     }
 }
@@ -77,11 +80,15 @@ mod tests {
             params: &params,
             solver: &RefCell::new(None),
             seed: 1,
+            deadline: None,
+            raw_events: mind.events(),
             routes: RefCell::new(None),
+            intent: &RefCell::new(None),
             concepts: RefCell::new(Reads {
                 remaining: 700,
                 results: vec![],
                 assessment: None,
+                sequence: None,
             }),
             series: crate::SeriesScore::default(),
         };

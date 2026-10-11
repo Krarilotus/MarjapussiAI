@@ -28,7 +28,10 @@ fn access(mind: &Mind, suit: Suit, own: f32, partner: f32) -> f32 {
         params: &params,
         solver: &solver,
         seed: 7,
+        deadline: None,
+        raw_events: mind.events(),
         routes: RefCell::new(None),
+        intent: &RefCell::new(None),
         concepts: RefCell::new(crate::concepts::Reads::default()),
         series: crate::SeriesScore::default(),
     };
