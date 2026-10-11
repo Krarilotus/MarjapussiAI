@@ -118,6 +118,10 @@ impl Forecast {
             },
             memo_bytes: ctx.params.plan_memo_mib as usize * 1024 * 1024,
             deadline: Some(self.deadline),
+            // Comparisons are completed value reductions, not a bound on the
+            // preceding expansion work. The finite authored graph is bounded
+            // by represented transitions and the caller's wall allowance.
+            comparisons: usize::MAX,
             ..Limits::default()
         };
         let mut players = self.players.borrow_mut();
