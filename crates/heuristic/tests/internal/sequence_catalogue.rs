@@ -130,6 +130,9 @@ fn available(program: &Program, stage: Stage, table: &Table) -> Vec<Bound> {
             }
             Frontier::Tail | Frontier::Interrupted => {}
             Frontier::Reconsider { .. } => panic!("routine route must not require global reconsideration"),
+            Frontier::Response { .. } | Frontier::Deferred => {
+                panic!("preplay operators are outside this routine witness")
+            }
         }
     }
     let mut result = Vec::new();

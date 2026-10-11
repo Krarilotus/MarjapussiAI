@@ -31,6 +31,8 @@ pub enum Actions {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Guard {
+    /// The observer has an actual legal play action; no hidden game phase read.
+    PlayReady,
     OwnLead,
     Leader(u8),
     Trump(Suit),
@@ -52,6 +54,11 @@ pub enum Node {
         unknown: Stage,
     },
     Choice(Vec<Stage>),
+    /// One actor-local modeled response, then this explicit continuation. The
+    /// evaluator freezes one response for the entire current information group.
+    Response {
+        next: Stage,
+    },
     /// Bind a complete current-information catalogue plus the retained edge.
     /// The evaluator ranks that bound Choice on the whole information group.
     Reconsider {
@@ -60,6 +67,8 @@ pub enum Node {
     },
     /// Named response approximation continues to a real terminal outcome.
     Tail,
+    /// An authored bound expired. Evaluation must defer, never enter Tail.
+    Deferred,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,6 +117,8 @@ impl Program {
                             kind,
                             ActionType::CardPlayed(_)
                                 | ActionType::NewBid(_)
+                                | ActionType::Pass(_)
+                                | ActionType::StopBidding
                                 | ActionType::Question(_)
                                 | ActionType::AnnounceTrump(_)
                                 | ActionType::Answer(_)
@@ -150,7 +161,8 @@ impl Program {
                     }
                     visit(program, *retained, marks)?;
                 }
-                Node::Tail => {}
+                Node::Response { next } => visit(program, *next, marks)?,
+                Node::Tail | Node::Deferred => {}
             }
             marks[stage.0] = 2;
             Ok(())
@@ -209,7 +221,11 @@ impl Program {
                     remaining: *remaining,
                     retained: copy(program, *retained, remap, nodes)?,
                 },
+                Node::Response { next } => Node::Response {
+                    next: copy(program, *next, remap, nodes)?,
+                },
                 Node::Tail => Node::Tail,
+                Node::Deferred => Node::Deferred,
             };
             let mapped = match nodes.iter().position(|old| *old == node) {
                 Some(index) => Stage(index),
@@ -278,7 +294,11 @@ impl Composition {
                 let mut next = self.import(program, *next, remap, depth)?;
                 // A bid enters its authored opening continuation. It does not
                 // spend a discretionary play reconsideration to bind that goal.
-                let play_action = !matches!(actions, Actions::Raises | Actions::Exact(ActionType::NewBid(_)));
+                let play_action = !matches!(
+                    actions,
+                    Actions::Raises
+                        | Actions::Exact(ActionType::NewBid(_) | ActionType::Pass(_) | ActionType::StopBidding)
+                );
                 if let Some(remaining) = depth.filter(|remaining| *remaining > 0 && play_action) {
                     if !matches!(self.nodes[next.0], Node::Reconsider { remaining: n, .. } if n == remaining) {
                         next = self.intern(Node::Reconsider {
@@ -319,7 +339,11 @@ impl Composition {
                 }
                 Node::Reconsider { remaining, retained }
             }
+            Node::Response { next } => Node::Response {
+                next: self.import(program, *next, remap, depth)?,
+            },
             Node::Tail => Node::Tail,
+            Node::Deferred => Node::Deferred,
         };
         let mapped = self.intern(node)?;
         remap[stage.0] = Some(mapped);
@@ -327,8 +351,9 @@ impl Composition {
     }
 }
 
-/// Install a finite opportunity to reconsider after authored play actions. Bids
-/// enter their explicit opening without spending the play opportunity. On
+/// Install a finite opportunity to reconsider after authored play actions.
+/// Preplay actions/responses enter their explicit continuation without spending
+/// the play opportunity. On
 /// expansion the remaining count is reduced on ALL successor alternatives,
 /// including the retained suffix, so no path can replenish its semantic depth.
 /// Zero denotes the underlying authored routes with no global reconsideration.
@@ -478,12 +503,16 @@ pub struct Offer {
 pub enum Frontier {
     Actions(Vec<Offer>),
     Choice(Vec<Stage>),
+    Response {
+        next: Stage,
+    },
     Reconsider {
         stage: Stage,
         remaining: u8,
         retained: Stage,
     },
     Tail,
+    Deferred,
     /// An unavailable action is a failed route, not a discarded hidden world.
     Interrupted,
 }
@@ -517,6 +546,10 @@ pub enum ReadMeaning {
         remaining: u8,
         retained: Stage,
     },
+    Response {
+        next: Stage,
+    },
+    Deferred,
     ResponseLeaf,
 }
 
@@ -586,6 +619,16 @@ pub(crate) fn inspect_with(
                 unknown,
             } => {
                 let truth = match predicate {
+                    Guard::PlayReady => Some(legal.iter().any(|action| {
+                        action.player.0 == view.seat
+                            && matches!(
+                                action.action_type,
+                                ActionType::CardPlayed(_)
+                                    | ActionType::Question(_)
+                                    | ActionType::AnnounceTrump(_)
+                                    | ActionType::Answer(_)
+                            )
+                    })),
                     Guard::OwnLead => {
                         let public = view.knowledge.public_state(view.seat, PlayPhase::from_actions(legal));
                         Some(public.trick_len == 0 && public.leader == view.seat)
@@ -648,6 +691,25 @@ pub(crate) fn inspect_with(
                     remaining: *remaining,
                     retained: *retained,
                 }
+            }
+            Node::Response { next } => {
+                if next.0 >= program.nodes.len() {
+                    return Err(SequenceError::InvalidProgram);
+                }
+                consumed.push(Read {
+                    stage,
+                    event_count: view.events.len(),
+                    meaning: ReadMeaning::Response { next: *next },
+                });
+                Frontier::Response { next: *next }
+            }
+            Node::Deferred => {
+                consumed.push(Read {
+                    stage,
+                    event_count: view.events.len(),
+                    meaning: ReadMeaning::Deferred,
+                });
+                Frontier::Deferred
             }
             Node::Tail => {
                 consumed.push(Read {
@@ -774,6 +836,15 @@ impl Receipt {
         }
         if let Some(offer) = &self.pending {
             let matches = match (&offer.action.action_type, &delta[0]) {
+                (ActionType::StopBidding, SeatEvent::StopBidding { seat }) => *seat == view.seat,
+                (
+                    ActionType::Pass(cards),
+                    SeatEvent::Pass {
+                        from,
+                        to,
+                        cards: Some(accepted),
+                    },
+                ) => *from == view.seat && *to == engine::partner(view.seat) && CardSet::from_cards(cards) == *accepted,
                 (ActionType::NewBid(value), SeatEvent::Bid { seat, value: accepted }) => {
                     *seat == view.seat && value == accepted
                 }
@@ -1100,3 +1171,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../tests/internal/sequence_catalogue.rs"]
 mod catalogue_tests;
+
+#[cfg(test)]
+#[path = "../../tests/internal/sequence_preplay.rs"]
+mod preplay_tests;
