@@ -43,6 +43,9 @@ pub(crate) struct Entry {
     pub(crate) lo: i16,
     pub(crate) hi: i16,
     pub(crate) best: u8,
+    // Fits the existing entry padding on the supported 64-bit target. Zero is
+    // invalid; stale entries must neither probe nor tighten a new response.
+    epoch: u16,
 }
 
 pub(crate) const NO_MOVE: u8 = u8::MAX;
@@ -52,6 +55,7 @@ const EMPTY: Entry = Entry {
     lo: i16::MIN,
     hi: i16::MAX,
     best: NO_MOVE,
+    epoch: 0,
 };
 
 /// Fixed-size, direct-mapped, always-replace.
@@ -59,6 +63,7 @@ const EMPTY: Entry = Entry {
 pub(crate) struct TransTable {
     entries: Vec<Entry>,
     shift: u32,
+    epoch: u16,
 }
 
 impl TransTable {
@@ -66,11 +71,20 @@ impl TransTable {
         TransTable {
             entries: vec![EMPTY; 1 << bits],
             shift: 64 - bits,
+            epoch: 1,
         }
     }
 
     pub(crate) fn clear(&mut self) {
-        self.entries.fill(EMPTY);
+        // Logical emptiness preserves slots, replacement, bounds and move
+        // ordering within a response. Reusing an epoch requires erasing every
+        // old entry first, including entries not touched for a whole cycle.
+        if self.epoch == u16::MAX {
+            self.entries.fill(EMPTY);
+            self.epoch = 1;
+        } else {
+            self.epoch += 1;
+        }
     }
 
     #[inline]
@@ -81,7 +95,7 @@ impl TransTable {
     #[inline]
     pub(crate) fn probe(&self, key: &Key) -> Option<Entry> {
         let e = self.entries[self.slot(key)];
-        (e.key == *key).then_some(e)
+        (e.epoch == self.epoch && e.key == *key).then_some(e)
     }
 
     /// Stores bounds, tightening those already known for the same key.
@@ -90,7 +104,7 @@ impl TransTable {
         let (lo, hi) = (lo.max(i16::MIN as i32), hi.min(i16::MAX as i32));
         let slot = self.slot(&key);
         let e = &mut self.entries[slot];
-        if e.key == key {
+        if e.epoch == self.epoch && e.key == key {
             e.lo = e.lo.max(lo as i16);
             e.hi = e.hi.min(hi as i16);
             e.best = best;
@@ -100,7 +114,12 @@ impl TransTable {
                 lo: lo as i16,
                 hi: hi as i16,
                 best,
+                epoch: self.epoch,
             };
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/internal/tt.rs"]
+mod tests;
