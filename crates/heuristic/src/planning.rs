@@ -453,26 +453,40 @@ mod tests {
     fn repricing_reuses_completed_baseline_without_replaying_it() {
         let hands = std::array::from_fn(|s| (0..9).map(|c| engine::Card::from_index((9 * s + c) as u8)).collect());
         let mut table = Table::new(&hands);
-        while table.game.state.phase == engine::GamePhase::Bidding {
+        for kind in [
+            ActionType::NewBid(120),
+            ActionType::StopBidding,
+            ActionType::StopBidding,
+            ActionType::StopBidding,
+        ] {
             let action = *table
                 .to_act()
                 .unwrap()
                 .1
                 .iter()
-                .find(|a| a.action_type == ActionType::StopBidding)
+                .find(|a| a.action_type == kind)
                 .unwrap();
             table.apply(action);
         }
-        let actions: Vec<_> = table
-            .to_act()
-            .unwrap()
-            .1
-            .iter()
-            .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
-            .take(2)
-            .copied()
-            .collect();
-        assert_eq!(actions.len(), 2);
+        for _ in 0..2 {
+            let action = *table
+                .to_act()
+                .unwrap()
+                .1
+                .iter()
+                .find(|a| matches!(a.action_type, ActionType::Pass(_)))
+                .unwrap();
+            table.apply(action);
+        }
+        assert_eq!(table.game.state.phase, engine::GamePhase::Raising);
+        let legal = table.to_act().unwrap().1;
+        let actions = [
+            *legal
+                .iter()
+                .find(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+                .unwrap(),
+            *legal.iter().find(|a| a.action_type == ActionType::NewBid(125)).unwrap(),
+        ];
         let forecast = Forecast {
             tables: vec![(table, 1.0)],
             params: Params {
@@ -493,6 +507,8 @@ mod tests {
         assert_eq!(forecast.decisions.borrow().evaluated, evaluated);
         let expanded = forecast.compare(&actions).unwrap();
         assert_eq!(expanded.means[0].score, first.means[0].score);
+        assert_eq!(expanded.terminals[0][0].0.game_value, 120);
+        assert_eq!(expanded.terminals[1][0].0.game_value, 125);
         assert_eq!(forecast.outcomes.borrow()[0].len(), 2);
     }
 }
