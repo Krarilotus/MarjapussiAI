@@ -299,7 +299,7 @@ pub(crate) fn forced(ctx: &crate::Ctx<'_>, legal: &[GameAction]) {
 fn covers(choice: &PreparedChoice, required: &[crate::concepts::sequence::Suffix]) -> bool {
     use super::sequence::Selection;
     use crate::concepts::sequence::{Actions, Node, Program, Stage};
-    let Some(assessment) = &choice.assessment else {
+    let Some(assessment) = choice.assessment() else {
         return false;
     };
     if choice.scope != super::sequence::ChoiceScope::Global {
@@ -423,12 +423,12 @@ mod tests {
             },
             alternatives: vec![Selection::Stage(tail.clone())],
             selected: 0,
-            assessment: Some(
+            proof: Some(crate::planning::sequence::SelectionProof::Complete(
                 ValueStore::new(&[old.as_slice()], 0, provenance)
                     .unwrap()
                     .assess()
                     .unwrap(),
-            ),
+            )),
             consumed: Vec::new(),
             support: vec![(0, 1.0)],
         };
@@ -438,13 +438,13 @@ mod tests {
             "the catalogue alone does not compare the alternative"
         );
         choice.alternatives.push(Selection::Offer { action, next: tail });
-        choice.assessment = Some(
+        choice.proof = Some(crate::planning::sequence::SelectionProof::Complete(
             ValueStore::new(&[old.as_slice(), better.as_slice()], 0, provenance)
                 .unwrap()
                 .assess()
                 .unwrap(),
-        );
-        choice.selected = choice.assessment.as_ref().unwrap().selected;
+        ));
+        choice.selected = choice.assessment().unwrap().selected;
         assert!(covers(&choice, &required));
         assert_eq!(
             choice.selected, 1,
@@ -469,12 +469,12 @@ mod tests {
         .unwrap();
         choice.semantic_suffix = global;
         choice.alternatives.truncate(1);
-        choice.assessment = Some(
+        choice.proof = Some(crate::planning::sequence::SelectionProof::Complete(
             ValueStore::new(&[old.as_slice()], 0, provenance)
                 .unwrap()
                 .assess()
                 .unwrap(),
-        );
+        ));
         assert!(
             !covers(&choice, &required),
             "the retained child needs its own completed comparison"

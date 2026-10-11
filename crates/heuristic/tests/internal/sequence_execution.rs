@@ -344,7 +344,7 @@ fn group_choice_uses_one_joint_expectation_and_preserves_identical_world_weights
     let record = result.executions[0]
         .prepared
         .iter()
-        .find(|choice| choice.assessment.is_some())
+        .find(|choice| choice.proof.is_some())
         .unwrap();
     assert_eq!(record.support, [(0, 1.0 / 3.0), (1, 2.0 / 3.0)]);
     let selected = record.selected + 1;

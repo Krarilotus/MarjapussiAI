@@ -9,6 +9,9 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
+#[path = "capture/dominance.rs"]
+mod dominance;
+
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_NODES: usize = 4096;
 const MAX_DEPTH: usize = 128;
@@ -533,6 +536,7 @@ fn authorization(sequence: &Value, aliases: &HashMap<String, String>, graph: &mu
     let count = parent["candidate_count"].as_u64().ok_or("authorization parent candidate count missing")?;
     let selected = parent["selected"].as_u64().ok_or("authorization parent selection missing")?;
     if parent["scope"] != "parent" || parent["cohort_complete"] != true
+        || !parent["proof_kind"].is_null() && parent["proof_kind"] != "complete"
         || count == 0 || selected >= count
         || parent["alternatives_count"].as_u64() != Some(count)
         || parent["program_count"].as_u64() != Some(count)
@@ -557,7 +561,7 @@ fn authorization(sequence: &Value, aliases: &HashMap<String, String>, graph: &mu
         if certificate["choice"] != choice["id"] || !records.insert(index)
             || choice["context"] != parent["context"]
             || array(choice, "support")?.is_empty()
-            || !array(choice, "support")?.iter().all(|pair| support.contains(pair))
+            || !dominance::support_subsequence(array(choice, "support")?, support)?
         {
             return Err("authorization child identity, context or original support mismatch".into());
         }
@@ -565,7 +569,14 @@ fn authorization(sequence: &Value, aliases: &HashMap<String, String>, graph: &mu
         let selected = choice["selected"].as_u64().ok_or("authorized child selection missing")?;
         let values = &choice["assessment"];
         match choice["scope"].as_str() {
+            Some("local") if choice["proof_kind"] == "completion_dominance" => {
+                dominance::validate(choice)?;
+            }
             Some("parent" | "global" | "local") => {
+                if !choice["completion_dominance"].is_null()
+                    || !choice["proof_kind"].is_null() && choice["proof_kind"] != "complete" {
+                    return Err("ranked child has an unsupported proof kind".into());
+                }
                 if values["cohort_complete"] != true || values["selected"].as_u64() != Some(selected)
                     || array(values, "candidates")?.len() != alternatives.len() || selected as usize >= alternatives.len()
                 {
@@ -573,7 +584,8 @@ fn authorization(sequence: &Value, aliases: &HashMap<String, String>, graph: &mu
                 }
             }
             Some("response" | "fixed_action") => {
-                if !values.is_null() || selected != 0 || alternatives.len() != 1 {
+                if !values.is_null() || !choice["completion_dominance"].is_null()
+                    || !choice["proof_kind"].is_null() || selected != 0 || alternatives.len() != 1 {
                     return Err("authorized fixed child must be a singleton without a value assessment".into());
                 }
             }
@@ -641,7 +653,13 @@ fn sequence(sequence: &Value, graph: &mut Graph) -> Result<Option<String>, Strin
                 "definition_binding",
             ),
         ];
-        if choice["assessment"].is_object() {
+        if choice["proof_kind"] == "completion_dominance" {
+            let root = dominance::project(choice, graph)?;
+            inputs.push(edge(&root, "evaluated completion dominance", "evaluated_dependency"));
+        } else if !choice["completion_dominance"].is_null()
+            || !choice["proof_kind"].is_null() && choice["proof_kind"] != "complete" {
+            return Err("unknown or mixed prepared-choice proof".into());
+        } else if choice["assessment"].is_object() {
             let root = values(&choice["assessment"], graph)?;
             if choice["value_nodeId"] != root {
                 return Err("prepared-choice assessment reference mismatch".into());
@@ -658,6 +676,7 @@ fn sequence(sequence: &Value, graph: &mut Graph) -> Result<Option<String>, Strin
         let (name, scope) = match choice["scope"].as_str() {
             Some("parent") => ("Parent candidate comparison", "Complete original nominated parent domain; model estimate, not proof of optimality."),
             Some("global") => ("Global authored boundary", "Complete declared horizon-adjusted authored boundary domain, not all conceivable strategies or a fresh live posterior."),
+            Some("local") if choice["proof_kind"] == "completion_dominance" => ("Local completion dominance", "Completed selected continuation versus all stated legal-terminal enclosures on original joint support. Competitors have no model value/completion claim; this does not assert a new global Best or probability of optimality."),
             Some("local") => ("Local authored alternatives", "Complete local bound alternatives inside the parent-selected tree; does not assert a new global Best."),
             Some("fixed_action") => ("Fixed authored action", "Fixed step on an authorized branch; no value ranking or success probability is invented."),
             Some("response") => ("Recorded response-model step", "Singleton offer of the declared response model; not a value comparison or observed probability."),
@@ -665,7 +684,7 @@ fn sequence(sequence: &Value, graph: &mut Graph) -> Result<Option<String>, Strin
             Some(other) => return Err(format!("unsupported prepared choice scope {other}")),
         };
         let mut value = node(&id, format!("{name}: alternative {}", choice["selected"]), "decision", "Recorded PreparedChoice",
-            &json!({"scope": choice["scope"], "selected": choice["selected"], "alternatives": choice["alternatives"], "support": choice["support"]}), inputs,
+            &json!({"scope": choice["scope"], "proof_kind": choice["proof_kind"], "selected": choice["selected"], "alternatives": choice["alternatives"], "support": choice["support"]}), inputs,
             scope, "Captured scoped choice; authorization requires explicit parent provenance");
         value["bindings"] = json!({"context": choice["context"].to_string()});
         choices.push(graph.add(value)?);

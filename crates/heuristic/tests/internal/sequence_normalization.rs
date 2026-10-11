@@ -177,12 +177,8 @@ fn sibling_tail_keeps_every_value_tie_and_edge_evidence() {
             &mut response,
         )
         .unwrap();
-        let choice = shared
-            .prepared()
-            .iter()
-            .find(|choice| choice.assessment.is_some())
-            .unwrap();
-        let values = choice.assessment.as_ref().unwrap();
+        let choice = shared.prepared().iter().find(|choice| choice.proof.is_some()).unwrap();
+        let values = choice.assessment().unwrap();
         assert!(values.cohort_complete);
         assert_eq!(choice.alternatives.len(), order.len());
         assert_eq!(choice.selected, 0, "first equal alternative still wins");
@@ -215,7 +211,10 @@ fn sibling_tail_keeps_every_value_tie_and_edge_evidence() {
                 .collect();
             assert_eq!(without_choice, expected.consumed);
         }
-        assert_eq!(shared.work.accounting(), "sibling-frontier-dag-v2");
+        assert_eq!(
+            shared.work.accounting(),
+            "sibling-frontier-dag-v2+completion-dominance-local-v1"
+        );
         assert_eq!(shared.work.tail_aliases, order.len() - 1);
         assert_eq!(
             shared.work.represented_transitions * order.len(),
@@ -556,16 +555,12 @@ fn sibling_tail_completed_parent_memo_preserves_unique_work_and_selected_support
         uncached.work.represented_solver_nodes
     );
     assert_eq!(cached.work.accounting(), uncached.work.accounting());
-    let selected = cached
-        .prepared()
-        .iter()
-        .find(|choice| choice.assessment.is_some())
-        .unwrap();
+    let selected = cached.prepared().iter().find(|choice| choice.proof.is_some()).unwrap();
     assert_eq!(selected.support, [(0, 0.25), (1, 0.75)]);
     assert_eq!(selected.context, context);
     assert_eq!(selected.alternatives.len(), 4);
     assert_eq!(selected.selected, 0);
-    assert!(selected.assessment.as_ref().unwrap().cohort_complete);
+    assert!(selected.assessment().unwrap().cohort_complete);
 }
 
 #[test]
@@ -633,7 +628,7 @@ fn sibling_tail_does_not_alias_engine_actions_and_preserves_prefix_owner() {
     assert_eq!(
         run.prepared()
             .iter()
-            .find(|choice| choice.assessment.is_some())
+            .find(|choice| choice.proof.is_some())
             .unwrap()
             .alternatives
             .len(),
@@ -706,7 +701,7 @@ fn sibling_tail_scope_rebuilds_weighted_values_and_context_on_every_comparison()
     assert_eq!(warm.values, fresh.values);
     assert_eq!(warm.executions, fresh.executions);
     assert_eq!(warm.receipt, fresh.receipt);
-    let choice = warm.prepared().iter().find(|choice| choice.assessment.is_some()).unwrap();
+    let choice = warm.prepared().iter().find(|choice| choice.proof.is_some()).unwrap();
     assert_eq!(choice.support, [(0, 0.6), (1, 0.4)]);
     assert_eq!(choice.context, context);
     assert_eq!(warm.work.represented_transitions, fresh.work.represented_transitions);
@@ -782,12 +777,10 @@ fn response_entry_only_pressure_preserves_dependencies_and_exact_ledger() {
         let next = fresh(shift);
         let (actor, legal) = next.to_act().unwrap();
         let eligible = crate::legal_actions::eligible(legal);
-        assert!(
-            !session
-                .responses
-                .iter()
-                .any(|(key, _)| { key.information.matches(&next.view(actor)) && key.legal == eligible })
-        );
+        assert!(!session
+            .responses
+            .iter()
+            .any(|(key, _)| { key.information.matches(&next.view(actor)) && key.legal == eligible }));
         let resident = (
             session.memo.len(),
             session.tails.len(),

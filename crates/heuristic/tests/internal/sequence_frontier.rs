@@ -323,6 +323,11 @@ fn sibling_frontier_preserves_accepted_first_prefix_and_later_local_authorizatio
 fn sibling_frontier_values_order_and_evidence_match_separate_alternatives() {
     let (root, cohort) = cohort();
     let context = context();
+    // These early-game bounds cannot separate the alternatives: one failed
+    // proof attempt precedes the ordinary inner comparison.
+    let inner_dependency = 1 + 1;
+    let parent_dependency = inner_dependency + 1;
+    let final_assessment = 1;
     for actions in [false, true] {
         for order in [[6, 7, 8], [7, 8, 6], [8, 6, 7]] {
             let program = program(&cohort[0].0, root, actions, &order);
@@ -358,7 +363,7 @@ fn sibling_frontier_values_order_and_evidence_match_separate_alternatives() {
             assert_eq!(outer.scope, ChoiceScope::Local);
             assert_eq!(outer.selected, 0, "preserve first-tie order");
             assert_eq!(outer.support, [(0, 0.25), (1, 0.75)]);
-            let values = outer.assessment.as_ref().unwrap();
+            let values = outer.assessment().unwrap();
             for (actual, expected) in values.candidates.iter().zip(&reference.values.candidates) {
                 assert_eq!(actual.difference, expected.difference);
                 assert_eq!(actual.our_score, expected.our_score);
@@ -371,7 +376,10 @@ fn sibling_frontier_values_order_and_evidence_match_separate_alternatives() {
             }
             assert_eq!(execution.terminals, expected);
             assert_eq!(shared.work.frontier_aliases, 2);
-            assert_eq!(shared.work.accounting(), "sibling-frontier-dag-v2");
+            assert_eq!(
+                shared.work.accounting(),
+                "sibling-frontier-dag-v2+completion-dominance-local-v1"
+            );
             assert_eq!(
                 shared.work.represented_transitions * 3,
                 reference.work.represented_transitions
@@ -380,7 +388,20 @@ fn sibling_frontier_values_order_and_evidence_match_separate_alternatives() {
                 shared.work.frontier_alias_transitions,
                 shared.work.represented_transitions * 2
             );
-            assert_eq!(shared.work.frontier_alias_comparisons, 2);
+            for child in &reference.executions {
+                assert_eq!(child.prepared[0].assessment().unwrap().candidates.len(), 2);
+            }
+            assert_eq!(
+                reference.work.comparisons,
+                order.len() * inner_dependency + final_assessment
+            );
+            assert_eq!(shared.work.comparisons, parent_dependency + final_assessment);
+            assert_eq!(reference.work.represented_comparisons, reference.work.comparisons);
+            assert_eq!(shared.work.represented_comparisons, shared.work.comparisons);
+            assert_eq!(
+                shared.work.frontier_alias_comparisons,
+                (order.len() - 1) * inner_dependency
+            );
         }
     }
 }
@@ -441,7 +462,7 @@ fn sibling_frontier_projection_rebuilds_each_entry_and_action_owner_only() {
                 0 => broken[0][0].scope = ChoiceScope::Global,
                 1 => broken[0][0].support[0].1 += 0.1,
                 2 => broken[0][0].consumed.clear(),
-                3 => broken[0][0].assessment.as_mut().unwrap().cohort_complete = false,
+                3 => broken[0][0].assessment_mut().unwrap().cohort_complete = false,
                 _ => broken[0][0].context.posterior_revision += 1,
             }
             let before = session.work;
@@ -464,6 +485,9 @@ fn sibling_frontier_projection_rebuilds_each_entry_and_action_owner_only() {
 fn sibling_frontier_cache_off_cold_warm_and_completed_parent_have_same_allowance() {
     let (root, cohort) = cohort();
     let context = context();
+    // Failed bound attempt, full inner comparison, full parent comparison.
+    let parent_dependency = 1 + 1 + 1;
+    let final_assessment = 1;
     for actions in [false, true] {
         let program = program(&cohort[0].0, root, actions, &[7, 8, 6]);
         let mut cosmetic = program.clone();
@@ -480,6 +504,11 @@ fn sibling_frontier_cache_off_cold_warm_and_completed_parent_have_same_allowance
         )
         .unwrap();
         let mut exact = limits(true);
+        assert_eq!(
+            fresh.work.comparisons,
+            candidates.len() * parent_dependency + final_assessment
+        );
+        assert_eq!(fresh.work.represented_comparisons, fresh.work.comparisons);
         exact.transitions = fresh.work.represented_transitions;
         exact.comparisons = fresh.work.represented_comparisons;
         exact.solver_nodes = Some(fresh.work.represented_solver_nodes);
@@ -509,7 +538,11 @@ fn sibling_frontier_cache_off_cold_warm_and_completed_parent_have_same_allowance
             assert!(cached.work.suffix_hits > 0);
             // Leaf hits cannot skip value-store comparisons or alias creation.
             // These two deltas specifically require the completed parent hit.
-            assert_eq!(fresh.work.comparisons - cached.work.comparisons, 2);
+            assert_eq!(cached.work.comparisons, parent_dependency + final_assessment);
+            assert_eq!(
+                fresh.work.comparisons - cached.work.comparisons,
+                (candidates.len() - 1) * parent_dependency
+            );
             assert_eq!(fresh.work.frontier_aliases, 4);
             assert_eq!(cached.work.frontier_aliases, 2);
             let mut too_small = exact;

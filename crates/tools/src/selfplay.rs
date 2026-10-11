@@ -1,6 +1,7 @@
 //! Four fixed policy slots, whole-deal worker shards, and one complete NDJSON game at a time.
 
 pub mod recording;
+mod dominance;
 
 use std::{
     cell::RefCell,
@@ -20,7 +21,7 @@ use eval::{
     RandomAgent, Rng,
 };
 use heuristic::sequence_concepts::{Actions, Guard, Information, Node, ReadMeaning, Suffix};
-use heuristic::sequence_evaluation::{ChoiceScope, Consumed, Selection};
+use heuristic::sequence_evaluation::{ChoiceScope, Consumed, Selection, SelectionProof};
 use heuristic::value_concepts::{Assessment, CohortMethod, NodeValue};
 use heuristic::{BeliefScope, HeuristicAgent, Params, PlanMode, PlanningAssessment, SequenceTrace};
 use serde_json::{json, Value};
@@ -43,6 +44,7 @@ pub const SEQUENCE_WORK_ACCOUNTING_MEANING: &str = "sibling-tail-dag-v1 shares o
 pub fn sequence_work_accounting_meaning(model: Option<&str>) -> &'static str {
     match model {
         Some("sibling-tail-dag-v1") => SEQUENCE_WORK_ACCOUNTING_MEANING,
+        Some("sibling-frontier-dag-v2+completion-dominance-local-v1") => "sibling-frontier-dag-v2 plus Local completion dominance: the completed incumbent keeps its actual and canonical effort; each attempted enclosure/comparison is charged, including failed separation. Memo hits charge the stored proof work. Unexecuted competitors retain their original indices and bounds only; no completed expansion, solver debt or probability is invented. Existing Tail/frontier sharing applies only when its evidence projection validates. This is proof-algorithm accounting, not exhaustive-work parity or total CPU work.",
         Some("sibling-frontier-dag-v2") => "sibling-frontier-dag-v2 includes Tail V1 and shares equal Choice or multi-offer Actions frontiers only within one unchanged joint cohort's sibling comparison, after pure guard inspection and before any engine action. Singleton Actions stay on the ordinary path. Exact ordered domains, original alternatives, weights, first-action ownership and per-edge authorization/consumed evidence are preserved; failed projection checks use ordinary evaluation. Unique dependency effort is charged once with optional caches off/cold/warm; memo hits still charge represented dependency effort. Saturating frontier diagnostics count aliases actually projected and their avoided expansion; parent memo hits may skip constructing them. They are not total CPU savings. This is versioned bounded-work accounting, not general DAG/CPU accounting, probability or concept quality.",
         None => "Accounting model was not recorded; no current model or logical charging semantics are inferred.",
         Some(_) => "Unrecognized recorded accounting model; its logical charging semantics are not interpreted by this exporter.",
@@ -165,26 +167,28 @@ fn cohort_json(method: CohortMethod) -> Value {
     }
 }
 
+fn node_value_json(value: &NodeValue) -> Value {
+    match value {
+        NodeValue::Assessment => json!({"kind": "assessment"}),
+        NodeValue::Number(x) => json!({"number": x}),
+        NodeValue::Weights(x) => json!({"weights": x}),
+        NodeValue::ConditionalScores(x) => json!({"conditional_engine_scores": x}),
+        NodeValue::ConditionalOutcomes(x) => json!({"conditional_outcomes": x.iter().map(|o| json!({
+            "playing_team": o.playing_team, "game_value": o.game_value,
+            "team_points": o.team_points, "team_tricks": o.team_tricks,
+        })).collect::<Vec<_>>()}),
+        NodeValue::BranchValues(x) => json!({"branch_values": x}),
+        NodeValue::Ranking { selected, alternative } => json!({"selected": selected, "alternative": alternative}),
+    }
+}
+
 fn values_json(v: &Assessment, actions: Option<&[engine::GameAction]>, raising: bool, namespace: &str) -> Value {
     let cohort = cohort_json(v.provenance.cohort);
     let trace: Vec<_> = v
         .trace
         .iter()
         .map(|n| {
-            let value = match &n.value {
-                NodeValue::Assessment => json!({"kind": "assessment"}),
-                NodeValue::Number(x) => json!({"number": x}),
-                NodeValue::Weights(x) => json!({"weights": x}),
-                NodeValue::ConditionalScores(x) => json!({"conditional_engine_scores": x}),
-                NodeValue::ConditionalOutcomes(x) => json!({"conditional_outcomes": x.iter().map(|o| json!({
-                "playing_team": o.playing_team, "game_value": o.game_value,
-                "team_points": o.team_points, "team_tricks": o.team_tricks,
-            })).collect::<Vec<_>>()}),
-                NodeValue::BranchValues(x) => json!({"branch_values": x}),
-                NodeValue::Ranking { selected, alternative } => {
-                    json!({"selected": selected, "alternative": alternative})
-                }
-            };
+            let value = node_value_json(&n.value);
             json!({"ref": n.reference.0, "nodeId": format!("{namespace}/{}", n.reference.0),
             "name": n.name, "meaning": format!("{:?}", n.meaning),
             "operator": format!("{:?}", n.operator),
@@ -441,7 +445,7 @@ fn sequence_authorization_error(trace: &SequenceTrace) -> Option<&'static str> {
         return Some("deferred trace cannot authorize a selected child");
     }
     let parent = &authorization.parent;
-    let Some(values) = &parent.assessment else { return Some("parent assessment is missing") };
+    let Some(values) = parent.assessment() else { return Some("parent assessment is missing") };
     if parent.scope != ChoiceScope::Parent || !values.cohort_complete || parent.support.is_empty()
         || values.candidates.len() != parent.alternatives.len()
         || values.candidates.len() != parent.membership.programs.len()
@@ -458,13 +462,18 @@ fn sequence_authorization_error(trace: &SequenceTrace) -> Option<&'static str> {
     for choice in &trace.choices {
         if choice.context != parent.context || choice.information.seat != parent.information.seat
             || choice.selected >= choice.alternatives.len() || choice.support.is_empty()
-            || choice.support.iter().any(|pair| !parent.support.contains(pair))
+            || !dominance::support_subsequence(&choice.support, &parent.support)
         {
             return Some("authorized child context, selection or original support mismatch");
         }
         match choice.scope {
+            ChoiceScope::Local if matches!(&choice.proof, Some(SelectionProof::CompletionDominance(_))) => {
+                if dominance::consistency_error(choice).is_some() {
+                    return Some("local completion dominance scope or evidence mismatch");
+                }
+            }
             ChoiceScope::Parent | ChoiceScope::Global | ChoiceScope::Local => {
-                let Some(values) = &choice.assessment else { return Some("ranked child assessment is missing") };
+                let Some(values) = choice.assessment() else { return Some("ranked child assessment is missing") };
                 if !values.cohort_complete || values.candidates.len() != choice.alternatives.len()
                     || values.selected != choice.selected
                 {
@@ -472,7 +481,7 @@ fn sequence_authorization_error(trace: &SequenceTrace) -> Option<&'static str> {
                 }
             }
             ChoiceScope::FixedAction | ChoiceScope::Response => {
-                if choice.assessment.is_some() || choice.alternatives.len() != 1 || choice.selected != 0 {
+                if choice.proof.is_some() || choice.alternatives.len() != 1 || choice.selected != 0 {
                     return Some("fixed child must be a singleton without a value assessment");
                 }
             }
@@ -494,11 +503,11 @@ pub fn sequence_json(trace: &SequenceTrace, value_assessment: Option<&PlanningAs
     };
     let authorization = trace.authorization.as_ref().map(|authorization| {
         let parent = &authorization.parent;
-        let values = parent.assessment.as_ref();
+        let values = parent.assessment();
         let selected = values.and_then(|v| v.candidates.get(v.selected));
         json!({"schema": "marjapussi.selection-authorization/1",
             "consistency_error": sequence_authorization_error(trace),
-            "parent": {"id": "sequence/authorization/parent", "scope": choice_scope_json(parent.scope),
+            "parent": {"id": "sequence/authorization/parent", "scope": choice_scope_json(parent.scope), "proof_kind": values.map(|_| "complete"),
                 "information": refs.information(&parent.information), "program": refs.program(&parent.semantic_suffix),
                 "context": {"params": parent.context.params.to_toml(), "seed": parent.context.seed,
                     "posterior_revision": parent.context.posterior_revision,
@@ -515,7 +524,7 @@ pub fn sequence_json(trace: &SequenceTrace, value_assessment: Option<&PlanningAs
                     "opponent_score": v.opponent_score, "difference": v.difference,
                     "declaring": v.declaring, "joint_made": v.joint_made,
                     "made_given_declaring": v.made_given_declaring})),
-                "support": parent.support.iter().map(|(origin, weight)| json!({"origin": origin, "weight": weight})).collect::<Vec<_>>()},
+                "support": parent.support.iter().map(|(origin, weight)| json!({"origin": origin, "weight": weight, "weight_bits": format!("{:016x}", weight.to_bits())})).collect::<Vec<_>>()},
             "certificates": authorization.records.iter().enumerate().map(|(i, record)| json!({
                 "choice": format!("sequence/choice/{i}"), "record_index": record})).collect::<Vec<_>>(),
             "meaning": "Evaluator-owned completed parent selection authorizes only its reachable selected-tree certificates. Record indices are provenance, not probabilities.",
@@ -527,7 +536,16 @@ pub fn sequence_json(trace: &SequenceTrace, value_assessment: Option<&PlanningAs
         let alternatives: Vec<_> = choice.alternatives.iter().map(|a| refs.selection(a)).collect();
         let consumed: Vec<_> = choice.consumed.iter().map(|r| refs.consumed(r)).collect();
         let programs: Vec<_> = choice.membership.programs.iter().map(|p| refs.program(p)).collect();
-        let values = choice.assessment.as_ref().map(|a| values_json(a, None, false, &format!("sequence/choice/{i}/value")));
+        let values = choice.assessment().map(|a| values_json(a, None, false, &format!("sequence/choice/{i}/value")));
+        let dominance = match &choice.proof {
+            Some(SelectionProof::CompletionDominance(proof)) => Some(dominance::capture(proof, &mut refs, &format!("sequence/choice/{i}/dominance"))),
+            _ => None,
+        };
+        let proof_kind = match &choice.proof {
+            Some(SelectionProof::Complete(_)) => Some("complete"),
+            Some(SelectionProof::CompletionDominance(_)) => Some("completion_dominance"),
+            None => None,
+        };
         json!({"id": format!("sequence/choice/{i}"), "scope": choice_scope_json(choice.scope), "information": info, "program": suffix,
             "context": {"params": choice.context.params.to_toml(), "seed": choice.context.seed,
                 "posterior_revision": choice.context.posterior_revision,
@@ -535,8 +553,9 @@ pub fn sequence_json(trace: &SequenceTrace, value_assessment: Option<&PlanningAs
                 "cohort": cohort_json(choice.context.provenance.cohort)},
             "membership": {"legal": choice.membership.legal.iter().map(|a| action_json(a, false)).collect::<Vec<_>>(), "programs": programs},
             "alternatives": alternatives, "selected": choice.selected,
+            "proof_kind": proof_kind, "completion_dominance": dominance,
             "value_nodeId": values.as_ref().map(|v| v["nodeId"].clone()), "assessment": values,
-            "consumed": consumed, "support": choice.support.iter().map(|(origin, weight)| json!({"origin": origin, "weight": weight})).collect::<Vec<_>>(),
+            "consumed": consumed, "support": choice.support.iter().map(|(origin, weight)| json!({"origin": origin, "weight": weight, "weight_bits": format!("{:016x}", weight.to_bits())})).collect::<Vec<_>>(),
             "support_meaning": "unnormalized original cohort mass; not hard impossibility evidence"})
     }).collect();
     let terminals: Vec<_> = trace.terminals.iter().map(|terminal| {
@@ -1468,7 +1487,7 @@ mod tests {
                 },
             }],
             selected: 0,
-            assessment: None,
+            proof: None,
             // Explicit stored unknown tests serialization, not this fixture's inferred probability.
             consumed: vec![Consumed {
                 information: information.clone(),
@@ -1518,14 +1537,14 @@ mod tests {
         parent.scope = ChoiceScope::Parent;
         parent.membership.programs = vec![parent.semantic_suffix.clone()];
         parent.alternatives = vec![Selection::Stage(parent.semantic_suffix.clone())];
-        parent.assessment = Some(values.clone());
+        parent.proof = Some(SelectionProof::Complete(values.clone()));
         parent.consumed.clear();
         let mut response = local.clone();
         response.scope = ChoiceScope::Response;
         local.scope = ChoiceScope::Local;
         local.alternatives = vec![Selection::Stage(local.semantic_suffix.clone())];
-        local.assessment = Some(values);
-        response.assessment = None;
+        local.proof = Some(SelectionProof::Complete(values));
+        response.proof = None;
         trace.choices = vec![local, response];
         trace.authorization = Some(SelectionAuthorization {
             parent: std::sync::Arc::new(parent), records: vec![3, 8],
@@ -1576,14 +1595,15 @@ mod tests {
         wrong.authorization.as_mut().unwrap().records.pop();
         assert!(sequence_authorization_error(&wrong).unwrap().contains("align"));
         wrong = trace.clone();
-        std::sync::Arc::make_mut(&mut wrong.authorization.as_mut().unwrap().parent)
-            .assessment.as_mut().unwrap().cohort_complete = false;
+        let parent = std::sync::Arc::make_mut(&mut wrong.authorization.as_mut().unwrap().parent);
+        let Some(SelectionProof::Complete(values)) = &mut parent.proof else { panic!("complete fixture") };
+        values.cohort_complete = false;
         assert!(sequence_authorization_error(&wrong).unwrap().contains("incomplete"));
         wrong = trace.clone();
         wrong.choices[0].support[0].1 += 0.1;
         assert!(sequence_authorization_error(&wrong).unwrap().contains("support"));
         wrong = trace.clone();
-        wrong.choices[1].assessment = wrong.choices[0].assessment.clone();
+        wrong.choices[1].proof = wrong.choices[0].proof.clone();
         assert!(sequence_authorization_error(&wrong).unwrap().contains("singleton"));
         wrong = trace.clone();
         wrong.mode = PlanMode::Deferred;
@@ -1717,7 +1737,7 @@ mod tests {
         assert_eq!(row["work"]["actual_solver_nodes"].as_u64(), Some(3));
         assert_eq!(row["work"]["represented_solver_nodes"].as_u64(), Some(u64::MAX));
         assert_eq!(row["work"]["accounting"], trace.work.accounting());
-        assert_eq!(trace.work.accounting(), "sibling-frontier-dag-v2");
+        assert_eq!(trace.work.accounting(), "sibling-frontier-dag-v2+completion-dominance-local-v1");
         assert_eq!(row["work"]["frontier_aliases"], 0);
         trace.work.frontier_aliases = 2;
         trace.work.frontier_alias_transitions = 19;

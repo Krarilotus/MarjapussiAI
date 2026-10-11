@@ -21,10 +21,12 @@ use observation::{Seat, SeatEvent};
 mod allocations;
 mod claim;
 mod facts;
+mod outcome_envelope;
 mod sample;
 
 pub use allocations::AllocationVisit;
 pub use claim::remaining_claim;
+pub use outcome_envelope::{EnvelopeError, IntegerInterval, PublicOutcomeEnvelope, ScoreIntervals};
 pub use facts::{
     own_standing_of, standing_potential_of, Pairs, Passed, TeamPairs, BLANK_TEN_FACTOR, STOPPER_CONFIDENCE,
     STOPPER_MAX_HIGHER,

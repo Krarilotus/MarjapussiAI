@@ -49,7 +49,7 @@ pub(super) fn prepared_response(
             && choice.context == plan.context
             && choice.scope == sequence::ChoiceScope::Response
             && choice.membership.legal == membership.legal
-            && choice.assessment.is_none()
+            && choice.proof.is_none()
             && choice.alternatives.len() == 1
             && choice.selected == 0
             && !choice.support.is_empty()

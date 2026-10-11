@@ -94,7 +94,7 @@ impl FrontierEdge {
             && entry.consumed == first.consumed
             && entry.support == self.support()
             && entry.selected < entry.alternatives.len()
-            && entry.assessment.as_ref().is_some_and(|assessment| {
+            && entry.assessment().is_some_and(|assessment| {
                 assessment.cohort_complete
                     && assessment.candidates.len() == entry.alternatives.len()
                     && assessment.selected == entry.selected

@@ -5,6 +5,41 @@
 
 use engine::{GameOutcome, SCHWARZ_FACTOR_FIFTHS};
 
+pub mod bounded;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RuntimeOperator {
+    Value(Operator),
+    Bound(bounded::BoundOperator),
+}
+impl RuntimeOperator {
+    fn dependencies(&self) -> Vec<NodeId> {
+        match self {
+            Self::Value(operator) => operator.dependencies(),
+            Self::Bound(operator) => operator.dependencies(),
+        }
+    }
+    fn value(&self) -> Option<&Operator> {
+        match self {
+            Self::Value(operator) => Some(operator),
+            Self::Bound(_) => None,
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum RuntimeValue {
+    Value(NodeValue),
+    Bound(bounded::BoundValue),
+}
+impl RuntimeValue {
+    fn value(&self) -> Option<&NodeValue> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Bound(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NodeId(pub usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +150,16 @@ pub enum Operator {
     },
 }
 impl Operator {
+    fn meaning(&self) -> ResultMeaning {
+        match self {
+            Self::Constant(_) => ResultMeaning::DefinitionConstant,
+            Self::EngineScores { .. } | Self::ConditionalOutcomes { .. } | Self::BranchDifference { .. } => {
+                ResultMeaning::ConditionalExact
+            }
+            Self::Best { .. } | Self::Assessment { .. } => ResultMeaning::ModelSelection,
+            _ => ResultMeaning::ModelEstimate,
+        }
+    }
     fn dependencies(&self) -> Vec<NodeId> {
         match self {
             Self::TotalWeight { weights } => vec![weights.0],
@@ -235,8 +280,8 @@ pub struct ValueStore<'a> {
     provenance: Provenance,
     definition: Definition,
     mass: f64,
-    nodes: Vec<(&'static str, Operator)>,
-    memo: Vec<Option<NodeValue>>,
+    nodes: Vec<(&'static str, RuntimeOperator)>,
+    memo: Vec<Option<RuntimeValue>>,
     consumed: Vec<NodeId>,
     hits: usize,
     candidates: Vec<CandidateRefs>,
@@ -454,27 +499,31 @@ impl<'a> ValueStore<'a> {
 
     fn add(&mut self, name: &'static str, operator: Operator) -> NodeId {
         let reference = NodeId(self.nodes.len());
-        self.nodes.push((name, operator));
+        self.nodes.push((name, RuntimeOperator::Value(operator)));
         self.memo.push(None);
         reference
     }
 
+    fn public_value(&self, reference: NodeId) -> Option<&NodeValue> {
+        self.memo.get(reference.0)?.as_ref()?.value()
+    }
+
     fn number(&self, reference: NumberRef) -> Result<Option<f64>, ValueError> {
-        match self.memo.get(reference.0 .0).and_then(Option::as_ref) {
+        match self.public_value(reference.0) {
             Some(NodeValue::Number(value)) => Ok(*value),
             _ => Err(ValueError::InvalidReference),
         }
     }
 
     fn weights(&self, reference: WeightsRef) -> Result<&[f64], ValueError> {
-        match self.memo.get(reference.0 .0).and_then(Option::as_ref) {
+        match self.public_value(reference.0) {
             Some(NodeValue::Weights(values)) => Ok(values),
             _ => Err(ValueError::InvalidReference),
         }
     }
 
     fn outcomes(&self, reference: OutcomesRef) -> Result<&[GameOutcome], ValueError> {
-        match self.memo.get(reference.0 .0).and_then(Option::as_ref) {
+        match self.public_value(reference.0) {
             Some(NodeValue::ConditionalOutcomes(values)) => Ok(values),
             _ => Err(ValueError::InvalidReference),
         }
@@ -497,6 +546,16 @@ impl<'a> ValueStore<'a> {
             self.evaluate(dependency)?;
         }
         let result = match operator {
+            RuntimeOperator::Value(operator) => RuntimeValue::Value(self.evaluate_value(operator)?),
+            RuntimeOperator::Bound(operator) => RuntimeValue::Bound(self.evaluate_bound(operator)?),
+        };
+        self.memo[reference.0] = Some(result);
+        self.consumed.push(reference);
+        Ok(())
+    }
+
+    fn evaluate_value(&self, operator: Operator) -> Result<NodeValue, ValueError> {
+        let result = match operator {
             Operator::CohortWeights => {
                 NodeValue::Weights(self.terminals[0].iter().map(|(_, weight)| *weight).collect())
             }
@@ -517,7 +576,7 @@ impl<'a> ValueStore<'a> {
                 team,
                 mass,
             } => {
-                let Some(NodeValue::ConditionalScores(scores)) = &self.memo[scores.0 .0] else {
+                let Some(NodeValue::ConditionalScores(scores)) = self.public_value(scores.0) else {
                     return Err(ValueError::InvalidReference);
                 };
                 let mean = scores
@@ -556,7 +615,7 @@ impl<'a> ValueStore<'a> {
                 team,
                 opponent_weight,
             } => {
-                let Some(NodeValue::ConditionalScores(scores)) = &self.memo[scores.0 .0] else {
+                let Some(NodeValue::ConditionalScores(scores)) = self.public_value(scores.0) else {
                     return Err(ValueError::InvalidReference);
                 };
                 let coefficient = self.required(opponent_weight)?;
@@ -568,7 +627,7 @@ impl<'a> ValueStore<'a> {
                 )
             }
             Operator::ExpectedDifference { values, weights, mass } => {
-                let Some(NodeValue::BranchValues(values)) = &self.memo[values.0 .0] else {
+                let Some(NodeValue::BranchValues(values)) = self.public_value(values.0) else {
                     return Err(ValueError::InvalidReference);
                 };
                 // Integrate each outcome's difference before averaging. Separate
@@ -599,12 +658,14 @@ impl<'a> ValueStore<'a> {
         if matches!(&result, NodeValue::Number(Some(value)) if !value.is_finite()) {
             return Err(ValueError::NonfiniteValue);
         }
-        self.memo[reference.0] = Some(result);
-        self.consumed.push(reference);
-        Ok(())
+        Ok(result)
     }
 
     pub fn assess(&mut self) -> Result<Assessment, ValueError> {
+        // A bounded session is NOT an all-candidates-complete Assessment.
+        if self.nodes.iter().any(|(_, operator)| operator.value().is_none()) {
+            return Err(ValueError::InvalidContext);
+        }
         self.evaluate(self.assessment)?;
         let mut candidates = Vec::with_capacity(self.candidates.len());
         for refs in self.candidates.clone() {
@@ -618,7 +679,7 @@ impl<'a> ValueStore<'a> {
                 made_given_declaring: self.number(refs.made_given_declaring)?,
             });
         }
-        let Some(NodeValue::Ranking { selected, alternative }) = self.memo[self.ranking.0 .0].as_ref() else {
+        let Some(NodeValue::Ranking { selected, alternative }) = self.public_value(self.ranking.0) else {
             return Err(ValueError::InvalidReference);
         };
         Ok(Assessment {
@@ -641,17 +702,10 @@ impl<'a> ValueStore<'a> {
                 .map(|id| EvaluatedNode {
                     reference: *id,
                     name: self.nodes[id.0].0,
-                    meaning: match self.nodes[id.0].1 {
-                        Operator::Constant(_) => ResultMeaning::DefinitionConstant,
-                        Operator::EngineScores { .. }
-                        | Operator::ConditionalOutcomes { .. }
-                        | Operator::BranchDifference { .. } => ResultMeaning::ConditionalExact,
-                        Operator::Best { .. } | Operator::Assessment { .. } => ResultMeaning::ModelSelection,
-                        _ => ResultMeaning::ModelEstimate,
-                    },
-                    operator: self.nodes[id.0].1.clone(),
+                    meaning: self.nodes[id.0].1.value().expect("complete public graph").meaning(),
+                    operator: self.nodes[id.0].1.value().expect("complete public graph").clone(),
                     dependencies: self.nodes[id.0].1.dependencies(),
-                    value: self.memo[id.0].as_ref().expect("consumed nodes are evaluated").clone(),
+                    value: self.public_value(*id).expect("complete consumed value").clone(),
                 })
                 .collect(),
         })
@@ -708,7 +762,7 @@ mod tests {
             store
                 .consumed
                 .iter()
-                .filter(|id| matches!(store.nodes[id.0].1, Operator::EngineScores { .. }))
+                .filter(|id| matches!(store.nodes[id.0].1.value(), Some(Operator::EngineScores { .. })))
                 .count(),
             1
         );

@@ -64,7 +64,7 @@ impl SelectedPlan {
             alternatives: membership.programs.iter().cloned().map(Selection::Stage).collect(),
             membership,
             selected: values.selected,
-            assessment: Some(values.clone()),
+            proof: Some(SelectionProof::Complete(values.clone())),
             consumed: Vec::new(),
             support,
         };
@@ -81,24 +81,25 @@ impl SelectedPlan {
             {
                 return Err(SequenceError::WrongContext);
             }
-            match (&record.scope, &record.assessment) {
-                (ChoiceScope::Global | ChoiceScope::Local, Some(assessment))
+            match (&record.scope, &record.proof) {
+                (ChoiceScope::Global | ChoiceScope::Local, Some(SelectionProof::Complete(assessment)))
                     if assessment.cohort_complete
                         && assessment.candidates.len() == record.alternatives.len()
                         && assessment.selected == record.selected => {}
+                (ChoiceScope::Local, Some(SelectionProof::CompletionDominance(proof))) if proof.validates(record) => {}
                 (ChoiceScope::FixedAction | ChoiceScope::Response, None)
                     if record.alternatives.len() == 1 && record.selected == 0 => {}
                 _ => return Err(SequenceError::InvalidValue),
             }
-            if record.support.iter().any(|pair| !root.support.contains(pair)) {
+            if !dominance::support_subsequence(&record.support, &root.support) {
                 return Err(SequenceError::InvalidCohort);
             }
             // Fixed actions are emitted per branch by drive. Join their exact
             // equivalent certificates, retaining original ids/mass, rather than
             // allowing a first-world singleton to stand for a joint comparison.
             let matching = records.iter_mut().find(|old| {
-                old.assessment.is_none()
-                    && record.assessment.is_none()
+                old.proof.is_none()
+                    && record.proof.is_none()
                     && old.scope == record.scope
                     && old.information == record.information
                     && old.semantic_suffix == record.semantic_suffix

@@ -324,7 +324,7 @@ fn post_exchange_root_choices_keep_the_joint_hidden_cohort() {
     let choice = result
         .prepared()
         .iter()
-        .find(|choice| choice.assessment.is_some() && choice.support.len() == 2)
+        .find(|choice| choice.proof.is_some() && choice.support.len() == 2)
         .expect("one future choice for the whole indistinguishable root group");
     assert_eq!(choice.support, vec![(0, 0.4), (1, 0.6)]);
     assert!(choice
@@ -596,7 +596,7 @@ fn selected_parent_authorizes_multiple_local_steps_after_the_final_global_bounda
     let parent = compared.selection.root();
     assert_eq!(parent.scope, ChoiceScope::Parent);
     assert_eq!(parent.support, vec![(0, 0.4), (1, 0.6)]);
-    assert!(parent.assessment.as_ref().unwrap().cohort_complete);
+    assert!(parent.assessment().unwrap().cohort_complete);
     assert!(compared
         .selection
         .records()
@@ -709,7 +709,7 @@ fn selected_parent_authorizes_multiple_local_steps_after_the_final_global_bounda
     assert!(record.alternatives.len() > 1);
     record.alternatives = vec![record.alternatives[record.selected].clone()];
     record.selected = 0;
-    record.assessment = None;
+    record.proof = None;
     record.scope = ChoiceScope::FixedAction;
     assert!(sequence::prepared_lookup(
         &plan.receipt,
@@ -898,7 +898,7 @@ fn auction_and_return_reuse_the_real_depth_two_boundary_with_joint_support() {
             assert!(trace
                 .choices
                 .iter()
-                .any(|choice| choice.assessment.is_none() && choice.support == vec![(0, 0.4), (1, 0.6)]));
+                .any(|choice| choice.proof.is_none() && choice.support == vec![(0, 0.4), (1, 0.6)]));
             live.apply(decision.action);
         }
         let view = live.view(root);
@@ -922,7 +922,7 @@ fn auction_and_return_reuse_the_real_depth_two_boundary_with_joint_support() {
             .find(|choice| choice.information.matches(&view) && choice.semantic_suffix == boundary)
             .unwrap();
         assert_eq!(expected.support, vec![(0, 0.4), (1, 0.6)]);
-        let assessment = expected.assessment.as_ref().unwrap();
+        let assessment = expected.assessment().unwrap();
         assert!(assessment.cohort_complete);
         assert!(
             assessment.candidates[assessment.selected].difference > assessment.candidates[0].difference,

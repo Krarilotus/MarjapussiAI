@@ -15,6 +15,8 @@ mod frontier;
 mod normalization;
 mod reuse;
 pub use reuse::CompletedCache;
+mod dominance;
+pub use dominance::{CompletionDominance, DominanceScope, SelectionProof};
 mod selection;
 pub use selection::{SelectedPlan, SelectionAuthorization};
 #[cfg(test)]
@@ -151,7 +153,7 @@ pub struct Work {
 impl Work {
     /// Deterministic bounded-work policy, independent of optional memo capacity.
     pub const fn accounting(&self) -> &'static str {
-        "sibling-frontier-dag-v2"
+        "sibling-frontier-dag-v2+completion-dominance-local-v1"
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -235,11 +237,26 @@ pub struct PreparedChoice {
     pub membership: Membership,
     pub alternatives: Vec<Selection>,
     pub selected: usize,
-    pub assessment: Option<Assessment>,
+    pub proof: Option<SelectionProof>,
     pub consumed: Vec<Consumed>,
     /// Original cohort ids and unnormalised joint mass in this information
     /// group. Zero/omitted soft mass is not hard impossibility evidence.
     pub support: Vec<(usize, f64)>,
+}
+impl PreparedChoice {
+    pub fn assessment(&self) -> Option<&Assessment> {
+        match &self.proof {
+            Some(SelectionProof::Complete(a)) => Some(a),
+            _ => None,
+        }
+    }
+    #[cfg(test)]
+    fn assessment_mut(&mut self) -> Option<&mut Assessment> {
+        match &mut self.proof {
+            Some(SelectionProof::Complete(a)) => Some(a),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Execution {
@@ -397,7 +414,7 @@ pub fn prepared_lookup_with_boundary(
         }
         let expected_scope = if suffix == initial && boundary_membership.is_some() {
             ChoiceScope::Global
-        } else if choice.assessment.is_some() {
+        } else if choice.proof.is_some() {
             ChoiceScope::Local
         } else {
             ChoiceScope::FixedAction
@@ -405,11 +422,12 @@ pub fn prepared_lookup_with_boundary(
         if choice.scope != expected_scope {
             return Err(NeedsReview);
         }
-        match &choice.assessment {
-            Some(assessment)
+        match &choice.proof {
+            Some(SelectionProof::Complete(assessment))
                 if assessment.cohort_complete
                     && assessment.candidates.len() == bound.len()
                     && assessment.selected == choice.selected => {}
+            Some(SelectionProof::CompletionDominance(proof)) if proof.validates(choice) => {}
             None if bound.len() == 1 && choice.selected == 0 => {}
             _ => return Err(NeedsReview),
         }
@@ -547,7 +565,9 @@ fn find_stage(program: &Program, suffix: &Suffix) -> Result<Stage, SequenceError
     }
     Err(SequenceError::InvalidProgram)
 }
-impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, LeafFailure>> Session<'context, F> {
+impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, LeafFailure>>
+    Session<'context, F>
+{
     fn limited(&mut self, limit: DeferredLimit) -> SequenceError {
         self.limit = Some(limit);
         SequenceError::Budget
@@ -753,7 +773,12 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
     }
     // The index is local to one call/batch/scan: no insertion or eviction occurs
     // between lookup and use. Never keep indices in receipts or other caches.
-    fn cached_suffix(&mut self, program: &Program, stage: Stage, cached: Option<usize>) -> Result<Suffix, SequenceError> {
+    fn cached_suffix(
+        &mut self,
+        program: &Program,
+        stage: Stage,
+        cached: Option<usize>,
+    ) -> Result<Suffix, SequenceError> {
         if let Some(index) = cached {
             if let Some(suffix) = self.canonical[index].suffixes.get(stage.0).and_then(Option::as_ref) {
                 let _copy_timing = beliefs::profile::scope("sequence.suffix_copy");
@@ -1003,7 +1028,10 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
             branch.receipt.synchronize(&branch.table.view(self.root))?;
             let inspection = self.inspect(&branch)?;
             let information = Information::of(&branch.table.view(self.root));
-            let suffixes = self.suffixes(&branch.receipt.program, inspection.consumed.iter().map(|read| read.stage));
+            let suffixes = self.suffixes(
+                &branch.receipt.program,
+                inspection.consumed.iter().map(|read| read.stage),
+            );
             for (read, suffix) in inspection.consumed.iter().zip(suffixes) {
                 branch.consumed.push(Consumed {
                     information: information.clone(),
@@ -1054,7 +1082,7 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
                         membership: self.membership(&branch.table.view(self.root), legal)?,
                         alternatives: vec![self.selection(&branch.receipt.program, &Alternative::Offer(offer.clone()))?],
                         selected: 0,
-                        assessment: None,
+                        proof: None,
                         consumed: branch.consumed.clone(),
                         support: vec![(branch.origin, branch.weight)],
                     };
@@ -1444,7 +1472,7 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
                 next: next_suffix,
             }],
             selected: 0,
-            assessment: None,
+            proof: None,
             consumed: first.consumed.clone(),
             support: group
                 .iter()
@@ -1548,30 +1576,49 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
         // may occur between this group's input and a shared eligible frontier.
         let mut tail_dependency = None;
         let mut frontier_dependencies = Vec::new();
-        let support = group
+        let support: Vec<_> = group
             .iter()
             .map(|waiting| (waiting.branch.origin, waiting.branch.weight))
             .collect();
+        if let Some(snapshot) = self.dominance_input(&group, &alternatives, scope, &membership)? {
+            let children = self.choice_children(&group, 0)?;
+            let mut selected_records = Vec::new();
+            let terminals = self.finish(children, &mut selected_records)?;
+            // Failed separation retains this genuine completed result for the
+            // ordinary full comparison; no duplicate callback or weaker fallback.
+            if let Some(proof) = self.certify_local(
+                snapshot,
+                &information,
+                &semantic_suffix,
+                &membership,
+                &alternatives,
+                &support,
+                &terminals,
+            )? {
+                self.check()?;
+                prepared.push(PreparedChoice {
+                    scope,
+                    information,
+                    semantic_suffix,
+                    context: self.context.clone(),
+                    membership,
+                    alternatives,
+                    selected: 0,
+                    proof: Some(SelectionProof::CompletionDominance(proof)),
+                    consumed,
+                    support,
+                });
+                prepared.append(&mut selected_records);
+                return Ok(terminals);
+            }
+            outcomes.push(terminals);
+            records.push(selected_records);
+        }
         // Lazy depth-first demand. Equal no-action Tail or eligible typed
         // Choice/multi-Action frontiers share one dependency. Every original
-        // alternative still has complete values and retains its ordered edge.
-        for index in 0..alternatives.len() {
-            let children = {
-                let _timing = beliefs::profile::scope("sequence.child_cohort");
-                let mut children = Vec::new();
-                for waiting in &group {
-                    let mut branch = waiting.branch.clone();
-                    match &waiting.alternatives[index] {
-                        Alternative::Stage(stage) => branch.receipt.stage = *stage,
-                        Alternative::Offer(offer) => self.commit(&mut branch, offer.clone())?,
-                        Alternative::Reconsider { .. } | Alternative::Response { .. } => {
-                            return Err(SequenceError::InvalidProgram)
-                        }
-                    }
-                    children.push(branch);
-                }
-                children
-            };
+        // non-excluded alternative retains its original ordered edge.
+        for index in outcomes.len()..alternatives.len() {
+            let children = self.choice_children(&group, index)?;
             let mut child_records = Vec::new();
             let normalized = if matches!(group[0].alternatives[index], Alternative::Stage(_)) {
                 self.normalized_tail_edges(&children)?
@@ -1622,7 +1669,7 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
             membership,
             alternatives,
             selected,
-            assessment: Some(assessment),
+            proof: Some(SelectionProof::Complete(assessment)),
             consumed,
             support,
         });
@@ -1908,7 +1955,13 @@ fn prepared_bytes(p: &PreparedChoice) -> usize {
         + membership_bytes(&p.membership)
         + vec_bytes(&p.alternatives)
         + p.alternatives.iter().map(selection_bytes).sum::<usize>()
-        + p.assessment.as_ref().map(assessment_bytes).unwrap_or(0)
+        + p.proof
+            .as_ref()
+            .map(|proof| match proof {
+                SelectionProof::Complete(a) => assessment_bytes(a),
+                SelectionProof::CompletionDominance(p) => p.owned_bytes(),
+            })
+            .unwrap_or(0)
         + vec_bytes(&p.consumed)
         + p.consumed.iter().map(consumed_bytes).sum::<usize>()
         + vec_bytes(&p.support)
@@ -2046,11 +2099,7 @@ mod tests {
         assert!(warm.work.suffix_hits > 0);
         assert_eq!(warm.work.represented_transitions, cold.work.represented_transitions);
         assert_eq!(warm.work.represented_comparisons, cold.work.represented_comparisons);
-        let choice = warm.executions[0]
-            .prepared
-            .iter()
-            .find(|p| p.assessment.is_some())
-            .unwrap();
+        let choice = warm.executions[0].prepared.iter().find(|p| p.proof.is_some()).unwrap();
         assert_eq!(choice.context, current);
         assert_eq!(choice.support, [(0, 1.0 / 5.0), (1, 4.0 / 5.0)]);
         assert!(cache.retained_bytes() <= limits.memo_bytes);
@@ -2179,7 +2228,8 @@ mod tests {
                 },
             ],
         };
-        let binding = bind_reconsideration(&program, program.start, &view, &crate::legal_actions::eligible(legal)).unwrap();
+        let binding =
+            bind_reconsideration(&program, program.start, &view, &crate::legal_actions::eligible(legal)).unwrap();
         let expected = binding
             .alternatives
             .iter()
@@ -2201,7 +2251,7 @@ mod tests {
         let record = result
             .prepared()
             .iter()
-            .find(|p| p.alternatives.len() == expected.len() && p.assessment.is_some())
+            .find(|p| p.alternatives.len() == expected.len() && p.proof.is_some())
             .unwrap();
         assert_eq!(
             record.alternatives,
@@ -2330,7 +2380,7 @@ mod tests {
                 .map(|stage| Selection::Stage(binding.program.suffix(*stage).unwrap()))
                 .collect(),
             selected: result.values.selected,
-            assessment: Some(result.values.clone()),
+            proof: Some(SelectionProof::Complete(result.values.clone())),
             consumed: vec![],
             support: vec![(0, 1.0 / 3.0), (1, 2.0 / 3.0)],
         }];
@@ -2464,7 +2514,7 @@ mod tests {
             candidates[0].program.suffix(candidates[0].stage).unwrap()
         );
         assert_eq!(record.selected, 0);
-        assert!(record.assessment.is_none());
+        assert!(record.proof.is_none());
         assert!(record.membership.programs.is_empty());
         assert_eq!(record.membership.legal, crate::legal_actions::eligible(&legal));
         assert_eq!(record.support, [(0, 1.0 / 3.0), (1, 2.0 / 3.0)]);
@@ -2509,7 +2559,7 @@ mod tests {
         assert_eq!(record.context, current);
         assert_eq!(record.support, [(0, 2.0 / 5.0), (1, 3.0 / 5.0)]);
         assert_eq!(record.selected, 0);
-        assert!(record.assessment.is_none());
+        assert!(record.proof.is_none());
     }
     #[test]
     fn explicit_gate_defers_without_tail_and_incomplete_root_response_is_not_cached() {
@@ -2865,7 +2915,14 @@ mod cache_tests {
         renamed.name = "same-semantics-different-input";
         for entries in [0, 1, 8] {
             let mut leaf = no_leaf;
-            let mut session = session(&context, &mut leaf, Limits { memo_entries: entries, ..Limits::default() });
+            let mut session = session(
+                &context,
+                &mut leaf,
+                Limits {
+                    memo_entries: entries,
+                    ..Limits::default()
+                },
+            );
             for _ in 0..2 {
                 for program in [&original, &duplicated, &renamed] {
                     for stage in 0..program.nodes.len() {
@@ -2899,7 +2956,10 @@ mod cache_tests {
                 assert_eq!(delta("sequence.eviction.memo_nonempty"), 0);
             }
             assert!(session.canonical.is_empty());
-            assert_eq!(session.find_stage(&duplicated, &duplicated.suffix(Stage(3)).unwrap()), Ok(Stage(0)));
+            assert_eq!(
+                session.find_stage(&duplicated, &duplicated.suffix(Stage(3)).unwrap()),
+                Ok(Stage(0))
+            );
             assert_eq!(session.work.represented_transitions, 0);
             assert_eq!(session.work.represented_comparisons, 0);
             assert_eq!(session.work.represented_solver_nodes, 0);
@@ -2980,7 +3040,10 @@ mod cache_tests {
             session.suffixes(&program, [Stage(99)]).collect::<Result<Vec<_>, _>>(),
             Err(SequenceError::InvalidProgram)
         );
-        assert_eq!(session.find_stage(&program, &program.suffix(Stage(0)).unwrap()), Ok(Stage(0)));
+        assert_eq!(
+            session.find_stage(&program, &program.suffix(Stage(0)).unwrap()),
+            Ok(Stage(0))
+        );
     }
     #[test]
     fn membership_reuse_requires_exact_private_view_and_canonical_legal_domain() {
