@@ -272,7 +272,7 @@ fn public_voids_and_trump_cards_are_viewer_proofs_without_enumeration() {
         },
         SeatEvent::CardPlayed {
             seat: 2,
-            card: c("e-10"),
+            card: c("e-Z"),
         },
         SeatEvent::CardPlayed {
             seat: 3,
@@ -292,7 +292,7 @@ fn public_voids_and_trump_cards_are_viewer_proofs_without_enumeration() {
         },
         SeatEvent::CardPlayed {
             seat: 2,
-            card: c("g-10"),
+            card: c("g-Z"),
         },
         SeatEvent::CardPlayed {
             seat: 3,
