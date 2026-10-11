@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 
-from build import POLICIES, prepare
+from build import CACHE_LOCK, POLICIES, prepare
 from report import compact_game, write_reports
 from resources import Resources, RunLock
 
@@ -293,6 +293,8 @@ def main():
         p.error(f"unknown policies: {', '.join(sorted(unknown))}; use --list-policies")
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     a.out = (a.out or ROOT / "target/bench-results" / stamp).resolve()
+    if a.lock.resolve() == (a.cache / CACHE_LOCK).resolve():
+        raise RuntimeError("The resource lock must differ from the cache's .build.lock")
     with RunLock(a.lock):
         resources = Resources(a.cpus, a.memory_gib)
         if a.workers > len(resources.cores):

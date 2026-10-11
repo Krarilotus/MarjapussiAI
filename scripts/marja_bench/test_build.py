@@ -1,9 +1,11 @@
-"""Historical adapter isolation checks; synthetic Git archive, no Cargo or workers."""
+"""Build provenance and historical isolation; mocked Cargo, no compiler or workers."""
 
 import hashlib
 import io
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -77,6 +79,219 @@ class FrozenSolverTests(unittest.TestCase):
             return b"changed engine" if args[0] == "diff" else self.git(repo, *args)
         with patch.object(build, "git", side_effect=changed), self.assertRaisesRegex(RuntimeError, "shared engine"):
             build.snapshot(self.repo, self.cache, build.COMPATIBLE_CORE, "previous")
+
+
+class BuildLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.repo, self.cache = self.root / "repo", self.root / "cache"
+        self.repo.mkdir()
+        self.log = self.root / "build.log"
+        self.held = False
+        self.steps, self.calls = [], []
+        self.mode = "ok"
+        self.copy = shutil.copy2
+        owner = self
+
+        class Lock:
+            def __init__(self, path):
+                owner.assertEqual(path, owner.cache / build.CACHE_LOCK)
+
+            def __enter__(self):
+                owner.assertFalse(owner.held)
+                owner.held = True
+                owner.steps.append("lock")
+
+            def __exit__(self, *_):
+                owner.assertTrue(owner.held)
+                owner.steps.append("unlock")
+                owner.held = False
+
+        for target, replacement in (
+            ("RunLock", Lock), ("fingerprint", self.fingerprint),
+            ("toolchain", self.toolchain), ("git", self.git), ("snapshot", self.snapshot),
+        ):
+            patcher = patch.object(build, target, side_effect=replacement) if target != "RunLock" else patch.object(build, target, replacement)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for target, replacement in ((build.subprocess, self.cargo), (build.shutil, self.copy_locked)):
+            patcher = patch.object(target, "run" if target is build.subprocess else "copy2", side_effect=replacement)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def fingerprint(self, _):
+        self.assertTrue(self.held)
+        return "changed" if self.mode == "source_changed" and "build" in self.steps else "source"
+
+    def toolchain(self, _):
+        self.assertTrue(self.held)
+        return {"rustc": "changed" if self.mode == "config_changed" and "build" in self.steps else "fixed"}
+
+    def git(self, _, *args):
+        self.assertTrue(self.held)
+        return b"revision" if args == ("rev-parse", "HEAD") else b""
+
+    def snapshot(self, repo, cache, revision, name):
+        self.assertTrue(self.held)
+        self.steps.append("snapshot")
+        source = cache / ("policy-" + name)
+        source.mkdir(exist_ok=True)
+        (source / "source-proof.json").write_text(json.dumps({"files": {}}))
+        return source
+
+    def package(self, name, manifest, source=None):
+        return {"id": f"path+{manifest.parent.as_uri()}#{name}@0.1.0", "name": name,
+                "manifest_path": str(manifest), "source": source}
+
+    def cargo(self, command, **kwargs):
+        self.assertTrue(self.held)
+        self.calls.append((command, kwargs))
+        operation = command[1]
+        self.steps.append(operation)
+        harness = self.cache / "harness"
+        if operation == "metadata":
+            (harness / "Cargo.lock").write_text("resolved lock")
+            self.local = [self.package("marjapussi-" + name, self.repo / "crates" / name / "Cargo.toml")
+                          for name in (*build.SHARED, *build.FROZEN, "eval", "tools")]
+            self.local += [self.package("marjapussi-" + name + "-previous",
+                                       self.cache / "policy-previous/crates" / name / "Cargo.toml")
+                           for name in build.FROZEN]
+            self.local.append(self.package("marja-selfplay", harness / "Cargo.toml"))
+            registry = self.package("rand", self.root / "registry/Cargo.toml", "registry+example")
+            inactive = self.package("unused-local", self.root / "unused/Cargo.toml")
+            graph = {"packages": [*self.local, registry, inactive],
+                     "resolve": {"nodes": [{"id": p["id"]} for p in [*self.local, registry]]}}
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(graph).encode())
+        if self.mode == operation + "_failed":
+            raise subprocess.CalledProcessError(1, command)
+        if operation == "clean":
+            return subprocess.CompletedProcess(command, 0)
+        self.assertEqual(operation, "build")
+        executable = self.cache / "target/release/deps/worker-exact.exe"
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_bytes(b"compiled worker")
+        # A conventional output path is deliberately different: publish the event's artifact.
+        (self.cache / "target/release/marja-selfplay.exe").write_bytes(b"wrong conventional output")
+        events = []
+        for package in self.local:
+            worker = package["name"] == "marja-selfplay"
+            event = {"reason": "compiler-artifact", "package_id": package["id"],
+                     "manifest_path": package["manifest_path"], "fresh": False,
+                     "target": {"kind": ["bin" if worker else "lib"],
+                                "crate_types": ["bin" if worker else "lib"],
+                                "name": "marja-selfplay" if worker else package["name"],
+                                "src_path": str(harness / "src/main.rs")},
+                     "profile": {"opt_level": "3", "test": False},
+                     "executable": str(executable) if worker else None,
+                     "filenames": [str(executable)] if worker else []}
+            if package == self.local[0]:
+                if self.mode == "dependency_missing":
+                    continue
+                if self.mode == "dependency_fresh":
+                    event["fresh"] = True
+                if self.mode == "manifest_wrong":
+                    event["manifest_path"] = str(self.root / "wrong/Cargo.toml")
+            if worker:
+                if self.mode == "worker_missing":
+                    continue
+                if self.mode == "worker_wrong":
+                    event["target"]["src_path"] = str(self.root / "wrong.rs")
+                if self.mode == "worker_outside":
+                    event["executable"] = str(self.root / "outside.exe")
+                if self.mode == "worker_duplicate":
+                    events.append(event)
+            events.append(event)
+        if self.mode != "unfinished":
+            events.append({"reason": "build-finished", "success": True})
+        kwargs["stdout"].write(("cargo progress\n" + "\n".join(map(json.dumps, events))).encode())
+        if self.mode == "harness_changed":
+            (harness / "src/main.rs").write_text("changed during build")
+        return subprocess.CompletedProcess(command, 0)
+
+    def copy_locked(self, source, destination):
+        self.assertTrue(self.held)
+        self.assertFalse(list(self.cache.glob("bin/*/build.json")))
+        self.steps.append("copy")
+        if self.mode == "copy_failed" or (self.mode == "later_copy_failed" and self.steps.count("copy") == 2):
+            raise OSError("copy failed")
+        return self.copy(source, destination)
+
+    def prepare(self):
+        return build.prepare(self.repo, self.cache, ["new", "previous"], self.log)
+
+    def test_scoped_clean_build_and_exact_artifact_publication_are_locked(self):
+        binary, metadata = self.prepare()
+        self.assertEqual(binary.read_bytes(), b"compiled worker")
+        self.assertEqual(self.steps[:5], ["lock", "snapshot", "metadata", "clean", "build"])
+        self.assertEqual(self.steps[-1], "unlock")
+        provenance = metadata["build_provenance"]
+        self.assertEqual(provenance["target"], str(self.cache / "target"))
+        self.assertEqual(set(provenance["invalidated_packages"]), {p["id"] for p in self.local})
+        self.assertEqual(len(self.local), 13)  # Current nine, three frozen aliases, worker.
+        self.assertEqual(len(provenance["compiler_artifacts"]), 13)
+        clean = self.calls[1][0]
+        self.assertEqual(clean[clean.index("-p"):][::2], ["-p"] * 13)
+        self.assertEqual(set(clean[clean.index("-p"):][1::2]), {p["id"] for p in self.local})
+        for command, kwargs in self.calls:
+            self.assertEqual(kwargs["cwd"], self.repo)
+            self.assertEqual(kwargs["env"], self.calls[0][1]["env"])
+            self.assertEqual(kwargs["env"]["CARGO_TARGET_DIR"], str(self.cache / "target"))
+            self.assertEqual(command[command.index("--manifest-path") + 1], str(self.cache / "harness/Cargo.toml"))
+        stored = json.loads((binary.parent / "build.json").read_text())
+        self.assertEqual(stored, metadata)
+        self.assertEqual(provenance["build_log_sha256"], hashlib.sha256(self.log.read_bytes()).hexdigest())
+
+    def test_verified_final_hit_skips_resolution_clean_build_and_copy(self):
+        binary, first = self.prepare()
+        self.calls.clear()
+        self.steps.clear()
+        again, metadata = self.prepare()
+        self.assertEqual(again, binary)
+        self.assertEqual(metadata, first)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.steps, ["lock", "snapshot", "unlock"])
+        binary.write_bytes(b"tampered")
+        with self.assertRaisesRegex(RuntimeError, "Cached worker was modified"):
+            self.prepare()
+        self.assertEqual(self.calls, [])
+
+    def test_failures_never_publish_a_completed_build_record(self):
+        for mode in ("clean_failed", "build_failed", "dependency_fresh", "dependency_missing",
+                     "manifest_wrong", "worker_missing", "worker_wrong", "worker_outside",
+                     "worker_duplicate", "unfinished", "source_changed", "config_changed",
+                     "harness_changed", "copy_failed", "later_copy_failed"):
+            with self.subTest(mode=mode):
+                self.cache = self.root / mode
+                self.steps.clear()
+                self.calls.clear()
+                self.mode = mode
+                with self.assertRaises((RuntimeError, OSError, subprocess.CalledProcessError)):
+                    self.prepare()
+                self.assertFalse(self.held)
+                self.assertFalse(list(self.cache.glob("bin/*/build.json")))
+                if mode == "clean_failed":
+                    self.assertNotIn("build", self.steps)
+
+    def test_interrupted_publication_is_rebuilt_before_becoming_a_hit(self):
+        self.mode = "later_copy_failed"
+        with self.assertRaisesRegex(OSError, "copy failed"):
+            self.prepare()
+        self.assertEqual(len(list(self.cache.glob("bin/*/marja-selfplay.exe"))), 1)
+        self.assertFalse(list(self.cache.glob("bin/*/build.json")))
+        self.mode = "ok"
+        self.steps.clear()
+        self.calls.clear()
+        with patch.object(build.os, "replace", side_effect=OSError("publication interrupted")):
+            with self.assertRaisesRegex(OSError, "publication interrupted"):
+                self.prepare()
+        self.assertEqual([command[1] for command, _ in self.calls], ["metadata", "clean", "build"])
+        self.assertFalse(list(self.cache.glob("bin/*/build.json")))
+        self.calls.clear()
+        binary, metadata = self.prepare()
+        self.assertEqual([command[1] for command, _ in self.calls], ["metadata", "clean", "build"])
+        self.assertEqual(json.loads((binary.parent / "build.json").read_text()), metadata)
 
 
 if __name__ == "__main__":

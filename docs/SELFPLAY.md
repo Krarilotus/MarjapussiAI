@@ -115,6 +115,16 @@ The default is one worker, two logical CPUs, below-normal priority and a 4 GiB
 commit limit for the complete process tree. The job owns and stops its child
 processes. Result files and reusable build caches remain on disk.
 
+Use the same shared `--lock` for all validation jobs. The builder additionally
+holds `<cache>/.build.lock` from historical-source verification through binary
+publication; do not select that path as the outer resource lock. On a final
+binary-cache miss it resolves the offline Cargo graph, cleans only its local
+packages, and rebuilds with the resulting dependency lock fixed. Registry
+artifacts remain cached. Every selected local package must report fresh
+compilation, and the copied worker must match Cargo's executable artifact event.
+The build record retains commands, target, artifact events and the log hash.
+Verified final-binary cache hits skip resolution, cleaning and compilation.
+
 ## Prepared live-baseline smoke (not run)
 
 Only run after the required strategy, targeted correctness and performance

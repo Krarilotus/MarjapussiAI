@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, Mock, patch
 def load_runner():
     dependencies = {}
     for name, attributes in {
-        "build": {"POLICIES": {}, "prepare": Mock()},
+        "build": {"CACHE_LOCK": ".build.lock", "POLICIES": {}, "prepare": Mock()},
         "report": {"compact_game": lambda row: row, "write_reports": Mock()},
         "resources": {"Resources": Mock(), "RunLock": Mock()},
     }.items():
@@ -34,6 +34,18 @@ ARTIFACTS = ("report.md", "report.html", "games.csv", "summary.json")
 
 
 class RunnerTests(unittest.TestCase):
+    def test_cache_lock_cannot_also_be_the_outer_resource_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory) / "cache"
+            argv = ["marja-bench", "hp1", "hp1", "hp1", "hp1", "2",
+                    "--cache", str(cache), "--lock", str(cache / ".build.lock")]
+            with patch.object(sys, "argv", argv), patch.object(runner, "RunLock") as lock, \
+                    patch.object(runner, "prepare") as prepare:
+                with self.assertRaisesRegex(RuntimeError, "resource lock must differ"):
+                    runner.main()
+                lock.assert_not_called()
+                prepare.assert_not_called()
+
     def setUp(self):
         scratch = Path(__file__).resolve().parents[2] / "target/runner-tests"
         scratch.mkdir(parents=True, exist_ok=True)

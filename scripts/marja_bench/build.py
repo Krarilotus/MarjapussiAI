@@ -10,6 +10,10 @@ import subprocess
 import tarfile
 import tomllib
 
+from resources import RunLock
+
+CACHE_LOCK = ".build.lock"
+
 OLD = "1632af833199e5253271d493af8531badfac81c0"
 COMPATIBLE_CORE = "b3abdaf1f5e47111904db442ce36db7dc4ae9e0b"
 HISTORICAL = {"old": OLD, "previous": COMPATIBLE_CORE}
@@ -128,6 +132,13 @@ def snapshot(repo, cache, revision, name):
 def prepare(repo, cache, requested, log_path):
     repo, cache = Path(repo).resolve(), Path(cache).resolve()
     cache.mkdir(parents=True, exist_ok=True)
+    # The CLI's outer lock owns machine resources. This lock owns this cache,
+    # including callers that selected a different outer lock.
+    with RunLock(cache / CACHE_LOCK):
+        return _prepare_locked(repo, cache, requested, log_path)
+
+
+def _prepare_locked(repo, cache, requested, log_path):
     digest = fingerprint(repo)
     compiler = toolchain(repo)
     historical_sources = {name: snapshot(repo, cache, revision, name) for name, revision in HISTORICAL.items() if name in requested}
@@ -137,13 +148,19 @@ def prepare(repo, cache, requested, log_path):
               for name, source in historical_sources.items()}
     key = hashlib.sha256(f"worker-v1:{digest}:{builder}:{versions}:{json.dumps(compiler, sort_keys=True)}".encode()).hexdigest()[:20]
     binary = cache / "bin" / key / "marja-selfplay.exe"
+    record = binary.parent / "build.json"
     metadata = {"revision": git(repo, "rev-parse", "HEAD").decode().strip(),
                 "source_sha256": digest, "historical_policies": versions,
                 "historical_source_proofs": proofs,
                 "build_key": key, "builder_sha256": builder, "profile": "release opt3 thin-LTO codegen-units1",
                 "working_changes": git(repo, "status", "--porcelain").decode().splitlines(), "toolchain": compiler}
-    if binary.exists():
-        saved = json.loads((binary.parent / "build.json").read_text())
+    # Only the last, atomically published record marks a completed entry. A
+    # previous interrupted copy without that record must resolve/clean/build again.
+    if record.exists():
+        saved = json.loads(record.read_text())
+        for field in ("build_key", "source_sha256", "builder_sha256", "historical_policies", "toolchain"):
+            if saved[field] != metadata[field]:
+                raise RuntimeError(f"Cached worker provenance differs: {field}")
         actual = hashlib.sha256(binary.read_bytes()).hexdigest()
         if actual != saved["binary_sha256"]:
             raise RuntimeError(f"Cached worker was modified: {binary}")
@@ -152,7 +169,8 @@ def prepare(repo, cache, requested, log_path):
         for name, expected in saved["harness_files"].items():
             if hashlib.sha256((binary.parent / name).read_bytes()).hexdigest() != expected:
                 raise RuntimeError(f"Cached harness source was modified: {binary.parent / name}")
-        metadata.update(binary_sha256=actual, lock_sha256=saved["lock_sha256"], harness_files=saved["harness_files"])
+        metadata.update(binary_sha256=actual, lock_sha256=saved["lock_sha256"],
+                        harness_files=saved["harness_files"], build_provenance=saved["build_provenance"])
         return binary, metadata
     harness = cache / "harness"
     (harness / "src").mkdir(parents=True, exist_ok=True)
@@ -196,23 +214,98 @@ fn main() {
 }
 '''
     (harness / "src/main.rs").write_text(source, encoding="utf-8")
-    env = dict(os.environ, CARGO_BUILD_JOBS="1", CARGO_TARGET_DIR=str(cache / "target"))
-    # Resolve only from already available dependencies; retain the resulting lock for this build.
+    target = cache / "target"
+    env = dict(os.environ, CARGO_BUILD_JOBS="1", CARGO_TARGET_DIR=str(target))
+    manifest = harness / "Cargo.toml"
+    common = ["--offline", "--manifest-path", str(manifest)]
+    resolve_command = ["cargo", "metadata", "--format-version=1", *common]
+    # Resolve first, then freeze that lock for package-scoped clean and build.
+    # A new final-cache key alone does not invalidate Cargo's mtime-based units.
     with Path(log_path).open("wb") as log:
-        subprocess.run(["cargo", "build", "--offline", "--release", "--manifest-path", str(harness / "Cargo.toml")],
+        resolved = subprocess.run(resolve_command, cwd=repo, env=env, stdout=subprocess.PIPE,
+                                  stderr=log, check=True)
+        graph = json.loads(resolved.stdout)
+        active = {node["id"] for node in graph["resolve"]["nodes"]}
+        local = {p["id"]: p for p in graph["packages"] if p["id"] in active and p["source"] is None}
+        workers = [p for p in local.values() if Path(p["manifest_path"]).resolve() == manifest]
+        if len(workers) != 1 or workers[0]["name"] != "marja-selfplay":
+            raise RuntimeError("Resolved graph has no unique benchmark worker")
+        worker_id = workers[0]["id"]
+        packages = sorted(local)
+        clean_command = ["cargo", "clean", *common, "--locked", "--release",
+                         *[arg for package in packages for arg in ("-p", package)]]
+        build_command = ["cargo", "build", *common, "--locked", "--release", "--message-format=json"]
+        inputs = {name: hashlib.sha256((harness / name).read_bytes()).hexdigest()
+                  for name in ("Cargo.toml", "Cargo.lock", "src/main.rs")}
+        subprocess.run(clean_command, cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
+        subprocess.run(build_command,
                        cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
+    executable, artifacts = completed_artifacts(log_path, local, worker_id, harness, target)
     if fingerprint(repo) != digest or toolchain(repo) != compiler:
         raise RuntimeError("Source or build configuration changed during compilation; no reusable binary was published.")
+    for name, expected in inputs.items():
+        if hashlib.sha256((harness / name).read_bytes()).hexdigest() != expected:
+            raise RuntimeError(f"Harness input changed during compilation: {name}")
     for name, source in historical_sources.items():
         verify_frozen(source, proofs[name])
     binary.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(cache / "target/release/marja-selfplay.exe", binary)
+    shutil.copy2(executable, binary)
     shutil.copy2(harness / "Cargo.lock", binary.parent / "Cargo.lock")
-    for source, target in (("src/main.rs", "harness-main.rs"), ("Cargo.toml", "harness-Cargo.toml")):
-        shutil.copy2(harness / source, binary.parent / target)
+    for source, destination in (("src/main.rs", "harness-main.rs"), ("Cargo.toml", "harness-Cargo.toml")):
+        shutil.copy2(harness / source, binary.parent / destination)
     metadata["harness_files"] = {name: hashlib.sha256((binary.parent / name).read_bytes()).hexdigest()
                                  for name in ("harness-main.rs", "harness-Cargo.toml")}
     metadata["binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
     metadata["lock_sha256"] = hashlib.sha256((harness / "Cargo.lock").read_bytes()).hexdigest()
-    (binary.parent / "build.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    metadata["build_provenance"] = {
+        "target": str(target), "resolve_command": resolve_command, "clean_command": clean_command,
+        "build_command": build_command, "invalidated_packages": packages,
+        "compiler_artifacts": artifacts,
+        "build_log_sha256": hashlib.sha256(Path(log_path).read_bytes()).hexdigest(),
+    }
+    temporary = record.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    os.replace(temporary, record)
     return binary, metadata
+
+
+def completed_artifacts(log_path, local, worker_id, harness, target):
+    """Reject mtime reuse after explicit invalidation; bind publication to Cargo's worker event."""
+    artifacts, seen, workers = [], set(), []
+    finished = False
+    for line in Path(log_path).read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # Cargo's human-readable progress and compiler diagnostics.
+        if not isinstance(event, dict):
+            continue
+        if event.get("reason") == "build-finished":
+            finished = event.get("success") is True
+        if event.get("reason") != "compiler-artifact" or event.get("package_id") not in local:
+            continue
+        package = event["package_id"]
+        if event.get("fresh") is not False:
+            raise RuntimeError(f"Invalidated local package was reused: {package}")
+        if Path(event["manifest_path"]).resolve() != Path(local[package]["manifest_path"]).resolve():
+            raise RuntimeError(f"Compiler artifact manifest differs: {package}")
+        seen.add(package)
+        artifacts.append(event)
+        if package == worker_id and event["target"]["kind"] == ["bin"]:
+            workers.append(event)
+    if not finished or seen != set(local):
+        raise RuntimeError(f"Incomplete local compilation evidence; missing: {sorted(set(local) - seen)}")
+    if len(workers) != 1:
+        raise RuntimeError("Expected one compiled benchmark worker artifact")
+    worker = workers[0]
+    if (worker["target"]["name"] != "marja-selfplay"
+            or worker["target"]["crate_types"] != ["bin"]
+            or Path(worker["target"]["src_path"]).resolve() != harness / "src/main.rs"
+            or worker["profile"]["opt_level"] != "3" or worker["profile"]["test"] is not False
+            or not worker.get("executable")):
+        raise RuntimeError("Unexpected benchmark worker target/profile")
+    executable = Path(worker["executable"]).resolve()
+    if (not executable.is_relative_to(target) or not executable.is_file()
+            or executable not in [Path(p).resolve() for p in worker["filenames"]]):
+        raise RuntimeError("Benchmark executable is outside the target or absent from its artifact")
+    return executable, artifacts
