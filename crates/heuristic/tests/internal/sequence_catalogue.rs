@@ -158,9 +158,29 @@ fn advance_other_actors(table: &mut Table) {
     panic!("fixture response did not terminate")
 }
 
+fn win_opening_before_activation(table: &mut Table, ace: &str) {
+    assert_eq!(table.game.state.phase, engine::GamePhase::Trick);
+    assert!(
+        !table.to_act().unwrap().1.iter().any(|action| matches!(
+            action.action_type,
+            ActionType::AnnounceTrump(_) | ActionType::Question(_)
+        )),
+        "raising does not authorize a first-trick announcement or question"
+    );
+    apply_kind(table, ActionType::CardPlayed(ace.parse().unwrap()));
+    advance_other_actors(table);
+    assert_eq!(table.game.state.all_tricks.len(), 1);
+    assert_eq!(table.to_act().unwrap().0, 0);
+    assert_eq!(table.game.state.phase, engine::GamePhase::StartTrick);
+    assert_eq!(table.game.state.all_tricks[0].winner.0, 0);
+}
+
 #[test]
 fn no_side_card_activation_and_uncertain_half_inquiry_have_authored_successors() {
     let mut table = first_play(CardSet::suit(Suit::Green), CardSet::EMPTY);
+    win_opening_before_activation(&mut table, "g-A");
+    assert!((table.view(0).knowledge.certain(0) - CardSet::suit(Suit::Green)).is_empty());
+    assert!(CardSet::halves(Suit::Green).is_subset(table.view(0).knowledge.certain(0)));
     let program = resource_program(&table.view(0));
     program.validate().unwrap();
     let announce = available(&program, program.start, &table)
@@ -195,6 +215,7 @@ fn no_side_card_activation_and_uncertain_half_inquiry_have_authored_successors()
     let own = cards(&["g-K", "e-A", "r-A", "s-6", "s-7", "r-6", "e-6", "g-6", "g-7"]);
     let half = cards(&["g-O"]);
     let mut table = first_play(own, half);
+    win_opening_before_activation(&mut table, "e-A");
     assert!(!(half & table.view(0).knowledge.may_hold(2)).is_empty());
     assert!((half & table.view(0).knowledge.certain(2)).is_empty());
     let program = resource_program(&table.view(0));
