@@ -50,7 +50,8 @@ pub(crate) fn before_standing(ctx: &Ctx, legal: CardSet) -> Option<Lead> {
 }
 
 pub(crate) fn after_standing(ctx: &Ctx, legal: CardSet, val: &Valuation) -> Option<Lead> {
-    destroy_pair(ctx, legal, val)
+    schnippeln_line(ctx, legal, val)
+        .or_else(|| destroy_pair(ctx, legal, val))
         .or_else(|| partner_ruffs(ctx, legal, val))
         .or_else(|| draw_trumps(ctx, legal))
 }
@@ -70,6 +71,48 @@ fn schnippeln(ctx: &Ctx, legal: CardSet) -> Option<Lead> {
         .filter_map(|s| lowest(legal & CardSet::suit(s)).map(|c| (s, c)))
         .min_by_key(|&(_, c)| (CARD_POINTS[c as usize], c))?;
     Some((c, RuleId::HL1, vec![fact("suit", s as u8)]))
+}
+
+/// HL-1b (`schnippeln_line`, owner #235–#237): after my standing cards, hand the partner the
+/// lead by a low card toward the ace it **certainly** holds (e.g. one I passed it), when it has
+/// a purpose with the lead: a pair to announce (believed >= `partner_pair_min`, it keeps its
+/// right) or aces of its own to play down. Never a half of my live pair. The entry must hold
+/// with P >= `partner_lead_conf` (the same joint entry estimate as HL-3).
+fn schnippeln_line(ctx: &Ctx, legal: CardSet, val: &Valuation) -> Option<Lead> {
+    if !ctx.params.lead_schnippeln || ctx.k.played().is_empty() {
+        return None;
+    }
+    let mate = partner(ctx.me);
+    let mates_aces = ctx.k.certain(mate) & CardSet::ACES;
+    let pair = SUITS
+        .into_iter()
+        .filter(|&s| !ctx.k.is_called(s))
+        .map(|s| ctx.mind.features(mate).pair[s as usize])
+        .fold(0.0, f32::max);
+    let purpose = (pair >= ctx.params.partner_pair_min && ctx.k.rights(mate).may_announce()) || mates_aces.len() >= 2;
+    if !purpose {
+        return None;
+    }
+    let (s, c, entry) = SUITS
+        .into_iter()
+        .filter(|&s| mates_aces.contains(ace_of(s)))
+        .filter_map(|s| lowest((legal & CardSet::suit(s)) - val.halves).map(|c| (s, c, ctx.entry(c))))
+        .filter(|(_, _, e)| e.lead[mate as usize] >= ctx.params.partner_lead_conf)
+        .max_by(|a, b| {
+            a.2.lead[mate as usize]
+                .total_cmp(&b.2.lead[mate as usize])
+                .then((CARD_POINTS[b.1 as usize], b.1).cmp(&(CARD_POINTS[a.1 as usize], a.1)))
+        })?;
+    Some((
+        c,
+        RuleId::HL1,
+        vec![
+            fact("suit", s as u8),
+            fact("p_partner_entry", entry.lead[mate as usize]),
+            fact("partner_pair", pair),
+            fact("partner_aces", mates_aces.len()),
+        ],
+    ))
 }
 
 /// HL-6: two cards left and one of them is the top trump: lead the other, so the top trump
