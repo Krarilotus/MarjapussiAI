@@ -189,6 +189,8 @@ pub struct Mind {
     signal: u64,
     next_signal: u64,
     pub(crate) cache: RefCell<Cache>,
+    /// Independent borrow owner: model reads can coexist with concept cache updates.
+    pub(crate) model: RefCell<Option<(Epochs, u32, crate::DealModel)>>,
 }
 
 impl Mind {
@@ -205,6 +207,7 @@ impl Mind {
             signal: 0,
             next_signal: 1,
             cache: RefCell::new(Cache::default()),
+            model: RefCell::new(None),
         }
     }
 

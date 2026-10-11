@@ -13,7 +13,8 @@ def compact_game(game):
     """Keep report inputs only; full hands, actions and explanations stay on disk."""
     row = {k: game[k] for k in ("index", "deal_index", "deal_seed", "rotation", "lineup", "metrics")}
     row["decisions"] = [{**{k: d[k] for k in ("seat", "ms", "phase", "rule")},
-                         "facts": [f for f in d["facts"] if f["key"] == "forecast_complete"]}
+                         "facts": [f for f in d["facts"] if f["key"] in
+                                   ("forecast_complete", "forecast_decisions", "forecast_reused_decisions")]}
                         for d in game["decisions"]]
     return row
 
@@ -134,19 +135,26 @@ def summarize(games, manifest):
     for slot in range(4):
         decisions = [d for g in games for d in g["decisions"] if g["lineup"][d["seat"]] == slot]
         phases, rules = defaultdict(list), defaultdict(list)
-        complete = incomplete = 0
+        complete = incomplete = evaluated = reused = recorded = 0
         for d in decisions:
             phases[d["phase"]].append(d["ms"])
             rules[d["rule"]].append(d["ms"])
             facts = {f["key"]: f["value"] for f in d["facts"]}
             complete += facts.get("forecast_complete") == 1
             incomplete += facts.get("forecast_complete") == 0
+            if "forecast_decisions" in facts:
+                recorded += 1
+                evaluated += facts["forecast_decisions"]
+                reused += facts.get("forecast_reused_decisions", 0)
         slots.append({"slot": slot, "policy": manifest["policies"][slot],
                       "all_decisions": latency([d["ms"] for d in decisions]),
                       "nonforced_decisions": latency([d["ms"] for d in decisions if d["rule"] != "HX-1"]),
                       "phases": {p: latency(v) for p, v in phases.items()},
                       "rules": {p: latency(v) for p, v in rules.items()},
-                      "complete_forecasts": complete, "incomplete_forecasts": incomplete})
+                      "complete_forecasts": complete, "incomplete_forecasts": incomplete,
+                      "forecast_reuse": {"recorded_forecasts": recorded,
+                                         "evaluated_decisions": evaluated, "reused_decisions": reused,
+                                         "hit_rate": ratio(reused, evaluated + reused)}})
     delta = clustered_mean(games, lambda g: team_value(g, g["metrics"]["scores"], 0) - team_value(g, g["metrics"]["scores"], 1))
     return {"schema": "marjapussi.benchmark-report/1", "games": n,
             "requested_games": manifest["games"], "complete": n == manifest["games"] and manifest.get("status") == "complete",
@@ -196,6 +204,12 @@ def markdown(report):
         lines.append(f"| {slot['slot']}: {slot['policy']} | {t['count']} | {number(t['mean_ms'])} | {number(t['median_ms'])} | {number(t['p95_ms'])} | {number(t['max_ms'])} | {slot['incomplete_forecasts']} |")
     lines += ["", "Times measure Agent::act wall time, including forced actions; setup and posthoc diagnostics are excluded. "
               "Nonforced and per-phase timings are in summary.json. Parallel CPU contention can affect deadline-limited decisions.", "",
+              "| Slot / policy | Forecasts recording reuse | Evaluated decisions | Reused decisions | Reuse share |",
+              "|---|---:|---:|---:|---:|"]
+    for slot in report["slots"]:
+        reuse = slot["forecast_reuse"]
+        lines.append(f"| {slot['slot']}: {slot['policy']} | {reuse['recorded_forecasts']} | {number(reuse['evaluated_decisions'])} | {number(reuse['reused_decisions'])} | {percent(reuse['hit_rate'])} |")
+    lines += ["", "Reuse counts include completed and interrupted comparisons when the policy records them. Older policies may omit these counters.", "",
               "## Bidding communication", "",
               "These are common-convention content checks against the speaker’s hand. They do not measure whether the receiver understood, "
               "or whether a strategic overbid was good. Ambiguous and unrecognized bids remain separate.", "",

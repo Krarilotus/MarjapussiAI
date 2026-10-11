@@ -13,6 +13,9 @@ import tomllib
 OLD = "1632af833199e5253271d493af8531badfac81c0"
 COMPATIBLE_CORE = "b3abdaf1f5e47111904db442ce36db7dc4ae9e0b"
 HISTORICAL = {"old": OLD, "previous": COMPATIBLE_CORE}
+# Source-reviewed additive knowledge helpers; existing core algorithms unchanged.
+# Keep this exact anchor so any subsequent core change requires another review.
+COMPATIBLE_CORES = (COMPATIBLE_CORE, "bcf567164d142c969ace2ed63b14e0e6ddedde2e")
 SHARED = ("engine", "observation", "knowledge", "agent", "solver")
 POLICIES = {
     "new": "Current HP1, full beliefs and continuation planning (alias: hp1)",
@@ -57,12 +60,14 @@ def toolchain(repo):
 
 def snapshot(repo, cache, revision, name):
     """Verified git source, with only package metadata/path dependencies adapted."""
-    changed = git(repo, "diff", COMPATIBLE_CORE, "--", *[f"crates/{p}" for p in SHARED]).decode()
+    core_paths = [f"crates/{p}" for p in SHARED]
+    compatible = next((revision for revision in COMPATIBLE_CORES
+                       if not git(repo, "diff", revision, "--", *core_paths)), None)
     untracked = git(repo, "ls-files", "--others", "--exclude-standard", "--",
                     *[f"crates/{p}" for p in SHARED]).decode()
-    if changed or untracked:
-        raise RuntimeError("The historical 'old' policy is qualified against the b3abdaf core. "
-                           "The shared engine/agent/knowledge/solver has changed; review adapter compatibility first.")
+    if compatible is None or untracked:
+        raise RuntimeError("The shared engine/agent/knowledge/solver differs from the reviewed historical adapters. "
+                           "Review and pin core compatibility before running historical policies.")
     destination = cache / f"policy-{revision[:12]}"
     manifest = destination / "source-proof.json"
     if manifest.exists():
@@ -98,7 +103,7 @@ def snapshot(repo, cache, revision, name):
         (destination / "crates" / package / "Cargo.toml").write_text(text, encoding="utf-8")
     files = {p.relative_to(destination).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
              for p in destination.rglob("*") if p.is_file() and p != manifest}
-    manifest.write_text(json.dumps({"revision": revision, "compatible_core": COMPATIBLE_CORE, "files": files}, indent=2))
+    manifest.write_text(json.dumps({"revision": revision, "compatible_core": compatible, "files": files}, indent=2))
     return destination
 
 

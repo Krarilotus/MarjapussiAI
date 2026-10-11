@@ -53,6 +53,9 @@ The main comparison is **engine score difference per game**. The approximate
 separate from wins. Contract success and raise success are conditional on taking
 those actions. Timing measures the agent call, including forced choices;
 nonforced, phase and rule breakdowns explain where time goes.
+Forecast reuse counters include interrupted comparisons when the policy records
+them. They show how many decisions were evaluated and how many came from an
+identical visible state; older policies may omit these counters.
 
 Captured card points use a ceiling of 140, including the last trick. Pair points
 use 280; their combined ceiling is 420. These describe scoring capacity. Contract

@@ -23,8 +23,8 @@ impl Routes {
     fn new(ctx: &Ctx) -> Self {
         // A computational budget, not a fitted playing-strength parameter.
         const WORLDS: usize = 64;
-        let space = ctx.k.deals();
-        let weights = ctx.mind.deal_weights();
+        let model = ctx.mind.deal_model();
+        let (space, weights) = (model.space(), model.weights());
         let worlds = if space.count() <= WORLDS as u64 {
             let mut worlds = Vec::new();
             space.for_each_deal(|hands| {
@@ -35,7 +35,7 @@ impl Routes {
             });
             worlds
         } else {
-            space.sample_worlds(&mut Rng::new(ctx.seed), WORLDS, &weights)
+            space.sample_worlds(&mut Rng::new(ctx.seed), WORLDS, weights)
         };
         Self {
             worlds,

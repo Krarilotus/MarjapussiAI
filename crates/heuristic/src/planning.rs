@@ -189,21 +189,23 @@ impl Forecast {
         {
             return None;
         }
-        let space = ctx.k.deals();
-        let weights = ctx.mind.deal_weights();
         let mut rng = Rng::new(ctx.seed);
-        let mut pool = if space.count() <= n as u64 {
-            use knowledge::Belief;
-            let mut pool = Vec::new();
-            space.for_each_deal(|hands| {
-                pool.push(World {
-                    hands: *hands,
-                    weight: weights.weight(hands),
-                })
-            });
-            pool
-        } else {
-            space.sample_worlds(&mut rng, n * 256, &weights)
+        let mut pool = {
+            let model = ctx.mind.deal_model();
+            let (space, weights) = (model.space(), model.weights());
+            if space.count() <= n as u64 {
+                use knowledge::Belief;
+                let mut pool = Vec::new();
+                space.for_each_deal(|hands| {
+                    pool.push(World {
+                        hands: *hands,
+                        weight: weights.weight(hands),
+                    })
+                });
+                pool
+            } else {
+                space.sample_worlds(&mut rng, n * 256, weights)
+            }
         };
         pool.retain(|w| w.weight.is_finite() && w.weight > 0.0);
         let mass: f64 = pool.iter().map(|w| w.weight).sum();
@@ -289,6 +291,14 @@ impl Forecast {
         Some(Comparison { means, terminals })
     }
 
+    pub fn work_facts(&self) -> [Fact; 2] {
+        let decisions = self.decisions.borrow();
+        [
+            fact("forecast_decisions", decisions.evaluated),
+            fact("forecast_reused_decisions", decisions.hits),
+        ]
+    }
+
     pub fn facts(&self, comparison: &Comparison, best: usize) -> Vec<Fact> {
         let chosen = &comparison.means[best];
         let mut facts = vec![
@@ -304,9 +314,8 @@ impl Forecast {
             fact("forecast_tricks", chosen.tricks),
             fact("forecast_last", chosen.last),
             fact("forecast_gain", chosen.score - comparison.means[0].score),
-            fact("forecast_decisions", self.decisions.borrow().evaluated),
-            fact("forecast_reused_decisions", self.decisions.borrow().hits),
         ];
+        facts.extend(self.work_facts());
         if chosen.declaring > 0.0 {
             facts.push(fact("forecast_made", chosen.made / chosen.declaring));
         }
@@ -381,6 +390,7 @@ pub(crate) fn choose(ctx: &Ctx, legal: &[GameAction], mut baseline: Decision) ->
     }
     let Some(mut compared) = forecast.compare(&options) else {
         baseline.why.push(fact("forecast_complete", 0));
+        baseline.why.extend(forecast.work_facts());
         return baseline;
     };
     if raising {
@@ -410,6 +420,7 @@ pub(crate) fn choose(ctx: &Ctx, legal: &[GameAction], mut baseline: Decision) ->
             options.push(*a);
             let Some(verified) = forecast.compare(&options) else {
                 baseline.why.push(fact("forecast_complete", 0));
+                baseline.why.extend(forecast.work_facts());
                 return baseline;
             };
             compared = verified;

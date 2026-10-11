@@ -9,6 +9,7 @@ import queue
 import shlex
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -46,6 +47,87 @@ def load_games(directory):
     return rows
 
 
+def save_manifest(directory, manifest):
+    temporary = directory / ".manifest.json.tmp"
+    try:
+        temporary.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        os.replace(temporary, directory / "manifest.json")
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def stop_workers(processes, threads):
+    """Reap processes, then confirm EOF readers have closed their output files."""
+    errors = []
+    for process in processes:
+        try:
+            if process.poll() is None:
+                process.terminate()
+        except OSError as error:
+            errors.append(str(error))
+    for process in processes:
+        try:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            errors.append(str(error))
+    deadline = time.monotonic() + 5
+    for thread in threads:
+        try:
+            thread.join(timeout=max(0, deadline - time.monotonic()))
+            if thread.is_alive():
+                errors.append("Worker output writer did not stop after process termination")
+        except RuntimeError as error:
+            errors.append(str(error))
+    if errors:
+        raise RuntimeError("Worker teardown failed; raw files were not reread: " + "; ".join(errors))
+
+
+def generate_reports(directory, manifest, final_status):
+    """Stage all reports; publish each atomically, summary and manifest last."""
+    manifest.update(status="reporting", run_status=final_status, report_status="pending")
+    try:
+        save_manifest(directory, manifest)
+        rows = load_games(directory)
+        candidate = dict(manifest, status=final_status, report_status="complete")
+        candidate.pop("report_error", None)
+        with tempfile.TemporaryDirectory(prefix=".report-", dir=directory) as temporary:
+            staging = Path(temporary)
+            result = write_reports(staging, rows, candidate)
+            if final_status == "complete" and not result.get("complete"):
+                raise RuntimeError("Report did not validate the completed fixed sample")
+            for name in ("report.md", "report.html", "games.csv", "summary.json"):
+                os.replace(staging / name, directory / name)
+        manifest.update(candidate)
+        manifest.pop("report_error", None)
+        save_manifest(directory, manifest)
+        return rows
+    except BaseException as error:
+        manifest.update(status="report_failed", report_status="failed", report_error=str(error))
+        try:
+            save_manifest(directory, manifest)
+        except OSError as save_error:
+            print(f"Could not save report failure status: {save_error}", file=sys.stderr)
+        raise
+
+
+def report_existing(directory, lock):
+    # The per-run lock also prevents races when callers select different global locks.
+    with RunLock(lock), RunLock(directory / ".run.lock"):
+        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        if manifest.get("status") not in ("complete", "interrupted_or_failed", "report_failed"):
+            raise RuntimeError("Run is active or not finished; report-only requires a stopped run")
+        if manifest.get("writers_stopped") is False:
+            raise RuntimeError("Writer shutdown was not confirmed; refusing to reread raw files")
+        final_status = manifest.get("run_status", manifest["status"])
+        if final_status not in ("complete", "interrupted_or_failed"):
+            raise RuntimeError("Run completion status is unknown; refusing to label a report complete")
+        generate_reports(directory, manifest, final_status)
+
+
 def run_workers(binary, options, resources, directory, manifest):
     events = queue.Queue()
     processes, threads, rows = [], [], []
@@ -64,6 +146,9 @@ def run_workers(binary, options, resources, directory, manifest):
             events.put(("error", f"Worker {index}: {e}"))
 
     start, last_progress, exited = time.monotonic(), 0, 0
+    manifest.update(status="running", games_complete=False, writers_stopped=False)
+    save_manifest(directory, manifest)
+    failure = None
     try:
         for worker in range(options.workers):
             command = [str(binary), "--games", str(options.games), "--seed", str(options.seed),
@@ -106,30 +191,37 @@ def run_workers(binary, options, resources, directory, manifest):
                                                                      "seconds": elapsed, "remaining_seconds": remaining}))
         if sorted(rows) != list(range(options.games)):
             raise RuntimeError("Finished game indices do not match the requested fixed sample")
-        manifest["status"] = "complete"
-    except BaseException:
-        manifest["status"] = "interrupted_or_failed"
-        raise
+        manifest["games_complete"] = True
+    except BaseException as error:
+        failure = error
     finally:
-        for process in processes:
-            if process.poll() is None:
-                process.terminate()
-        for process in processes:
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-        for thread in threads:
-            thread.join(timeout=5)
+        try:
+            stop_workers(processes, threads)
+            manifest["writers_stopped"] = True
+        except BaseException as error:
+            if failure is None:
+                failure = error
+            else:
+                print(f"Worker cleanup also failed: {error}", file=sys.stderr)
         manifest["elapsed_seconds"] = time.monotonic() - start
         manifest["resources"] = resources.describe()
-        (directory / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        # Read the flushed files too, so completed games survive an interrupted queue reader.
+        final_status = "complete" if failure is None else "interrupted_or_failed"
+        manifest.update(status="reporting" if failure is None else final_status, run_status=final_status)
+        # Release indices before reloading compact report inputs from closed files.
         rows.clear()
-        rows = load_games(directory)
-        if rows:
-            write_reports(directory, rows, manifest)
+        try:
+            if manifest["writers_stopped"]:
+                rows = generate_reports(directory, manifest, final_status)
+            else:
+                manifest["report_status"] = "skipped_writers_active"
+                save_manifest(directory, manifest)
+        except BaseException as error:
+            if failure is None:
+                failure = error
+            else:
+                print(f"Partial report also failed: {error}", file=sys.stderr)
+    if failure is not None:
+        raise failure
     return rows
 
 
@@ -157,8 +249,7 @@ def main():
         install(a.lock)
         return
     if a.report_only:
-        manifest = json.loads((a.report_only / "manifest.json").read_text(encoding="utf-8"))
-        write_reports(a.report_only, load_games(a.report_only), manifest)
+        report_existing(a.report_only, a.lock)
         print(a.report_only / "report.html")
         return
     if len(a.lineup) != 5:
@@ -195,11 +286,12 @@ def main():
                     "primary_metric": "engine score difference per game, team slots0/2 minus slots1/3",
                     "uncertainty": "deal-clustered approximate normal interval",
                     "ceilings": "card+last-trick140, pairs280; scoring ceilings, not attainability"}
-        (a.out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        save_manifest(a.out, manifest)
         if a.prepare:
             print(f"Ready: {binary}")
             return
-        run_workers(binary, a, resources, a.out, manifest)
+        with RunLock(a.out / ".run.lock"):
+            run_workers(binary, a, resources, a.out, manifest)
         print((a.out / "report.md").read_text(encoding="utf-8"))
         print(f"Open report: {a.out / 'report.html'}\nRaw games: {a.out}\nSummary: {a.out / 'summary.json'}")
 
@@ -208,7 +300,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("Stopped. Finished games and a partial report remain in the output folder.", file=sys.stderr)
+        print("Stopped. See the output manifest for worker shutdown and partial report status.", file=sys.stderr)
         sys.exit(130)
     except (RuntimeError, ValueError, OSError, subprocess.CalledProcessError) as error:
         print(f"marja-bench: {error}", file=sys.stderr)

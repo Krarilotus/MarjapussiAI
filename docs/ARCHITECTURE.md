@@ -43,6 +43,12 @@ only the associated lazy caches; unchanged queries reuse their results. The
 agent accepts an incremental history only when the seat, starting hand, seat
 kinds, belief settings and recorded prefix still match. Otherwise it rebuilds.
 
+Concept queries, entry estimates and continuation forecasts share one weighted
+deal model. Its fact DP is created on first use and retained when only bidding
+evidence changes. Known facts, and unresolved queries with no traversal budget,
+return before constructing this model. A weights-only read also leaves the DP
+unallocated.
+
 One continuation comparison also caches completed candidate outcomes and
 decisions at identical seat views. Reuse requires matching knowledge, visible
 history, legal actions, seat kinds and series state under unchanged parameters.
@@ -89,8 +95,8 @@ in its application-owned Rust service, independently of browser connections.
 - Solving a known deal exactly does not solve hidden-information strategy
   exactly. Future hypothetical choices may depend on cards a player cannot see.
 - Bounded return forecasts are policy simulations, not proven game plans.
-- Passing intent, post-exchange raising and series-aware strategy remain
-  separate work. No playing-strength gain follows from architecture alone.
+- Passing intent and series-aware strategy need separate models. Forecasted
+  raises remain estimates; proven raises use their own-card certificate.
 
 See [solver limits](design/solver.md), [passing](PASSING.md),
 [evaluation provenance](EVALUATION.md) and [next steps](NEXT_STEPS.md).

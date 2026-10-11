@@ -1,10 +1,10 @@
 //! Joint conditional concepts. Hard proof and soft model mass are separate.
 
 use engine::{CardSet, Suit, CARDS};
-use knowledge::{Belief, DealSpace, Hands, Knowledge};
+use knowledge::{Belief, Hands, Knowledge};
 use observation::Seat;
 
-use crate::{DealWeights, Mind};
+use crate::Mind;
 
 pub(crate) const CACHE_ENTRIES: usize = 32;
 pub(crate) const MAX_NODES: usize = 1_000_000;
@@ -130,8 +130,9 @@ impl ConceptQuery {
 }
 
 /// Deterministic traversal-node bound (0..=1,000,000), independent of scheduling.
-/// Does not bound construction of the fact DP, exchange-kernel work, memory or
-/// wall time. Query/cache limits bound retained query data, not the fact DP.
+/// Zero permits hard deductions only, without constructing a fact DP or model.
+/// Positive budgets do not bound fact DP construction, exchange-kernel work,
+/// memory or wall time. Query/cache limits bound retained data, not the fact DP.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConceptBudget {
     pub max_nodes: usize,
@@ -170,8 +171,10 @@ pub struct ConceptEstimate {
     pub nodes: usize,
     pub classes: usize,
     pub covered_deals: u64,
+    /// Not computed by hard-proof or unresolved zero-budget shortcuts (0).
     pub total_deals: u64,
     pub resolved_condition_weight: f64,
+    /// Infinity when unresolved model mass has not been constructed or bounded.
     pub unresolved_weight_upper: f64,
 }
 
@@ -201,8 +204,6 @@ impl std::fmt::Display for ConceptError {
 impl std::error::Error for ConceptError {}
 
 pub(crate) struct ConceptStore {
-    pub space: DealSpace,
-    pub weights: DealWeights,
     queries: Vec<(ConceptQuery, ConceptBudget, ConceptEstimate)>,
     pub perspectives: Vec<(Seat, ConceptQuery, crate::PerspectiveBudget, crate::PerspectiveEstimate)>,
     /// Same epoch, viewer, private starting hand, params/kinds and filtered history.
@@ -223,8 +224,6 @@ impl Mind {
             return;
         }
         let store = ConceptStore {
-            space: self.knowledge().deals(),
-            weights: self.deal_weights(),
             queries: vec![],
             perspectives: vec![],
             hypothesis_minds: vec![],
@@ -244,32 +243,38 @@ impl Mind {
         if condition == Some(false) || (condition == Some(true) && known.is_some()) {
             return Ok(ConceptEstimate::proof(known, condition, !query.given.is_empty()));
         }
+        if budget.max_nodes == 0 {
+            return Ok(ConceptEstimate::unresolved(known));
+        }
+        let model = self.deal_model();
         self.ensure_concepts();
         let mut cache = self.cache.borrow_mut();
         let store = &mut cache.concepts.as_mut().expect("initialised").2;
         if let Some((_, _, result)) = store.queries.iter().find(|(q, b, _)| q == query && *b == budget) {
             return Ok(*result);
         }
-        let labels = store.weights.allocation_labels(&query.masks());
-        let ceiling = store.weights.weight_ceiling(!self.knowledge().played());
+        let labels = model.weights().allocation_labels(&query.masks());
+        let ceiling = model.weights().weight_ceiling(!self.knowledge().played());
         if !ceiling.is_finite() || ceiling < 0.0 {
             return Err(ConceptError::InvalidWeights);
         }
         let (mut numerator, mut denominator) = (0.0, 0.0);
         let (mut condition_deals, mut event_deals) = (0, 0);
         let mut invalid = false;
-        let visit = store.space.visit_allocations(&labels, budget.max_nodes, |hands, ways| {
-            if holds(&query.given, hands) {
-                condition_deals += ways;
-                let event = holds(&query.event, hands);
-                event_deals += if event { ways } else { 0 };
-                let w = store.weights.weight(hands) * ways as f64;
-                invalid |= !w.is_finite() || w < 0.0;
-                denominator += w;
-                numerator += if event { w } else { 0.0 };
-            }
-            invalid
-        });
+        let visit = model
+            .space()
+            .visit_allocations(&labels, budget.max_nodes, |hands, ways| {
+                if holds(&query.given, hands) {
+                    condition_deals += ways;
+                    let event = holds(&query.event, hands);
+                    event_deals += if event { ways } else { 0 };
+                    let w = model.weights().weight(hands) * ways as f64;
+                    invalid |= !w.is_finite() || w < 0.0;
+                    denominator += w;
+                    numerator += if event { w } else { 0.0 };
+                }
+                invalid
+            });
         if invalid || !denominator.is_finite() || !numerator.is_finite() {
             return Err(ConceptError::InvalidWeights);
         }
@@ -307,6 +312,21 @@ impl Mind {
 }
 
 impl ConceptEstimate {
+    fn unresolved(known: Option<bool>) -> Self {
+        Self {
+            bounds: Some(ProbabilityBounds { lower: 0.0, upper: 1.0 }),
+            known,
+            conditional_fact: None,
+            complete: false,
+            nodes: 0,
+            classes: 0,
+            covered_deals: 0,
+            total_deals: 0,
+            resolved_condition_weight: 0.0,
+            unresolved_weight_upper: f64::INFINITY,
+        }
+    }
+
     fn proof(known: Option<bool>, condition: Option<bool>, conditional: bool) -> Self {
         Self {
             bounds: if condition == Some(false) {
@@ -400,3 +420,7 @@ pub(crate) fn hard_conjunction(k: &Knowledge, literals: &[Literal]) -> Option<bo
         Some(true)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/internal/zero_budget.rs"]
+mod zero_budget_tests;

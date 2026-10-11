@@ -38,23 +38,25 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
         },
         None => Objective::Points,
     };
-    let belief = ctx.mind.deal_weights();
     let mut slot = ctx.solver.borrow_mut();
     let solver = slot.get_or_insert_with(|| Solver::with_tt_bits(TT_BITS));
     let mut rng = Rng::new(ctx.seed);
-    let mut d = evaluate_limited(
-        solver,
-        k,
-        &table,
-        objective,
-        ctx.params.endgame_worlds as usize,
-        &belief,
-        &mut rng,
-        Limits {
-            deadline: Some(deadline),
-            nodes: None,
-        },
-    )
+    let mut d = {
+        let model = ctx.mind.deal_model();
+        evaluate_limited(
+            solver,
+            k,
+            &table,
+            objective,
+            ctx.params.endgame_worlds as usize,
+            model.weights(),
+            &mut rng,
+            Limits {
+                deadline: Some(deadline),
+                nodes: None,
+            },
+        )
+    }
     .ok()?;
     // A called suit cannot become trump again; known answers without activation add no information.
     // This root policy filter does not change the engine's legal question list.

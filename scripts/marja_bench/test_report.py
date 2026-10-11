@@ -2,7 +2,7 @@ import copy
 import math
 import unittest
 
-from report import clustered_mean, summarize
+from report import clustered_mean, compact_game, summarize
 
 
 def game(index, delta=20, raised=False):
@@ -53,6 +53,21 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(first, second)
         expected_se = math.sqrt((100 + 100 + 400 + 400) / 3 / 4)
         self.assertAlmostEqual(first["ci95"][1], 1.96 * expected_se)
+
+    def test_reuse_survives_compaction_and_includes_interrupted_comparisons(self):
+        rows = [game(i) for i in range(4)]
+        for row in rows:
+            for d in row["decisions"]:
+                if row["lineup"][d["seat"]] == 0:
+                    d["facts"] += [{"key": "forecast_decisions", "value": 6},
+                                   {"key": "forecast_reused_decisions", "value": 4}]
+        report = summarize([compact_game(row) for row in rows],
+                           {"policies": ["a", "b", "c", "d"], "games": 4, "status": "complete"})
+        first = report["slots"][0]
+        self.assertEqual(first["incomplete_forecasts"], 4)
+        self.assertEqual(first["forecast_reuse"], {"recorded_forecasts": 4,
+                         "evaluated_decisions": 24, "reused_decisions": 16, "hit_rate": .4})
+        self.assertIsNone(report["slots"][1]["forecast_reuse"]["hit_rate"])
 
     def test_unequal_final_block_uses_game_weighted_mean(self):
         rows = [{"deal_index": 0, "x": 10}] * 4 + [{"deal_index": 1, "x": 30}]

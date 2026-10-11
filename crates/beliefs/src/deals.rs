@@ -1,14 +1,35 @@
 //! Joint signal likelihoods over fact-consistent deals, shared by planning and search.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, Ref, RefCell};
 
 use engine::CardSet;
-use knowledge::{Belief, Hands, Passed};
+use knowledge::{Belief, DealSpace, Hands, Knowledge, Passed};
 
 use crate::conventions::HandClass;
 use crate::factors::Factors;
 use crate::features::{ExchangeTerms, Kernel, Likelihood};
 use crate::{Mind, Signals};
+
+/// Fact-consistent allocations and their joint evidence weights from one Mind
+/// epoch. Inputs are immutable; the fact DP is constructed only on its first
+/// read, and weighting memoizes exchange calculations.
+/// Borrowed locally, so Mind remains Send without locks or shared pointers.
+pub struct DealModel {
+    knowledge: Knowledge,
+    space: OnceCell<DealSpace>,
+    weights: DealWeights,
+}
+
+impl DealModel {
+    /// Construct the fact DP once; weights-only consumers do not pay for it.
+    pub fn space(&self) -> &DealSpace {
+        self.space.get_or_init(|| self.knowledge.deals())
+    }
+
+    pub fn weights(&self) -> &DealWeights {
+        &self.weights
+    }
+}
 
 /// The feature model's dealt-hand likelihood, not a product of posterior card
 /// marginals. A pair signal constrains a combination of cards, not two independent
@@ -29,6 +50,31 @@ pub struct DealWeights {
 }
 
 impl Mind {
+    /// Reuse one weight model per (own epochs, public fact epoch), preserving the
+    /// lazy fact DP across signal-only refreshes while both fact epochs match.
+    /// The model's RefCell is separate from the query/derived caches; callbacks
+    /// do not hold a borrow of those caches. Drop this Ref before applying events
+    /// or any operation that would replace this epoch's model.
+    pub fn deal_model(&self) -> Ref<'_, DealModel> {
+        let key = (self.epochs(), self.public.fact_epoch());
+        if self.model.borrow().as_ref().map(|(e, p, _)| (*e, *p)) != Some(key) {
+            let weights = self.deal_weights();
+            let space = match self.model.borrow_mut().take() {
+                Some((epochs, public, model)) if epochs.fact == key.0.fact && public == key.1 => model.space,
+                _ => OnceCell::new(),
+            };
+            let model = DealModel {
+                knowledge: *self.knowledge(),
+                space,
+                weights,
+            };
+            *self.model.borrow_mut() = Some((key.0, key.1, model));
+        }
+        Ref::map(self.model.borrow(), |model| &model.as_ref().expect("computed above").2)
+    }
+
+    /// Construct independent weights for legacy callers. Use deal_model() when
+    /// several reads should retain the same fact DP and exchange memoization.
     pub fn deal_weights(&self) -> DealWeights {
         self.signals();
         let k = self.knowledge();
@@ -139,3 +185,7 @@ impl DealWeights {
             * (1.0 + 1e-10)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/internal/deal_model.rs"]
+mod tests;

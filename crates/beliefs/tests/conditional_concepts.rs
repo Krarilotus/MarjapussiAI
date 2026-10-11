@@ -447,8 +447,13 @@ fn root_private_hand_is_not_a_viewer_fact_and_hidden_private_pass_is_unsupported
             cards: None,
         })
         .unwrap();
+    let unresolved = hidden.perspective_concept(1, &private, NO_PERSPECTIVE_WORK).unwrap();
+    assert!(!unresolved.complete);
+    assert_eq!(unresolved.known_by_viewer, None);
+    assert_eq!(unresolved.expected_belief.unwrap().lower, 0.0);
+    assert_eq!(unresolved.expected_belief.unwrap().upper, 1.0);
     assert_eq!(
-        hidden.perspective_concept(1, &private, NO_PERSPECTIVE_WORK),
+        hidden.perspective_concept(1, &private, PerspectiveBudget::default()),
         Err(ConceptError::UnsupportedPrivateHistory)
     );
 }

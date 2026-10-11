@@ -9,8 +9,11 @@ use crate::concepts::{hard_conjunction, hard_literal, holds, probability_bounds,
 use crate::{ConceptBudget, ConceptError, ConceptQuery, Mind, ProbabilityBounds};
 
 /// Bounds outer subset/group traversal and at most 32 inner concept queries.
-/// Fact/conditional DP construction and exchange-kernel computations are outside
-/// these node counts. This is not a wall-clock or aggregate-memory guarantee.
+/// Zero outer nodes or private hypotheses permit public/shared hard proofs only,
+/// without constructing a fact DP, weights or private models. For root's own
+/// perspective only the inner budget applies. With positive traversal budgets,
+/// DP construction and exchange computation are outside these node counts.
+/// This is not a wall-clock or aggregate-memory guarantee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PerspectiveBudget {
     pub outer_nodes: usize,
@@ -53,6 +56,7 @@ pub struct PerspectiveEstimate {
     pub inner_nodes: usize,
     pub hypotheses: usize,
     /// Root-model weight that may still contain unresolved outer or inner work.
+    /// Infinity when the zero-budget shortcut leaves model mass unbounded.
     pub unresolved_weight_upper: f64,
 }
 
@@ -96,8 +100,9 @@ impl Mind {
 
     /// A viewer's conditional concept model, marginalized over root-consistent
     /// private hands. Only the viewer's own hand and filtered events reach its Mind.
-    /// Unknown private transfer trajectories are explicitly unsupported; cheap
-    /// public/shared proofs still work in those histories without enumeration.
+    /// Unknown private transfer trajectories are unsupported when enumeration
+    /// is requested; zero-budget queries still return cheap proofs or unresolved
+    /// bounds in those histories without constructing a model.
     pub fn perspective_concept(
         &self,
         viewer: Seat,
@@ -133,7 +138,10 @@ impl Mind {
                 hard_literal(&facts.knowledge, l)
             }
         };
-        let cheap = conjunction(query.event.iter().map(viewer_truth));
+        let viewer_conjunction = |literals: &[crate::Literal]| {
+            hard_conjunction(&facts.knowledge, literals).or_else(|| conjunction(literals.iter().map(viewer_truth)))
+        };
+        let cheap = viewer_conjunction(&query.event);
         if hard_conjunction(self.knowledge(), &query.given) == Some(false) {
             return Ok(PerspectiveEstimate {
                 known_by_viewer: cheap,
@@ -146,7 +154,7 @@ impl Mind {
                 unresolved_weight_upper: 0.0,
             });
         }
-        if conjunction(query.given.iter().map(viewer_truth)) == Some(true) {
+        if viewer_conjunction(&query.given) == Some(true) {
             if let Some(truth) = cheap {
                 return Ok(PerspectiveEstimate {
                     known_by_viewer: Some(truth),
@@ -163,11 +171,24 @@ impl Mind {
                 });
             }
         }
+        if budget.outer_nodes == 0 || budget.max_hypotheses == 0 {
+            return Ok(PerspectiveEstimate {
+                known_by_viewer: cheap,
+                conditional_fact: None,
+                expected_belief: Some(ProbabilityBounds { lower: 0.0, upper: 1.0 }),
+                complete: false,
+                outer_nodes: 0,
+                inner_nodes: 0,
+                hypotheses: 0,
+                unresolved_weight_upper: f64::INFINITY,
+            });
+        }
         if matches!(self.knowledge().given(viewer), Passed::Hidden)
             || matches!(self.knowledge().received(viewer), Passed::Hidden)
         {
             return Err(ConceptError::UnsupportedPrivateHistory);
         }
+        let model = self.deal_model();
         self.ensure_concepts();
         let mut cache = self.cache.borrow_mut();
         let store = &mut cache.concepts.as_mut().expect("initialised").2;
@@ -178,8 +199,8 @@ impl Mind {
         {
             return Ok(*result);
         }
-        let labels = store.weights.allocation_labels(&query.masks());
-        let ceiling = store.weights.weight_ceiling(!self.knowledge().played());
+        let labels = model.weights().allocation_labels(&query.masks());
+        let ceiling = model.weights().weight_ceiling(!self.knowledge().played());
         if !ceiling.is_finite() || ceiling < 0.0 {
             return Err(ConceptError::InvalidWeights);
         }
@@ -189,8 +210,8 @@ impl Mind {
         let (mut all_true, mut all_false, mut inner_complete) = (true, true, true);
         let mut inner_nodes = 0;
         let mut error = None;
-        let space = &store.space;
-        let weights = &store.weights;
+        let space = model.space();
+        let weights = model.weights();
         let model_minds = &mut store.hypothesis_minds;
         let visit = space.visit_private_allocations(
             self.knowledge(),

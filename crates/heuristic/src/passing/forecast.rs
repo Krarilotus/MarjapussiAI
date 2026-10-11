@@ -202,6 +202,7 @@ fn choose_until(
         return incomplete(baseline);
     };
     let Some(compared) = forecast.compare(&options) else {
+        baseline.why.extend(forecast.work_facts());
         return incomplete(baseline);
     };
     let best = compared.best();
