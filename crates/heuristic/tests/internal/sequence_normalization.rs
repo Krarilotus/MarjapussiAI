@@ -711,3 +711,243 @@ fn sibling_tail_scope_rebuilds_weighted_values_and_context_on_every_comparison()
     assert_eq!(choice.context, context);
     assert_eq!(warm.work.represented_transitions, fresh.work.represented_transitions);
 }
+
+#[test]
+fn response_entry_only_pressure_preserves_dependencies_and_exact_ledger() {
+    let (root, cohort) = cohort();
+    let context = context();
+    let program = program(&[5, 3, 0, 2, 4]);
+    let branches = || {
+        cohort
+            .iter()
+            .enumerate()
+            .map(|(origin, (table, weight))| Branch {
+                table: table.clone(),
+                origin,
+                weight: *weight,
+                receipt: Receipt::new(program.clone(), &table.view(root)).unwrap(),
+                first: None,
+                first_program: None,
+                tricks: vec![],
+                consumed: vec![],
+                interrupted: false,
+            })
+            .collect::<Vec<_>>()
+    };
+    // Exercise the real admission path with a completed parent, not fabricated
+    // byte counts or empty placeholder dependencies. One entry allows 32 leaves.
+    for pressure in ["entries", "bytes", "both"] {
+        let mut leaf = response;
+        let mut session = Session {
+            root,
+            provenance: context.provenance,
+            context: &context,
+            limits: Limits {
+                memo_entries: 1,
+                ..limits(true)
+            },
+            work: Work::default(),
+            leaf: &mut leaf,
+            responses: vec![],
+            hard_reads: vec![],
+            memo: vec![],
+            tails: vec![],
+            canonical: vec![],
+            memberships: vec![],
+            reusable_bytes: 0,
+            response_bytes: 0,
+            limit: None,
+        };
+        let mut prepared = vec![];
+        let expected = session.finish(branches(), &mut prepared).unwrap();
+        assert!(!session.memo.is_empty());
+        assert!(!session.tails.is_empty());
+        assert!(!session.hard_reads.is_empty());
+        assert!(!session.canonical.is_empty());
+        assert!(!session.memberships.is_empty());
+        let fresh = |shift: usize| {
+            let hands = std::array::from_fn(|seat| {
+                (0..9)
+                    .map(|i| Card::from_index(((seat * 9 + i + shift) % 36) as u8))
+                    .collect::<Vec<_>>()
+            });
+            Table::new(&hands)
+        };
+        let mut shift = 0;
+        while session.responses.len() < 32 {
+            session.response(&fresh(shift)).unwrap();
+            shift += 1;
+            assert!(shift <= 32);
+        }
+        let next = fresh(shift);
+        let (actor, legal) = next.to_act().unwrap();
+        let eligible = crate::legal_actions::eligible(legal);
+        assert!(
+            !session
+                .responses
+                .iter()
+                .any(|(key, _)| { key.information.matches(&next.view(actor)) && key.legal == eligible })
+        );
+        let resident = (
+            session.memo.len(),
+            session.tails.len(),
+            session.hard_reads.len(),
+            session.canonical.len(),
+            session.memberships.len(),
+        );
+        let suffix = session.suffix(&program, program.start).unwrap();
+        let compiled = session.canonical[0].suffixes.clone();
+        let total = session.work.retained_bytes;
+        let reusable = session.reusable_bytes;
+        let responses = session.response_bytes;
+        assert!(responses > 0 && reusable > responses && total > reusable);
+        // Rejected admission must not evict any existing category.
+        session.limits.memo_entries = 0;
+        assert!(!session.retain_response(1));
+        session.limits.memo_entries = 1;
+        assert!(!session.retain_response(session.limits.memo_bytes + 1));
+        assert_eq!(session.work.retained_bytes, total);
+        assert_eq!(session.reusable_bytes, reusable);
+        assert_eq!(session.response_bytes, responses);
+        assert_eq!(session.responses.len(), 32);
+        if pressure == "bytes" {
+            session.limits.memo_entries = 2;
+        }
+        if pressure != "entries" {
+            session.limits.memo_bytes = total;
+        }
+        #[cfg(feature = "profile")]
+        let before = beliefs::profile::snapshot();
+        session.response(&next).unwrap();
+        // Byte-only pressure can reclaim enough optional data without evicting
+        // responses; combined pressure must still clear that full response batch.
+        assert_eq!(session.responses.len(), if pressure == "bytes" { 33 } else { 1 });
+        let incoming = session.response_bytes;
+        if pressure == "entries" {
+            assert_eq!(session.work.retained_bytes, total - responses + incoming);
+            assert_eq!(session.reusable_bytes, reusable - responses + incoming);
+            assert_eq!(
+                resident,
+                (
+                    session.memo.len(),
+                    session.tails.len(),
+                    session.hard_reads.len(),
+                    session.canonical.len(),
+                    session.memberships.len(),
+                )
+            );
+            assert_eq!(session.canonical[0].program, program);
+            assert_eq!(session.canonical[0].suffixes, compiled);
+            assert_eq!(session.suffix(&program, program.start).unwrap(), suffix);
+        } else {
+            assert!(session.memo.is_empty() && session.tails.is_empty() && session.hard_reads.is_empty());
+            assert!(session.canonical.is_empty() && session.memberships.is_empty());
+            assert_eq!(session.work.retained_bytes, incoming);
+            assert_eq!(session.reusable_bytes, incoming);
+        }
+        #[cfg(feature = "profile")]
+        {
+            let after = beliefs::profile::snapshot();
+            let delta =
+                |label: &str| after.get(label).map_or(0, |t| t.calls) - before.get(label).map_or(0, |t| t.calls);
+            for (label, expected) in [
+                ("sequence.eviction.reason.entries", u64::from(pressure == "entries")),
+                ("sequence.eviction.reason.bytes", u64::from(pressure == "bytes")),
+                ("sequence.eviction.reason.both", u64::from(pressure == "both")),
+                ("sequence.eviction.memo_nonempty", u64::from(pressure != "entries")),
+            ] {
+                assert_eq!(delta(label), expected, "{pressure}: {label}");
+            }
+            if pressure == "entries" {
+                assert_eq!(delta("sequence.suffix_construct"), 0);
+            }
+        }
+        if pressure == "entries" {
+            let before_work = session.work;
+            let cost = (
+                session.memo[0].transitions,
+                session.memo[0].comparisons,
+                session.memo[0].solver_nodes,
+            );
+            let mut reused = vec![];
+            assert_eq!(session.finish(branches(), &mut reused).unwrap(), expected);
+            assert_eq!(reused, prepared);
+            assert_eq!(
+                session.work.represented_transitions - before_work.represented_transitions,
+                cost.0
+            );
+            assert_eq!(
+                session.work.represented_comparisons - before_work.represented_comparisons,
+                cost.1
+            );
+            assert_eq!(
+                session.work.represented_solver_nodes - before_work.represented_solver_nodes,
+                cost.2
+            );
+            let mut invalid = program.clone();
+            invalid.nodes.push(Node::Choice(vec![Stage(invalid.nodes.len())]));
+            assert_eq!(
+                session.suffix(&invalid, invalid.start),
+                Err(SequenceError::InvalidProgram)
+            );
+        }
+        assert!(session.work.retained_bytes <= session.limits.memo_bytes);
+    }
+}
+
+#[test]
+fn entry_limited_responses_keep_full_selection_equal_uncached_cold_and_warm() {
+    let (root, cohort) = cohort();
+    let context = context();
+    let candidates = [Candidate::new(program(&[5, 3, 0, 2, 4]))];
+    let uncached = evaluate(
+        &candidates,
+        &cohort,
+        root,
+        context.provenance,
+        &context,
+        limits(false),
+        &mut response,
+    )
+    .unwrap();
+    let limits = Limits {
+        memo_entries: 1,
+        transitions: uncached.work.represented_transitions,
+        comparisons: uncached.work.represented_comparisons,
+        solver_nodes: Some(uncached.work.represented_solver_nodes),
+        ..limits(true)
+    };
+    let mut cache = CompletedCache::default();
+    #[cfg(feature = "profile")]
+    let before = beliefs::profile::snapshot();
+    for _ in 0..2 {
+        let run = evaluate_with_cache(
+            &candidates,
+            &cohort,
+            root,
+            context.provenance,
+            &context,
+            limits,
+            &mut cache,
+            &mut response,
+        )
+        .unwrap();
+        assert_eq!(run.values, uncached.values);
+        assert_eq!(run.executions, uncached.executions);
+        assert_eq!(run.receipt, uncached.receipt);
+        assert_eq!(run.selection, uncached.selection);
+        assert_eq!(run.work.represented_transitions, uncached.work.represented_transitions);
+        assert_eq!(run.work.represented_comparisons, uncached.work.represented_comparisons);
+        assert_eq!(
+            run.work.represented_solver_nodes,
+            uncached.work.represented_solver_nodes
+        );
+        assert!(run.work.retained_bytes <= limits.memo_bytes);
+    }
+    #[cfg(feature = "profile")]
+    {
+        let after = beliefs::profile::snapshot();
+        let label = "sequence.eviction.reason.entries";
+        assert!(after.get(label).map_or(0, |t| t.calls) > before.get(label).map_or(0, |t| t.calls));
+    }
+}

@@ -648,9 +648,21 @@ impl<'context, F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<Leaf
                     (true, false) => "sequence.eviction.reason.entries",
                     _ => "sequence.eviction.reason.bytes",
                 }));
-                if !self.memo.is_empty() {
-                    drop(beliefs::profile::scope("sequence.eviction.memo_nonempty"));
-                }
+            }
+            if self.responses.len() >= max_entries
+                && bytes <= self.limits.memo_bytes.saturating_sub(self.work.retained_bytes)
+            {
+                // Entry-only pressure cannot be relieved by dropping other
+                // dependencies. Reclaim only responses, including their capacity.
+                self.work.retained_bytes -= self.response_bytes;
+                self.reusable_bytes -= self.response_bytes;
+                self.responses = Vec::new();
+                self.response_bytes = 0;
+                return self.retain(bytes);
+            }
+            #[cfg(feature = "profile")]
+            if !self.memo.is_empty() {
+                drop(beliefs::profile::scope("sequence.eviction.memo_nonempty"));
             }
             // Reclaim optional traces first; drop capacities as well as elements.
             self.memo = Vec::new();
