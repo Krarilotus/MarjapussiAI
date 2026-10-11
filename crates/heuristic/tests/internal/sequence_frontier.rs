@@ -3,6 +3,9 @@ use crate::concepts::sequence::{Actions, Guard, Node};
 use crate::concepts::value::CohortMethod;
 use engine::{ActionType, Card, CardSet};
 
+#[path = "sequence_frontier_lazy.rs"]
+mod lazy;
+
 fn context() -> Context {
     Context {
         params: crate::Params::default(),

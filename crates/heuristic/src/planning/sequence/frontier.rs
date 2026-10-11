@@ -47,6 +47,34 @@ pub(super) struct FrontierDependency {
     pub solver_nodes: u64,
 }
 
+/// Provisional sibling lookup data, not a projection certificate. Completed
+/// records own the canonical domain; no entry/read/member suffixes are rebuilt
+/// unless a later sibling might actually share this dependency.
+pub(super) struct FrontierCandidate {
+    probe: Frontier,
+    stages: Vec<(usize, Stage)>,
+    outcome_index: usize,
+    transitions: usize,
+    comparisons: usize,
+    solver_nodes: u64,
+}
+
+fn domain_shape_matches(probe: &Frontier, alternatives: &[Selection]) -> bool {
+    match probe {
+        Frontier::Choice(stages) => {
+            stages.len() == alternatives.len()
+                && alternatives
+                    .iter()
+                    .all(|selection| matches!(selection, Selection::Stage(_)))
+        }
+        Frontier::Actions(offers) if offers.len() > 1 => offers.len() == alternatives.len()
+            && offers.iter().zip(alternatives).all(
+                |(offer, selection)| matches!(selection, Selection::Offer { action, .. } if *action == offer.action),
+            ),
+        _ => false,
+    }
+}
+
 impl FrontierEdge {
     fn support(&self) -> Vec<(usize, f64)> {
         self.origins.iter().map(|edge| (edge.origin, edge.weight)).collect()
@@ -75,6 +103,46 @@ impl FrontierEdge {
 }
 
 impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, LeafFailure>> Session<'_, F> {
+    /// Only a necessary-condition screen. No canonical suffix or certificate
+    /// preparation occurs here, and the other joint members are not inferred.
+    fn frontier_probe(&mut self, children: &[Branch]) -> Result<Option<Frontier>, SequenceError> {
+        let _timing = beliefs::profile::scope("sequence.frontier_probe");
+        self.check()?;
+        let Some(branch) = children.first() else {
+            return Ok(None);
+        };
+        if branch.table.game.ended()
+            || branch.table.to_act().map(|(actor, _)| actor) != Some(self.root)
+            || branch.receipt.pending.is_some()
+            || !branch.receipt.accepted.matches(&branch.table.view(self.root))
+        {
+            return Ok(None);
+        }
+        Ok(match self.inspect(branch)?.frontier {
+            frontier @ Frontier::Choice(_) => Some(frontier),
+            Frontier::Actions(offers) if offers.len() > 1 => Some(Frontier::Actions(offers)),
+            _ => None,
+        })
+    }
+
+    fn probe_domain(&mut self, program: &Program, probe: &Frontier) -> Result<Domain, SequenceError> {
+        match probe {
+            Frontier::Choice(stages) => Ok(Domain::Choice(
+                stages
+                    .iter()
+                    .map(|stage| self.selection(program, &Alternative::Stage(*stage)))
+                    .collect::<Result<_, _>>()?,
+            )),
+            Frontier::Actions(offers) if offers.len() > 1 => Ok(Domain::Actions(
+                offers
+                    .iter()
+                    .map(|offer| self.selection(program, &Alternative::Offer(offer.clone())))
+                    .collect::<Result<_, _>>()?,
+            )),
+            _ => Err(SequenceError::WrongContext),
+        }
+    }
+
     pub(super) fn normalized_frontier(&mut self, children: &[Branch]) -> Result<Option<FrontierEdge>, SequenceError> {
         let _timing = beliefs::profile::scope("sequence.frontier_normalize");
         let mut result: Option<FrontierEdge> = None;
@@ -280,27 +348,91 @@ impl<F: FnMut(&SeatView<'_>, &[GameAction], LeafBudget) -> Result<LeafResponse, 
     pub(super) fn finish_frontier_child(
         &mut self,
         children: Vec<Branch>,
-        dependencies: &mut Vec<FrontierDependency>,
+        dependencies: &mut Vec<FrontierCandidate>,
         outcomes: &[Vec<Terminal>],
         records: &[Vec<PreparedChoice>],
         child_records: &mut Vec<PreparedChoice>,
     ) -> Result<Vec<Terminal>, SequenceError> {
-        let edge = self.normalized_frontier(&children)?;
-        if let Some(edge) = &edge {
-            for dependency in dependencies.iter() {
+        let probe = self.frontier_probe(&children)?;
+        let mut domain = None;
+        let mut edge = None;
+        let mut edge_prepared = false;
+        if let Some(probe) = &probe {
+            // Insertion order is part of V2's deterministic dependency choice.
+            // Every screening/projection miss leaves later representatives live.
+            for candidate in dependencies.iter() {
+                let Some(entry) = records.get(candidate.outcome_index).and_then(|proofs| proofs.first()) else {
+                    continue;
+                };
+                if entry.scope != ChoiceScope::Local
+                    || !domain_shape_matches(&candidate.probe, &entry.alternatives)
+                    || !domain_shape_matches(probe, &entry.alternatives)
+                {
+                    continue;
+                }
+                if domain.is_none() {
+                    domain = Some(self.probe_domain(&children[0].receipt.program, probe)?);
+                }
+                // Full structural successors, never raw-stage inequality. A
+                // late differing successor must reject an otherwise equal list.
+                if domain.as_ref().unwrap().alternatives() != entry.alternatives {
+                    continue;
+                }
+                if !edge_prepared {
+                    edge = self.normalized_frontier(&children)?;
+                    edge_prepared = true;
+                }
+                let Some(edge) = &edge else { continue };
+                // Reconstruct only from the unchanged lexical joint input. The
+                // old entry stage is the sole difference; terminal state is not
+                // a source for worlds, histories, prefixes or first ownership.
+                let source_children = children
+                    .iter()
+                    .map(|branch| {
+                        let stage = candidate
+                            .stages
+                            .iter()
+                            .find_map(|(origin, stage)| (*origin == branch.origin).then_some(*stage))?;
+                        let mut source = branch.clone();
+                        source.receipt.stage = stage;
+                        Some(source)
+                    })
+                    .collect::<Option<Vec<_>>>();
+                let Some(source_children) = source_children else {
+                    continue;
+                };
+                let Some(source_edge) = self.normalized_frontier(&source_children)? else {
+                    continue;
+                };
+                let dependency = FrontierDependency {
+                    edge: source_edge,
+                    outcome_index: candidate.outcome_index,
+                    transitions: candidate.transitions,
+                    comparisons: candidate.comparisons,
+                    solver_nodes: candidate.solver_nodes,
+                };
                 if let Some((terminals, projected)) =
-                    self.alias_frontier(&children, edge, dependency, outcomes, records)?
+                    self.alias_frontier(&children, edge, &dependency, outcomes, records)?
                 {
                     *child_records = projected;
                     return Ok(terminals);
                 }
             }
         }
+        // Capture the original per-origin stages before finish consumes/sorts
+        // children. This admission proves nothing and costs no represented work.
+        let stages = probe.as_ref().map(|_| {
+            children
+                .iter()
+                .map(|branch| (branch.origin, branch.receipt.stage))
+                .collect()
+        });
         let before = self.work;
         let terminals = self.finish(children, child_records)?;
-        if let Some(edge) = edge.filter(|edge| edge.validates(child_records, self.context)) {
-            dependencies.push(FrontierDependency {
-                edge,
+        if let (Some(probe), Some(stages)) = (probe, stages) {
+            dependencies.push(FrontierCandidate {
+                probe,
+                stages,
                 outcome_index: outcomes.len(),
                 transitions: self.work.represented_transitions - before.represented_transitions,
                 comparisons: self.work.represented_comparisons - before.represented_comparisons,
