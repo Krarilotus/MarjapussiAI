@@ -245,7 +245,7 @@ fn split_pair_has_the_same_activation_chain_and_distinct_success_suffix() {
     let connected = programs
         .iter()
         .filter(|p| {
-            p.name == "standing-lead-activation-bound-side"
+            p.name == "cash-activation-control-transfer-recovery"
                 && p.nodes.iter().any(|node| {
                     matches!(
                         node,
@@ -269,16 +269,9 @@ fn split_pair_has_the_same_activation_chain_and_distinct_success_suffix() {
         program.validate().unwrap();
         assert!(program.nodes.iter().any(|node| matches!(node,
             Node::Guard { predicate: Guard::Trump(Suit::Bells), yes, no, .. } if yes != no)));
-        assert!(
-            !program.nodes.iter().any(|node| matches!(
-                node,
-                Node::Action {
-                    actions: Actions::Cards(_),
-                    ..
-                }
-            )),
-            "no unrestricted future card-choice product"
-        );
+        assert!(program.nodes.len() < MAX_STAGES);
+        assert!(program.nodes.iter().any(|node| matches!(node,
+            Node::Guard { predicate: Guard::Leader(_), yes, no, .. } if yes != no)));
     }
 }
 
@@ -332,7 +325,7 @@ fn reader(view: &SeatView<'_>) -> Mind {
 }
 
 #[test]
-fn optional_raises_share_a_boundary_and_every_legal_value_is_preserved() {
+fn optional_raises_preserve_every_legal_value_and_bid_receipts_install_composed_programs() {
     let mut table = raising_table();
     let (seat, legal) = table.to_act().unwrap();
     let view = table.view(seat);
@@ -342,11 +335,18 @@ fn optional_raises_share_a_boundary_and_every_legal_value_is_preserved() {
         .iter()
         .find(|p| p.name == "optional-raise-then-opening")
         .unwrap();
-    assert_eq!(
-        raising.nodes.len(),
-        3,
-        "one shared successor, no static bid x route product"
-    );
+    let opening = programs
+        .iter()
+        .find(|p| p.name == "cash-activation-control-transfer-recovery")
+        .unwrap();
+    let Node::Action {
+        actions: Actions::Raises,
+        next,
+    } = &raising.nodes[raising.start.0]
+    else {
+        panic!("shared raising action family expected")
+    };
+    assert_eq!(raising.suffix(*next).unwrap(), opening.suffix(opening.start).unwrap());
     let inspection = inspect(raising, raising.start, &view, legal, &mind).unwrap();
     let Frontier::Actions(offers) = inspection.frontier else {
         panic!("raise binding expected")
@@ -374,6 +374,30 @@ fn optional_raises_share_a_boundary_and_every_legal_value_is_preserved() {
             "no-raise openings must remain explicit alternatives"
         );
     }
+
+    // Isolate the receipt/binder contract from where a catalogue schedules its
+    // discretionary boundary. Production raises now share the explicit opening
+    // and retain its play reconsideration; this fixture deliberately puts the
+    // boundary immediately after a bid to test accepted NewBid installation.
+    let raising = Program {
+        name: "bid-receipt-boundary-fixture",
+        version: 1,
+        start: Stage(2),
+        nodes: vec![
+            Node::Tail,
+            Node::Reconsider {
+                remaining: 1,
+                retained: Stage(0),
+            },
+            Node::Action {
+                actions: Actions::Raises,
+                next: Stage(1),
+            },
+        ],
+    };
+    let Frontier::Actions(offers) = inspect(&raising, raising.start, &view, legal, &mind).unwrap().frontier else {
+        panic!("raise fixture binding expected")
+    };
 
     let selected = offers.last().unwrap().clone();
     let mut receipt = Receipt::new(raising.clone(), &view).unwrap();

@@ -276,7 +276,10 @@ impl Composition {
         let node = match program.nodes.get(stage.0).ok_or(SequenceError::InvalidProgram)? {
             Node::Action { actions, next } => {
                 let mut next = self.import(program, *next, remap, depth)?;
-                if let Some(remaining) = depth.filter(|remaining| *remaining > 0) {
+                // A bid enters its authored opening continuation. It does not
+                // spend a discretionary play reconsideration to bind that goal.
+                let play_action = !matches!(actions, Actions::Raises | Actions::Exact(ActionType::NewBid(_)));
+                if let Some(remaining) = depth.filter(|remaining| *remaining > 0 && play_action) {
                     if !matches!(self.nodes[next.0], Node::Reconsider { remaining: n, .. } if n == remaining) {
                         next = self.intern(Node::Reconsider {
                             remaining,
@@ -324,7 +327,8 @@ impl Composition {
     }
 }
 
-/// Install a finite opportunity to reconsider after each authored action. On
+/// Install a finite opportunity to reconsider after authored play actions. Bids
+/// enter their explicit opening without spending the play opportunity. On
 /// expansion the remaining count is reduced on ALL successor alternatives,
 /// including the retained suffix, so no path can replenish its semantic depth.
 /// Zero denotes the underlying authored routes with no global reconsideration.
@@ -806,10 +810,233 @@ impl Receipt {
     }
 }
 
-/// Bounded authored action families. Binding uses only root's cards and legal
-/// actions. No continuation is selected here, and no preservation bonus exists.
-/// Every Choice retains a stop/legacy-tail alternative. Omitted families remain
-/// a coverage limit; draw repetitions are unrolled at three root leads maximum.
+/// Bounds on authored goals, independent of the one discretionary reconsideration.
+pub const CASH_LEADS: u8 = 2;
+pub const CONTROL_LEADS: u8 = 3;
+pub const RECOVERY_FOLLOWS: u8 = 2;
+
+/// Small interned stage library. Constructors only write finite data; all legal
+/// binding, observations, weighted comparisons and action selection belong to
+/// the common executor. A successor is shared rather than copied per card/suit.
+struct ResourceStages {
+    nodes: Vec<Node>,
+    own: CardSet,
+    seat: u8,
+}
+impl ResourceStages {
+    fn node(&mut self, node: Node) -> Stage {
+        if let Some(index) = self.nodes.iter().position(|old| *old == node) {
+            return Stage(index);
+        }
+        let stage = Stage(self.nodes.len());
+        self.nodes.push(node);
+        stage
+    }
+    fn action(&mut self, actions: Actions, next: Stage) -> Stage {
+        self.node(Node::Action { actions, next })
+    }
+    fn choice(&mut self, alternatives: impl IntoIterator<Item = Stage>) -> Stage {
+        let mut unique = Vec::new();
+        for stage in alternatives {
+            if !unique.contains(&stage) {
+                unique.push(stage);
+            }
+        }
+        if unique.len() == 1 {
+            unique[0]
+        } else {
+            self.node(Node::Choice(unique))
+        }
+    }
+    fn guard(&mut self, predicate: Guard, yes: Stage, otherwise: Stage) -> Stage {
+        if yes == otherwise {
+            return yes;
+        }
+        self.node(Node::Guard {
+            predicate,
+            yes,
+            no: otherwise,
+            unknown: otherwise,
+        })
+    }
+    fn held(&mut self, cards: CardSet, yes: Stage, no: Stage) -> Stage {
+        self.guard(
+            Guard::Known(ConceptQuery::new(beliefs::Concept::Count {
+                seat: self.seat,
+                cards,
+                min: 1,
+                max: cards.len() as u8,
+            })),
+            yes,
+            no,
+        )
+    }
+    /// One possible root answer before this stage. Truthful answer domains and
+    /// the respondent's rights remain engine-owned, independent of asker's rights.
+    fn answers(&mut self, next: Stage) -> Stage {
+        use engine::AnswerType;
+        let mut choices = vec![next];
+        choices.push(self.action(Actions::Exact(ActionType::Answer(AnswerType::NoPair)), next));
+        for suit in SUITS {
+            for answer in [
+                AnswerType::YesPair(suit),
+                AnswerType::YesHalf(suit),
+                AnswerType::NoHalf(suit),
+            ] {
+                choices.push(self.action(Actions::Exact(ActionType::Answer(answer)), next));
+            }
+        }
+        self.choice(choices)
+    }
+    /// A lost lead preserves this goal through at most `follows` actual root
+    /// card plays. Every follow removes a card; another seat is never commanded.
+    fn await_lead(&mut self, goal: Stage, follows: u8) -> Stage {
+        let mut next = self.guard(Guard::OwnLead, goal, Stage(0));
+        for _ in 0..follows {
+            let follow = self.action(Actions::Cards(self.own), next);
+            let following = self.choice([Stage(0), follow]);
+            let turn = self.guard(Guard::OwnLead, goal, following);
+            next = self.answers(turn);
+        }
+        next
+    }
+    fn cash(&mut self, leads: u8, successor: Stage, lost: Stage) -> Stage {
+        let mut next = successor;
+        for _ in 0..leads {
+            let cash = self.action(Actions::Standing(self.own), next);
+            let choose = self.choice([successor, cash]);
+            next = self.guard(Guard::OwnLead, choose, lost);
+        }
+        next
+    }
+    /// No side-card or certain partner-half prerequisite. All actual legal
+    /// announcements and questions can bind; failure/different trump reaches
+    /// the SAME observed-state successor, never a discarded hypothesis.
+    fn activate(&mut self, successor: Stage, lost: Stage) -> Stage {
+        let mut choices = vec![successor];
+        choices.push(self.action(
+            Actions::Exact(ActionType::Question(engine::QuestionType::Yours)),
+            successor,
+        ));
+        for suit in SUITS {
+            choices.push(self.action(Actions::Exact(ActionType::AnnounceTrump(suit)), successor));
+            choices.push(self.action(
+                Actions::Exact(ActionType::Question(engine::QuestionType::YourHalf(suit))),
+                successor,
+            ));
+        }
+        let choose = self.choice(choices);
+        self.guard(Guard::OwnLead, choose, lost)
+    }
+    /// Re-read actual trump and hard threat evidence after every draw. Unknown
+    /// opponent ownership keeps the draw alternative; zero soft mass is no proof.
+    fn control(&mut self, leads: u8, successor: Stage, lost: Stage) -> Stage {
+        let mut next = successor;
+        for _ in 0..leads {
+            let mut dispatch = successor;
+            for suit in SUITS {
+                let trumps = self.own & CardSet::suit(suit);
+                if trumps.is_empty() {
+                    continue;
+                }
+                let draw = self.action(Actions::Standing(trumps), next);
+                let draws_or_stop = self.choice([successor, draw]);
+                let gone = ConceptQuery {
+                    event: engine::opponents(self.seat)
+                        .into_iter()
+                        .map(|seat| {
+                            beliefs::Concept::Count {
+                                seat,
+                                cards: CardSet::suit(suit),
+                                min: 0,
+                                max: 0,
+                            }
+                            .into()
+                        })
+                        .collect(),
+                    given: vec![],
+                };
+                let threatened = self.guard(Guard::Known(gone), successor, draws_or_stop);
+                dispatch = self.guard(Guard::Trump(suit), threatened, dispatch);
+            }
+            next = self.guard(Guard::OwnLead, dispatch, lost);
+        }
+        next
+    }
+    /// Each investment is a hypothesis: non-standing cards are allowed. The
+    /// surviving outside-suit entry is consumed evidence, not a value bonus.
+    fn develop(&mut self, goal: Stage, recovery: Stage) -> Stage {
+        let mut choices = vec![goal];
+        for suit in SUITS {
+            let cards = self.own & CardSet::suit(suit);
+            let entries = self.own - cards;
+            if cards.is_empty() || entries.is_empty() {
+                continue;
+            }
+            let play = self.action(Actions::Cards(cards), recovery);
+            let entry = self.held(entries, play, goal);
+            choices.push(entry);
+        }
+        self.choice(choices)
+    }
+    fn transfer(&mut self, arrival: Stage, cash: Stage) -> Stage {
+        let all = self.action(Actions::Cards(self.own), arrival);
+        let mut dispatch = self.choice([cash, all]);
+        for suit in SUITS {
+            let side = self.own - CardSet::suit(suit);
+            let target = if side.is_empty() {
+                cash
+            } else {
+                let play = self.action(Actions::Cards(side), arrival);
+                let choices = self.choice([cash, play]);
+                self.held(side, choices, cash)
+            };
+            dispatch = self.guard(Guard::Trump(suit), target, dispatch);
+        }
+        self.guard(Guard::OwnLead, dispatch, arrival)
+    }
+}
+
+fn resource_program(view: &SeatView<'_>) -> Program {
+    let mut stages = ResourceStages {
+        nodes: vec![Node::Tail],
+        own: view.knowledge.certain(view.seat),
+        seat: view.seat,
+    };
+    let tail = Stage(0);
+    let final_cash = stages.cash(CASH_LEADS, tail, tail);
+    let final_control = stages.control(1, final_cash, tail);
+    let second_activation = stages.activate(final_control, tail);
+    let second_goal = stages.cash(1, second_activation, tail);
+    let recover_cash = stages.await_lead(final_cash, RECOVERY_FOLLOWS);
+    let counterplay = stages.develop(second_goal, recover_cash);
+    let partner_arrival = stages.await_lead(second_goal, RECOVERY_FOLLOWS);
+    let opponent_arrival = stages.await_lead(counterplay, RECOVERY_FOLLOWS);
+    let other_leader = stages.guard(
+        Guard::Leader(engine::partner(view.seat)),
+        partner_arrival,
+        opponent_arrival,
+    );
+    let arrival = stages.guard(Guard::OwnLead, second_goal, other_leader);
+    let arrival = stages.answers(arrival);
+    let transfer = stages.transfer(arrival, final_cash);
+    let control = stages.control(CONTROL_LEADS, transfer, arrival);
+    let activation = stages.activate(control, arrival);
+    let opening = stages.cash(CASH_LEADS, activation, arrival);
+    let regained = stages.await_lead(opening, RECOVERY_FOLLOWS);
+    let development = stages.develop(opening, regained);
+    let start = stages.guard(Guard::OwnLead, development, regained);
+    let start = stages.answers(start);
+    Program {
+        name: "cash-activation-control-transfer-recovery",
+        version: 1,
+        start,
+        nodes: stages.nodes,
+    }
+}
+
+/// Direct actions, the explicit resource route, and optional raising into that
+/// SAME opening DAG. No card/bid/suit Cartesian catalogue or strategic callback.
 pub fn authored_programs(view: &SeatView<'_>, legal: &[GameAction]) -> Vec<Program> {
     let own = view.knowledge.certain(view.seat);
     let tail = Stage(0);
@@ -819,26 +1046,6 @@ pub fn authored_programs(view: &SeatView<'_>, legal: &[GameAction]) -> Vec<Progr
         start: tail,
         nodes: vec![Node::Tail],
     }];
-    let action = |nodes: &mut Vec<Node>, actions, next| {
-        let stage = Stage(nodes.len());
-        nodes.push(Node::Action { actions, next });
-        stage
-    };
-    let guard = |nodes: &mut Vec<Node>, predicate, yes| {
-        let stage = Stage(nodes.len());
-        nodes.push(Node::Guard {
-            predicate,
-            yes,
-            no: tail,
-            unknown: tail,
-        });
-        stage
-    };
-    let choice = |nodes: &mut Vec<Node>, alternatives| {
-        let stage = Stage(nodes.len());
-        nodes.push(Node::Choice(alternatives));
-        stage
-    };
     // Non-card roots (announcements/questions/answers) retain direct alternatives.
     for first in legal
         .iter()
@@ -862,129 +1069,26 @@ pub fn authored_programs(view: &SeatView<'_>, legal: &[GameAction]) -> Vec<Progr
             });
         }
     }
-    // Optional first-play raising is one action family, not a static product
-    // of bids and routes. With one reconsideration, opening routes bind AFTER
-    // the accepted bid, using the engine's new contract and rights. No-raise
-    // card/activation routes remain in the same root catalogue.
-    if legal.iter().any(|a| matches!(a.action_type, ActionType::NewBid(_)))
-        && legal.iter().any(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
-    {
-        programs.push(Program {
-            name: "optional-raise-then-opening",
-            version: 1,
-            start: Stage(1),
-            nodes: vec![
-                Node::Tail,
-                Node::Action {
-                    actions: Actions::Raises,
-                    next: tail,
-                },
-            ],
-        });
-    }
-    if own.is_empty() {
-        return programs;
-    }
-    // Known team-winning lead -> observed root lead -> legal activation -> one
-    // bound side lead. The side lead is a candidate, not a proven entry. The
-    // partner's cooperative action remains the actor-local response model.
-    for suit in SUITS.into_iter().filter(|&s| !view.knowledge.is_called(s)) {
-        let mate = engine::partner(view.seat);
-        let halves = CardSet::halves(suit);
-        let mine = own & halves;
-        let split = mine.len() == 1 && (halves - mine).is_subset(view.knowledge.certain(mate));
-        if !(halves.is_subset(own) || halves.is_subset(view.knowledge.may_hold(mate)) || split) {
-            continue;
-        }
-        for side in (own - CardSet::suit(suit)).iter() {
-            let mut nodes = vec![Node::Tail];
-            let side_action = action(
-                &mut nodes,
-                Actions::Exact(ActionType::CardPlayed(engine::Card::from_index(side))),
-                tail,
-            );
-            let side_held = guard(&mut nodes, Guard::OwnCards(CardSet::single(side)), side_action);
-            let side_lead = guard(&mut nodes, Guard::OwnLead, side_held);
-            // Success executes the bound side lead; wrong/failed activation
-            // retains all branch mass and falls back to the named tail.
-            let activated = guard(&mut nodes, Guard::Trump(suit), side_lead);
-            let ask = action(
-                &mut nodes,
-                Actions::Exact(ActionType::Question(engine::QuestionType::Yours)),
-                activated,
-            );
-            let announce = action(&mut nodes, Actions::Exact(ActionType::AnnounceTrump(suit)), activated);
-            let mut activation = vec![tail, ask, announce];
-            if split {
-                let ask_half = action(
-                    &mut nodes,
-                    Actions::Exact(ActionType::Question(engine::QuestionType::YourHalf(suit))),
-                    activated,
-                );
-                let half_retained = guard(&mut nodes, Guard::OwnCards(mine), ask_half);
-                activation.push(half_retained);
-            }
-            let activate_or_stop = choice(&mut nodes, activation.clone());
-            let retain_lead = guard(&mut nodes, Guard::OwnLead, activate_or_stop);
-            let lead_first = action(&mut nodes, Actions::Standing(own - halves), retain_lead);
-            activation.push(lead_first);
-            let start = choice(&mut nodes, activation);
-            programs.push(Program {
-                name: "standing-lead-activation-bound-side",
-                version: 1,
-                start,
-                nodes,
+    if !own.is_empty() {
+        let opening = resource_program(view);
+        if legal
+            .iter()
+            .any(|a| a.player.0 == view.seat && matches!(a.action_type, ActionType::NewBid(_)))
+            && legal
+                .iter()
+                .any(|a| a.player.0 == view.seat && matches!(a.action_type, ActionType::CardPlayed(_)))
+        {
+            let mut raised = opening.clone();
+            raised.name = "optional-raise-then-opening";
+            let start = Stage(raised.nodes.len());
+            raised.nodes.push(Node::Action {
+                actions: Actions::Raises,
+                next: raised.start,
             });
+            raised.start = start;
+            programs.push(raised);
         }
-    }
-    if let Some(trump) = view.knowledge.trump() {
-        let trumps = own & CardSet::suit(trump);
-        let sides = own - trumps;
-        if !trumps.is_empty() && !sides.is_empty() {
-            for side in sides.iter() {
-                let mut nodes = vec![Node::Tail];
-                let side_lead = action(
-                    &mut nodes,
-                    Actions::Exact(ActionType::CardPlayed(engine::Card::from_index(side))),
-                    tail,
-                );
-                let mut next = choice(&mut nodes, vec![tail, side_lead]);
-                for _ in 0..3 {
-                    let retain = guard(&mut nodes, Guard::OwnLead, next);
-                    let draw = action(&mut nodes, Actions::Standing(trumps), retain);
-                    let draws_or_stop = choice(&mut nodes, vec![tail, side_lead, draw]);
-                    let gone = beliefs::ConceptQuery {
-                        event: engine::opponents(view.seat)
-                            .into_iter()
-                            .map(|seat| {
-                                beliefs::Concept::Count {
-                                    seat,
-                                    cards: CardSet::suit(trump),
-                                    min: 0,
-                                    max: 0,
-                                }
-                                .into()
-                            })
-                            .collect(),
-                        given: vec![],
-                    };
-                    let stage = Stage(nodes.len());
-                    nodes.push(Node::Guard {
-                        predicate: Guard::Known(gone),
-                        yes: next,
-                        no: draws_or_stop,
-                        unknown: draws_or_stop,
-                    });
-                    next = guard(&mut nodes, Guard::OwnLead, stage);
-                }
-                programs.push(Program {
-                    name: "standing-trump-draw-then-side-lead",
-                    version: 1,
-                    start: next,
-                    nodes,
-                });
-            }
-        }
+        programs.push(opening);
     }
     programs
 }
@@ -992,3 +1096,7 @@ pub fn authored_programs(view: &SeatView<'_>, legal: &[GameAction]) -> Vec<Progr
 #[cfg(test)]
 #[path = "../../tests/internal/sequence_semantics.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/internal/sequence_catalogue.rs"]
+mod catalogue_tests;
