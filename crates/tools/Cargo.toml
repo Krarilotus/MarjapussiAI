@@ -54,3 +54,8 @@ bench = false
 name = "study"
 test = false
 bench = false
+
+[[bin]]
+name = "selfplay"
+test = false
+bench = false

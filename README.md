@@ -81,6 +81,11 @@ games are needed to play. Some evaluation tools and tests use a private dataset;
 set `MARJA_GAMES` to its `games.ndjson` if you have access. Keep datasets,
 credentials and generated output outside Git.
 
+For local policy comparisons, install the [self-play command](docs/SELFPLAY.md)
+from Git Bash with `bash marja-bench --install`. Then
+`marja-bench new old new old 4000` runs the two partnerships and produces a report
+with scores, decision times, contracts, raising and bidding diagnostics.
+
 Build and test one job at a time, reusing the target cache. Before contributing,
 read the [workflow](docs/WORKFLOW.md): major changes get a focused commit,
 validation record and immutable checkpoint. Strategy changes need concrete game

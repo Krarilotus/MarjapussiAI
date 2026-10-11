@@ -4,3 +4,4 @@
 pub mod cli;
 pub mod legacy;
 pub mod record;
+pub mod selfplay;
