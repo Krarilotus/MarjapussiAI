@@ -429,6 +429,8 @@ fn an_established_trump_run_leaves_time_for_uncertain_questions() {
     trick(&mut s, &[(0, "r-A"), (1, "r-6"), (2, "r-7"), (3, "r-U")]);
     let params = heuristic::Params {
         partner_pair_min: 0.0,
+        // This fixture checks the retained-lead rule, as Scene::act does.
+        plan_worlds: 0,
         ..Default::default()
     };
     let d = s.act_with(params, &ask_legal(&s, &[], true));

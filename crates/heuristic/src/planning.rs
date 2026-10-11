@@ -479,6 +479,7 @@ mod tests {
             table.apply(action);
         }
         assert_eq!(table.game.state.phase, engine::GamePhase::Raising);
+        assert_eq!(table.game.state.value.0, 120);
         let legal = table.to_act().unwrap().1;
         let actions = [
             *legal
@@ -501,10 +502,13 @@ mod tests {
             outcomes: RefCell::new(vec![vec![]]),
         };
         let first = forecast.compare(&actions[..1]).unwrap();
-        let evaluated = forecast.decisions.borrow().evaluated;
+        let work = (forecast.decisions.borrow().evaluated, forecast.decisions.borrow().hits);
         let repeated = forecast.compare(&actions[..1]).unwrap();
         assert_eq!(repeated.means[0].score, first.means[0].score);
-        assert_eq!(forecast.decisions.borrow().evaluated, evaluated);
+        assert_eq!(
+            (forecast.decisions.borrow().evaluated, forecast.decisions.borrow().hits),
+            work
+        );
         let expanded = forecast.compare(&actions).unwrap();
         assert_eq!(expanded.means[0].score, first.means[0].score);
         assert_eq!(expanded.terminals[0][0].0.game_value, 120);
