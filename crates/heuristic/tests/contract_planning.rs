@@ -56,6 +56,53 @@ fn complete_contract_continuations_can_overbid_a_strong_hand_above_the_signal_wi
     assert!(d.why.iter().any(|f| f.key == "forecast_gain" && f.value > 0.0), "{d:?}");
 }
 
+// Privacy compares identical permitted inputs and completed semantic evidence.
+// Cache/solver accounting has independent tests; never erase incomplete status.
+fn assert_same_complete_forecast(left: &Table, right: &Table) {
+    let (seat, legal) = left.to_act().unwrap();
+    let (other_seat, other_legal) = right.to_act().unwrap();
+    let a = left.view(seat);
+    let b = right.view(other_seat);
+    assert_eq!(
+        (a.seat, a.knowledge, a.events, a.kinds, a.series, legal),
+        (b.seat, b.knowledge, b.events, b.kinds, b.series, other_legal),
+        "the hidden swap must preserve all permitted policy inputs"
+    );
+    let capture = |t: &Table| {
+        let (seat, legal) = t.to_act().unwrap();
+        let mut policy = HeuristicAgent::new(params());
+        let mut decision = policy.decide(&t.view(seat), legal);
+        assert!(
+            decision.why.iter().any(|f| f.key == "forecast_complete" && f.value == 1.0),
+            "privacy of completed forecasts is not established by a deferred fallback: {decision:?}"
+        );
+        let assessment = policy.last_assessment().expect("complete forecast has its value assessment").clone();
+        let mut trace = policy.last_sequence().expect("complete forecast has its sequence evidence").clone();
+        assert!(assessment.values.cohort_complete);
+        assert_eq!(trace.failure, None);
+        assert_eq!(trace.deferred_limit, None);
+        assert_ne!(trace.mode, heuristic::PlanMode::Deferred);
+        assert!(trace.program.is_some());
+        assert_eq!(trace.total_candidates, Some(assessment.values.candidates.len()));
+        assert_eq!(trace.work.completed_candidates, assessment.values.candidates.len());
+        assert!(trace.terminals.iter().all(|terminal| !terminal.interrupted));
+        // Only the explicit operational lane is normalized. Keep every action,
+        // rule, value, probability, provenance, dependency and completion fact.
+        trace.work = heuristic::sequence_evaluation::Work::default();
+        decision.why.retain(|fact| {
+            !matches!(
+                fact.key,
+                "sequence_transitions"
+                    | "sequence_represented_transitions"
+                    | "sequence_response_hits"
+                    | "sequence_suffix_hits"
+            )
+        });
+        (decision, assessment, trace)
+    };
+    assert_eq!(capture(left), capture(right));
+}
+
 #[test]
 fn unseen_opponent_swap_preserves_auction_and_raising_forecasts() {
     let mut table = table();
@@ -74,11 +121,7 @@ fn unseen_opponent_swap_preserves_auction_and_raising_forecasts() {
             apply(t, action);
         }
     }
-    let decide = |t: &Table| {
-        let (seat, legal) = t.to_act().unwrap();
-        HeuristicAgent::new(params()).decide(&t.view(seat), legal)
-    };
-    assert_eq!(decide(&table), decide(&other));
+    assert_same_complete_forecast(&table, &other);
     for t in [&mut table, &mut other] {
         apply(t, ActionType::NewBid(150));
         apply(t, ActionType::StopBidding);
@@ -90,10 +133,5 @@ fn unseen_opponent_swap_preserves_auction_and_raising_forecasts() {
         apply(t, pass);
     }
     assert_eq!(table.view(0).knowledge, other.view(0).knowledge);
-    let a = decide(&table);
-    assert_eq!(a, decide(&other));
-    assert!(
-        a.why.iter().any(|f| f.key == "forecast_complete" && f.value == 1.0),
-        "{a:?}"
-    );
+    assert_same_complete_forecast(&table, &other);
 }

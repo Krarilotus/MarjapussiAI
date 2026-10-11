@@ -23,8 +23,25 @@ pub struct RankingRef(pub NodeId);
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CohortMethod {
     Enumerated,
-    ImportanceSampled { draws: usize, proposal_ess: f64 },
-    Resampled { draws: usize, proposal_ess: f64 },
+    ImportanceSampled {
+        draws: usize,
+        proposal_ess: f64,
+    },
+    Resampled {
+        draws: usize,
+        proposal_ess: f64,
+    },
+    /// Current allocation preparation followed by one conditional private-history
+    /// sample per emitted slot. Even current_draws == 0 is not an enumerated
+    /// JOINT history cohort. Current sampling metadata remains separately named.
+    HistorySampled {
+        current_draws: usize,
+        current_proposal_ess: Option<f64>,
+        current_resampled: bool,
+        model: &'static str,
+        proposals: usize,
+        slots: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -255,6 +272,24 @@ impl<'a> ValueStore<'a> {
         | CohortMethod::ImportanceSampled { draws, proposal_ess } = provenance.cohort
         {
             if draws < terminals[0].len() || !proposal_ess.is_finite() || proposal_ess <= 0.0 {
+                return Err(ValueError::InvalidContext);
+            }
+        }
+        if let CohortMethod::HistorySampled {
+            current_draws,
+            current_proposal_ess,
+            current_resampled,
+            model,
+            proposals,
+            slots,
+        } = provenance.cohort
+        {
+            let current_valid = if current_draws == 0 {
+                current_proposal_ess.is_none() && !current_resampled
+            } else {
+                current_draws >= slots && current_proposal_ess.is_some_and(|ess| ess.is_finite() && ess > 0.0)
+            };
+            if !current_valid || model.is_empty() || slots == 0 || proposals < slots {
                 return Err(ValueError::InvalidContext);
             }
         }
@@ -800,6 +835,44 @@ mod tests {
         };
         assert!(matches!(
             ValueStore::new(&slices, 0, invalid),
+            Err(ValueError::InvalidContext)
+        ));
+    }
+    #[test]
+    fn sampled_histories_remain_explicit_when_current_allocations_are_enumerated() {
+        let terminals = [(outcome(None, [100, 40]), 1.0)];
+        let slices = [terminals.as_slice()];
+        let cohort = CohortMethod::HistorySampled {
+            current_draws: 0,
+            current_proposal_ess: None,
+            current_resampled: false,
+            model: "conditional-history-fixture",
+            proposals: 3,
+            slots: 1,
+        };
+        let completed = ValueStore::new(&slices, 0, Provenance { cohort, ..provenance() })
+            .unwrap()
+            .assess()
+            .unwrap();
+        assert_eq!(completed.provenance.cohort, cohort);
+        assert!(completed.cohort_complete);
+        let invalid = CohortMethod::HistorySampled {
+            current_draws: 0,
+            current_proposal_ess: None,
+            current_resampled: false,
+            model: "conditional-history-fixture",
+            proposals: 0,
+            slots: 1,
+        };
+        assert!(matches!(
+            ValueStore::new(
+                &slices,
+                0,
+                Provenance {
+                    cohort: invalid,
+                    ..provenance()
+                }
+            ),
             Err(ValueError::InvalidContext)
         ));
     }

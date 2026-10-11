@@ -5,7 +5,7 @@
 //! game state. Implementations: the heuristic player, random play, and later the search agent.
 
 mod table;
-pub use table::Table;
+pub use table::{HistoryReplayError, HypothesizedPass, Table};
 
 use engine::GameAction;
 use engine::SeriesTally;

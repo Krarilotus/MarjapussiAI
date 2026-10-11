@@ -172,6 +172,54 @@ impl Belief for DealWeights {
 }
 
 impl DealWeights {
+    /// Acceptance density for the named conditional legal-history completion.
+    /// This is NOT the inverse of the marginalized feature kernel: it conditions
+    /// concrete dealt owners/transfer paths on legal nine-card starting hands.
+    /// Callers sample histories with this density, keeping current W(C) unchanged.
+    /// Do not multiply this into current allocation weights a second time.
+    ///
+    /// Uniform reverse-transfer proposals distinguish ordinary cards uniformly.
+    /// Feature stay factors and bid-class likelihoods use this model's owners.
+    /// Dividing each stay factor by its maximum is a constant for fixed current
+    /// hands, giving a tighter rejection envelope without changing conditional Q.
+    /// Returns a finite [0,1] density, or None for invalid/mismatched inputs.
+    pub fn history_acceptance(&self, hands: &Hands, dealt: &Hands) -> Option<f64> {
+        let pair = self.hidden_exchange?;
+        let held = pair.map(|seat| hands[seat] | self.played[seat]);
+        let original = pair.map(|seat| dealt[seat]);
+        if original.iter().any(|h| h.len() != engine::HAND_SIZE as u32)
+            || !(original[0] & original[1]).is_empty()
+            || !(held[0] & held[1]).is_empty()
+            || original[0] | original[1] != held[0] | held[1]
+        {
+            return None;
+        }
+        let mut density = 1.0;
+        for (holder, hand) in held.iter().enumerate() {
+            for card in (*hand & (CardSet::ACES | CardSet::HALVES)).iter() {
+                let role = usize::from(!CardSet::ACES.contains(card));
+                let stay = self.kernel.stay[role][holder] as f64;
+                if !stay.is_finite() || !(0.0..=1.0).contains(&stay) {
+                    return None;
+                }
+                let factor = if original[holder].contains(card) {
+                    stay
+                } else {
+                    1.0 - stay
+                };
+                density *= factor / stay.max(1.0 - stay);
+            }
+            if let Some(likelihood) = &self.likelihoods[pair[holder]] {
+                let factor = likelihood[HandClass::of(original[holder]).index()] as f64;
+                if !factor.is_finite() || !(0.0..=1.0).contains(&factor) {
+                    return None;
+                }
+                density *= factor;
+            }
+        }
+        (density.is_finite() && (0.0..=1.0).contains(&density)).then_some(density)
+    }
+
     /// Refine allocation classes by every role read by the joint model and query.
     /// This is the same weight owner as sampling/search, including factors once.
     pub(crate) fn allocation_labels(&self, masks: &[CardSet]) -> [u64; 36] {
@@ -221,3 +269,7 @@ impl DealWeights {
 #[cfg(test)]
 #[path = "../tests/internal/deal_model.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/internal/history_density.rs"]
+mod history_tests;

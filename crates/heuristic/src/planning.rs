@@ -8,16 +8,19 @@ use std::{
 };
 
 mod common;
+mod history;
+mod preparation;
 pub(crate) mod preplay;
+pub(crate) use preparation::PreparationError;
 pub mod retained;
 pub mod sequence;
 mod strategic;
 
 use agent::{SeatView, Table};
 use engine::{ActionType, GameAction};
-use knowledge::World;
 
-use crate::concepts::value::{Assessment, CohortMethod, Provenance};
+use crate::concepts::value::CohortMethod;
+use crate::concepts::value::{Assessment, Provenance};
 use crate::{Ctx, Decision, HeuristicAgent, Rng, RuleId};
 
 pub(crate) const BUDGET: Duration = Duration::from_millis(2_000);
@@ -72,87 +75,33 @@ pub(crate) struct Forecast {
 }
 
 impl Forecast {
-    pub fn new(ctx: &Ctx, n: usize, deadline: Instant) -> Option<Self> {
+    pub fn new(ctx: &Ctx, n: usize, deadline: Instant) -> Result<Self, PreparationError> {
+        Self::new_checked(ctx, n, deadline, &mut || Instant::now() < deadline)
+    }
+
+    // Preserve an operational interruption separately from inconsistent support.
+    // Caller-owned Failure mapping must retain this cause, not label all errors
+    // InvalidCohort. No incomplete pool is published by this checked boundary.
+    fn new_checked(
+        ctx: &Ctx,
+        n: usize,
+        deadline: Instant,
+        keep_going: &mut impl FnMut() -> bool,
+    ) -> Result<Self, PreparationError> {
+        use preparation::{check, proposal_pool, replay_worlds, select_worlds};
         let _timing = beliefs::profile::scope("forecast.build");
-        if n == 0
-            || Instant::now() >= deadline
-            || ctx
-                .mind
-                .events()
-                .iter()
-                .any(|e| matches!(e, observation::SeatEvent::Pass { cards: None, .. }))
-        {
-            return None;
+        check(keep_going)?;
+        if n == 0 {
+            return Err(PreparationError::InvalidCohort);
         }
         let mut rng = Rng::new(ctx.seed);
-        let (mut pool, allocation_count, proposal_draws) = {
+        let (pool, allocation_count, proposal_draws) = {
             let model = ctx.mind.deal_model();
+            check(keep_going)?;
             let (space, weights) = (model.space(), model.weights());
-            let count = space.count();
-            if count <= n as u64 {
-                use knowledge::Belief;
-                let mut pool = Vec::new();
-                space.for_each_deal(|hands| {
-                    pool.push(World {
-                        hands: *hands,
-                        weight: weights.weight(hands),
-                    })
-                });
-                (pool, count, 0)
-            } else {
-                (space.sample_worlds(&mut rng, n * 256, weights), count, n * 256)
-            }
+            proposal_pool(space, weights, &mut rng, n, keep_going)?
         };
-        if pool.iter().any(|w| !w.weight.is_finite() || w.weight < 0.0) {
-            return None;
-        }
-        pool.retain(|w| w.weight > 0.0);
-        let mass: f64 = pool.iter().map(|w| w.weight).sum();
-        if !mass.is_finite() || mass <= 0.0 {
-            return None;
-        }
-        let ess = mass * mass / pool.iter().map(|w| w.weight * w.weight).sum::<f64>();
-        let cohort = if allocation_count <= n as u64 {
-            CohortMethod::Enumerated
-        } else if pool.len() <= n {
-            CohortMethod::ImportanceSampled {
-                draws: proposal_draws,
-                proposal_ess: ess,
-            }
-        } else {
-            CohortMethod::Resampled {
-                draws: proposal_draws,
-                proposal_ess: ess,
-            }
-        };
-        let worlds = if pool.len() <= n {
-            for w in &mut pool {
-                w.weight /= mass;
-            }
-            pool
-        } else {
-            let step = mass / n as f64;
-            let start = (rng.next() >> 11) as f64 / (1u64 << 53) as f64 * step;
-            let mut worlds: Vec<World> = Vec::new();
-            let (mut index, mut sum) = (0, pool[0].weight);
-            for i in 0..n {
-                let target = start + i as f64 * step;
-                while sum <= target && index + 1 < pool.len() {
-                    index += 1;
-                    sum += pool[index].weight;
-                }
-                let hands = pool[index].hands;
-                if let Some(w) = worlds.iter_mut().find(|w| w.hands == hands) {
-                    w.weight += 1.0 / n as f64;
-                } else {
-                    worlds.push(World {
-                        hands,
-                        weight: 1.0 / n as f64,
-                    });
-                }
-            }
-            worlds
-        };
+        let selected = select_worlds(pool, allocation_count, proposal_draws, n, &mut rng, keep_going)?;
         let view = SeatView {
             seat: ctx.me,
             knowledge: ctx.k,
@@ -160,16 +109,58 @@ impl Forecast {
             series: ctx.series,
             kinds: ctx.mind.kinds(),
         };
-        let tables: Option<Vec<_>> = worlds
-            .into_iter()
-            .map(|w| Some((Table::from_view(&view, w.hands)?, w.weight)))
-            .collect();
+        let (tables, cohort, belief_model) = if history::has_hidden_passes(&view) {
+            let _timing = beliefs::profile::scope("forecast.cohort.history");
+            let model = ctx.mind.deal_model();
+            // Completion work bound, not a change to current draws/world count.
+            // Root may tune this cap separately; exhaustion defers every slot.
+            let completed = history::complete_slots(
+                &view,
+                &selected.slots,
+                model.weights(),
+                ctx.seed,
+                history::HistoryLimits {
+                    max_proposals_per_slot: 4096,
+                },
+                keep_going,
+            )
+            .map_err(|error| match error {
+                history::HistoryError::Interrupted
+                | history::HistoryError::ProposalLimit { .. }
+                | history::HistoryError::Replay(agent::HistoryReplayError::Interrupted) => PreparationError::Deferred,
+                _ => PreparationError::InvalidCohort,
+            })?;
+            let (current_draws, current_proposal_ess, current_resampled) = match selected.cohort {
+                CohortMethod::Enumerated => (0, None, false),
+                CohortMethod::ImportanceSampled { draws, proposal_ess } => (draws, Some(proposal_ess), false),
+                CohortMethod::Resampled { draws, proposal_ess } => (draws, Some(proposal_ess), true),
+                CohortMethod::HistorySampled { .. } => return Err(PreparationError::InvalidCohort),
+            };
+            let cohort = CohortMethod::HistorySampled {
+                current_draws,
+                current_proposal_ess,
+                current_resampled,
+                model: completed.model,
+                proposals: completed.proposals,
+                slots: selected.slots.len(),
+            };
+            (
+                completed.tables,
+                cohort,
+                "joint-deal-model-v1+legal-exchange-history-feature-bid-v1",
+            )
+        } else {
+            (
+                replay_worlds(&view, selected.worlds, keep_going)?,
+                selected.cohort,
+                "joint-deal-model-v1",
+            )
+        };
         let mut params = ctx.params.clone();
         params.return_worlds = 0;
         params.plan_worlds = 0;
         params.endgame_tricks = params.endgame_tricks.min(2);
         params.endgame_worlds = params.endgame_worlds.min(8);
-        let tables = tables?;
         let context = PlanningContext {
             observer: ctx.me,
             belief_scope: BeliefScope::CurrentInformation,
@@ -183,17 +174,20 @@ impl Forecast {
             requested_worlds: n,
             proposal_draws,
         };
-        Some(Self {
+        check(keep_going)?;
+        let forecast = Self {
             tables,
             players: RefCell::new(std::array::from_fn(|_| HeuristicAgent::new(params.clone()))),
             deadline,
             provenance: Provenance {
-                belief_model: "joint-deal-model-v1",
+                belief_model,
                 response_model: "seat-policy-completed-primitives-v2",
                 cohort,
             },
             context,
-        })
+        };
+        check(keep_going)?;
+        Ok(forecast)
     }
 }
 

@@ -136,6 +136,18 @@ fn cohort_json(method: CohortMethod) -> Value {
         CohortMethod::Resampled { draws, proposal_ess } => {
             json!({"method": "resampled", "draws": draws, "proposal_ess": proposal_ess})
         }
+        CohortMethod::HistorySampled {
+            current_draws,
+            current_proposal_ess,
+            current_resampled,
+            model,
+            proposals,
+            slots,
+        } => json!({"method": "conditional_history_sampled", "history_model": model,
+            "history_proposals": proposals, "history_slots": slots,
+            "current_allocations": {"method": if current_draws == 0 { "enumerated" }
+                else if current_resampled { "resampled" } else { "importance_sampled" },
+                "draws": current_draws, "proposal_ess": current_proposal_ess}}),
     }
 }
 

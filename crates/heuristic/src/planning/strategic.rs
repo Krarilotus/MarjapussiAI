@@ -3,7 +3,7 @@ use super::common::{self, Allowance, Failure, Mode};
 use super::retained::view;
 use super::sequence::Candidate;
 use super::Forecast;
-use crate::concepts::sequence::{authored_programs_with_reconsideration, SequenceError, MAX_RECONSIDERATIONS};
+use crate::concepts::sequence::{authored_programs_with_reconsideration, MAX_RECONSIDERATIONS};
 use crate::{Ctx, Decision};
 use engine::GameAction;
 use std::time::{Duration, Instant};
@@ -38,14 +38,17 @@ pub(super) fn choose(ctx: &Ctx<'_>, legal: &[GameAction], mut fallback: Decision
             .as_ref()
             .map_or(0, |plan| plan.origin.requested_worlds)
     };
-    let Some(forecast) = Forecast::new(ctx, requested_worlds, deadline) else {
-        common::defer(
-            ctx,
-            &mut fallback,
-            mode,
-            Failure::before_evaluation(SequenceError::InvalidCohort, None),
-        );
-        return fallback;
+    let forecast = match Forecast::new(ctx, requested_worlds, deadline) {
+        Ok(forecast) => forecast,
+        Err(error) => {
+            common::defer(
+                ctx,
+                &mut fallback,
+                mode,
+                Failure::before_evaluation(error.reason(), None),
+            );
+            return fallback;
+        }
     };
     let initial = view(ctx);
     let programs = match authored_programs_with_reconsideration(&initial, legal, MAX_RECONSIDERATIONS) {

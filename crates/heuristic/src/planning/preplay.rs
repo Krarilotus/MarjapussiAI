@@ -10,7 +10,9 @@ use super::common::{self, Allowance, Failure, Mode};
 use super::retained::RetainedPlan;
 use super::sequence::{self, Candidate};
 use super::Forecast;
-use crate::concepts::sequence::{Actions, Guard, Node, Program, SequenceError, Stage, MAX_BOUNDARY_DEPTH};
+#[cfg(test)]
+use crate::concepts::sequence::SequenceError;
+use crate::concepts::sequence::{Actions, Guard, Node, Program, Stage, MAX_BOUNDARY_DEPTH};
 use crate::{Ctx, Decision, RuleId};
 
 /// Finite coverage, not a claim that every legal auction ends within this many
@@ -117,14 +119,17 @@ pub(crate) fn choose(
 ) -> Decision {
     let deadline = ctx.deadline.map_or(deadline, |outer| outer.min(deadline));
     let mode = Mode::Preplay { replacement_rule };
-    let Some(forecast) = Forecast::new(ctx, worlds, deadline) else {
-        common::defer(
-            ctx,
-            &mut baseline,
-            mode,
-            Failure::before_evaluation(SequenceError::InvalidCohort, Some(actions.len())),
-        );
-        return baseline;
+    let forecast = match Forecast::new(ctx, worlds, deadline) {
+        Ok(forecast) => forecast,
+        Err(error) => {
+            common::defer(
+                ctx,
+                &mut baseline,
+                mode,
+                Failure::before_evaluation(error.reason(), Some(actions.len())),
+            );
+            return baseline;
+        }
     };
     let candidates: Vec<_> = actions
         .iter()
