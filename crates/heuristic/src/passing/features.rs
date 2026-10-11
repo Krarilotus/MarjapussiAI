@@ -33,7 +33,7 @@ pub const FORTH_FEATURES: [&str; 13] = [
 ];
 
 /// The pass back's features, in the order of `PASSING_WEIGHTS.back`.
-pub const BACK_FEATURES: [&str; 16] = [
+pub const BACK_FEATURES: [&str; 17] = [
     "standing_after",
     "aces_entry_low_kept",
     "pair_broken",
@@ -50,16 +50,17 @@ pub const BACK_FEATURES: [&str; 16] = [
     "aces_x_mh_holds_suit",
     "green",
     "tens",
+    "aces_back_over_half",
 ];
 
 /// KB `passing_weights`, per unit of each feature.
 pub struct PassingWeights {
     pub forth: [f64; 13],
-    pub back: [f64; 16],
+    pub back: [f64; 17],
 }
 
 /// From the human choice analysis (conditional logit over every option of the 1,575 human
-/// passes each way, `tools/kbstudy/passfit.py`, variant `broken`), owner-requested ("We should
+/// passes each way, `tools/kbstudy/passfit.py`, variants `broken`, and `acesplit` for the pass back), owner-requested ("We should
 /// try it, i'll review it through the policy comparison to humans"). Empirically fitted;
 /// held-out playing strength has not been established.
 pub const PASSING_WEIGHTS: PassingWeights = PassingWeights {
@@ -67,7 +68,8 @@ pub const PASSING_WEIGHTS: PassingWeights = PassingWeights {
         -3.60, -5.37, 2.68, 2.70, 0.16, -1.10, -2.30, -0.73, 1.12, -1.13, 0.84, 0.28, -0.20,
     ],
     back: [
-        1.46, 2.56, -2.06, -1.47, 1.71, -0.67, 1.03, -0.62, -0.04, 1.14, 1.68, -0.29, 0.13, -0.14, 0.04, -0.05,
+        1.46, 2.58, -2.06, -1.47, 1.72, -0.67, 1.02, -0.59, -0.04, 1.14, 1.68, -0.29, 0.13, -0.13, 0.04, -0.05,
+        -0.61,
     ],
 };
 
@@ -149,7 +151,7 @@ pub fn back_plan(hand: CardSet, partner_half: [f32; 4], min_confidence: f32) -> 
 }
 
 /// The pass back's features of giving back `y` (VH; the partner is MH) under the selected trump plan.
-pub fn back_features(hand: CardSet, partner: &Partner, trump: Option<Suit>, y: CardSet) -> [f64; 16] {
+pub fn back_features(hand: CardSet, partner: &Partner, trump: Option<Suit>, y: CardSet) -> [f64; 17] {
     let kept = hand - y;
     let emptied = |s: Suit| !(hand & CardSet::suit(s)).is_empty() && (kept & CardSet::suit(s)).is_empty();
     let (trump_given, top_kept) = match trump {
@@ -187,6 +189,8 @@ pub fn back_features(hand: CardSet, partner: &Partner, trump: Option<Suit>, y: C
             .sum(),
         (y & CardSet::suit(Suit::Green)).len() as f64,
         (y & CardSet::TENS).len() as f64,
+        // K5b (owner): aces go back for schnippeln, about half of mine rounded up.
+        (aces.len() as f64 - (hand & CardSet::ACES).len().div_ceil(2) as f64).max(0.0),
     ]
 }
 
