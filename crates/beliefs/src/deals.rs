@@ -1,6 +1,9 @@
 //! Joint signal likelihoods over fact-consistent deals, shared by planning and search.
 
-use std::cell::{OnceCell, Ref, RefCell};
+use std::{
+    cell::{Ref, RefCell},
+    sync::{Arc, OnceLock},
+};
 
 use engine::CardSet;
 use knowledge::{Belief, DealSpace, Hands, Knowledge, Passed};
@@ -13,20 +16,33 @@ use crate::{Mind, Signals};
 /// Fact-consistent allocations and their joint evidence weights from one Mind
 /// epoch. Inputs are immutable; the fact DP is constructed only on its first
 /// read, and weighting memoizes exchange calculations.
-/// Borrowed locally, so Mind remains Send without locks or shared pointers.
+/// Its immutable fact DP is shared with exact marginal reads in this Mind only.
 pub struct DealModel {
-    knowledge: Knowledge,
-    space: OnceCell<DealSpace>,
+    facts: Arc<FactSpace>,
     weights: DealWeights,
+}
+
+/// One lazy, unweighted DP for an own/public fact-epoch pair. Sharing this small
+/// owner avoids copying the DP or constructing belief weights for exact reads.
+/// OnceLock preserves Mind's Send contract; no process-global cache is involved.
+pub(crate) struct FactSpace {
+    knowledge: Knowledge,
+    space: OnceLock<DealSpace>,
+}
+
+impl FactSpace {
+    pub(crate) fn space(&self) -> &DealSpace {
+        self.space.get_or_init(|| {
+            let _timing = crate::profile::scope("belief.deal_space");
+            self.knowledge.deals()
+        })
+    }
 }
 
 impl DealModel {
     /// Construct the fact DP once; weights-only consumers do not pay for it.
     pub fn space(&self) -> &DealSpace {
-        self.space.get_or_init(|| {
-            let _timing = crate::profile::scope("belief.deal_space");
-            self.knowledge.deals()
-        })
+        self.facts.space()
     }
 
     pub fn weights(&self) -> &DealWeights {
@@ -53,6 +69,23 @@ pub struct DealWeights {
 }
 
 impl Mind {
+    pub(crate) fn fact_space(&self) -> Arc<FactSpace> {
+        // Epochs are identities within this Mind, not portable cache keys.
+        // Undo advances them; signal-only changes cannot change the fact DP.
+        let key = (self.epochs().fact, self.public.fact_epoch());
+        let mut slot = self.fact_space.borrow_mut();
+        if slot.as_ref().map(|(epoch, _)| *epoch) != Some(key) {
+            *slot = Some((
+                key,
+                Arc::new(FactSpace {
+                    knowledge: *self.knowledge(),
+                    space: OnceLock::new(),
+                }),
+            ));
+        }
+        Arc::clone(&slot.as_ref().expect("computed above").1)
+    }
+
     /// Reuse one weight model per (own epochs, public fact epoch), preserving the
     /// lazy fact DP across signal-only refreshes while both fact epochs match.
     /// The model's RefCell is separate from the query/derived caches; callbacks
@@ -62,13 +95,8 @@ impl Mind {
         let key = (self.epochs(), self.public.fact_epoch());
         if self.model.borrow().as_ref().map(|(e, p, _)| (*e, *p)) != Some(key) {
             let weights = self.deal_weights();
-            let space = match self.model.borrow_mut().take() {
-                Some((epochs, public, model)) if epochs.fact == key.0.fact && public == key.1 => model.space,
-                _ => OnceCell::new(),
-            };
             let model = DealModel {
-                knowledge: *self.knowledge(),
-                space,
+                facts: self.fact_space(),
                 weights,
             };
             *self.model.borrow_mut() = Some((key.0, key.1, model));

@@ -2,7 +2,7 @@
 //! keeps card and hand-size sums after factors (IPF), and suit-count distributions.
 
 use engine::{CardSet, CARDS};
-use knowledge::Knowledge;
+use knowledge::{DealSpace, Knowledge};
 use observation::Seat;
 
 use crate::Table;
@@ -12,8 +12,7 @@ pub const SUIT_CARDS: usize = 9;
 
 /// The exact base: P(card in seat) over all deals consistent with the facts (the knowledge's
 /// deal space; the own hand exact). Zero rows if the facts are inconsistent.
-pub fn base(k: &Knowledge) -> Table {
-    let space = k.deals();
+pub fn base(space: &DealSpace) -> Table {
     let mut t = [[0.0f32; CARDS]; 4];
     let total = space.count();
     if total == 0 {

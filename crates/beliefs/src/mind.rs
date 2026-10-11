@@ -191,6 +191,8 @@ pub struct Mind {
     pub(crate) cache: RefCell<Cache>,
     /// Independent borrow owner: model reads can coexist with concept cache updates.
     pub(crate) model: RefCell<Option<(Epochs, u32, crate::DealModel)>>,
+    /// Shared only by exact marginals and the joint model of this Mind.
+    pub(crate) fact_space: RefCell<Option<((u32, u32), std::sync::Arc<crate::deals::FactSpace>)>>,
 }
 
 impl Mind {
@@ -208,6 +210,7 @@ impl Mind {
             next_signal: 1,
             cache: RefCell::new(Cache::default()),
             model: RefCell::new(None),
+            fact_space: RefCell::new(None),
         }
     }
 
@@ -346,7 +349,8 @@ impl Mind {
             }
         }
         let _timing = crate::profile::scope("belief.base");
-        let t = table::base(self.knowledge());
+        let facts = self.fact_space();
+        let t = table::base(facts.space());
         self.cache.borrow_mut().base = Some((epoch, t));
         t
     }

@@ -33,6 +33,7 @@ fn mind() -> Mind {
 // eager DP, likelihood and exchange construction before traversal starts.
 fn assert_no_model(mind: &Mind) {
     assert!(mind.model.borrow().is_none());
+    assert!(mind.fact_space.borrow().is_none());
     let cache = mind.cache.borrow();
     assert!(cache.concepts.is_none());
     assert!(cache.base.is_none());
