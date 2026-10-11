@@ -70,49 +70,93 @@ fn fact_dp_reuse_exact_first_and_model_first_share_without_eager_weights() {
 
 #[test]
 fn fact_dp_reuse_tracks_bid_play_undo_and_changed_history_like_fresh_reads() {
-    let mut warm = mind();
-    let start = warm.knowledge().certain(0);
-    warm.base();
-    let mut prior = warm.fact_space();
-    for event in [
-        SeatEvent::Bid { seat: 2, value: 130 },
-        SeatEvent::Undone,
-        SeatEvent::Bid { seat: 2, value: 125 },
-        SeatEvent::CardPlayed {
-            seat: 0,
-            card: card("g-6"),
-        },
-        SeatEvent::Undone,
-        SeatEvent::CardPlayed {
-            seat: 0,
-            card: card("e-6"),
-        },
-    ] {
-        let before = (warm.epochs().fact, warm.public.fact_epoch());
-        warm.apply(&event).unwrap();
-        // Exercise exact-first invalidation while the previous model still exists.
-        warm.base();
-        let facts = warm.fact_space();
-        let same_facts = before == (warm.epochs().fact, warm.public.fact_epoch());
-        assert_eq!(Arc::ptr_eq(&prior, &facts), same_facts);
-        assert!(Arc::ptr_eq(&facts, &warm.deal_model().facts));
+    use engine::{ActionType, Card, GameAction, PlaceAtTable};
 
-        let mut fresh = Mind::new(0, start, warm.kinds(), warm.params().clone());
-        for accepted in warm.events() {
-            fresh.apply(accepted).unwrap();
+    let start = mind().knowledge().certain(0);
+    let mut hands = [start, CardSet::EMPTY, CardSet::EMPTY, CardSet::EMPTY];
+    let mut unknown = (CardSet::ALL - start).iter();
+    for hand in &mut hands[1..] {
+        *hand = unknown
+            .by_ref()
+            .take(9)
+            .fold(CardSet::EMPTY, |hand, card| hand | CardSet::single(card));
+    }
+    // In both lanes seat 0 opens with its original hand. The contract lane
+    // completes auction and both passes; the partner's four cards are returned.
+    for contract in [false, true] {
+        let mut table = agent::Table::new(&hands.map(|hand| hand.cards()));
+        let mut warm = Mind::new(0, start, table.kinds, BeliefParams::default());
+        warm.base();
+        let mut seen = 0;
+        let mut apply = |table: &mut agent::Table, seat, action_type| {
+            let action = GameAction {
+                player: PlaceAtTable(seat),
+                action_type,
+            };
+            assert!(table.game.is_legal(&action), "illegal fixture action: {action:?}");
+            table.apply(action);
+            let view = table.view(0);
+            for event in &view.events[seen..] {
+                let prior = warm.fact_space();
+                let before = (warm.epochs().fact, warm.public.fact_epoch());
+                warm.apply(event).unwrap_or_else(|error| panic!("{event:?}: {error:?}"));
+                // Exact-first refresh must not reuse a stale model's allocation DP.
+                warm.base();
+                let facts = warm.fact_space();
+                let same_facts = before == (warm.epochs().fact, warm.public.fact_epoch());
+                assert_eq!(Arc::ptr_eq(&prior, &facts), same_facts);
+                assert!(Arc::ptr_eq(&facts, &warm.deal_model().facts));
+            }
+            seen = view.events.len();
+            assert_eq!(warm.knowledge(), view.knowledge);
+            // Replay the canonical accepted branch into a cold Mind, not the
+            // warm cache's retained DP or a hand-written rule relaxation.
+            let mut fresh = Mind::new(0, start, warm.kinds(), warm.params().clone());
+            for accepted in warm.events() {
+                fresh.apply(accepted).unwrap();
+            }
+            assert_eq!(warm.knowledge(), fresh.knowledge());
+            assert_eq!(warm.base(), fresh.base());
+            let a = warm.deal_model();
+            let b = fresh.deal_model();
+            assert_eq!(a.space().holder_counts(), b.space().holder_counts());
+            let mut rng = StdRng::seed_from_u64(91);
+            for _ in 0..16 {
+                let hands = a.space().sample(&mut rng).unwrap();
+                assert_eq!(a.weights().weight(&hands), b.weights().weight(&hands));
+            }
+            assert_matches_legacy(&warm);
+        };
+        if contract {
+            apply(&mut table, 0, ActionType::NewBid(130));
+            apply(&mut table, 0, ActionType::UndoRequest);
+            apply(&mut table, 1, ActionType::UndoAccept);
+            apply(&mut table, 3, ActionType::UndoAccept);
+            apply(&mut table, 0, ActionType::NewBid(125));
+        } else {
+            apply(&mut table, 0, ActionType::StopBidding);
         }
-        assert_eq!(warm.knowledge(), fresh.knowledge());
-        assert_eq!(warm.base(), fresh.base());
-        let a = warm.deal_model();
-        let b = fresh.deal_model();
-        assert_eq!(a.space().holder_counts(), b.space().holder_counts());
-        let mut rng = StdRng::seed_from_u64(91);
-        for _ in 0..16 {
-            let hands = a.space().sample(&mut rng).unwrap();
-            assert_eq!(a.weights().weight(&hands), b.weights().weight(&hands));
+        for seat in 1..4 {
+            apply(&mut table, seat, ActionType::StopBidding);
         }
-        assert_matches_legacy(&warm);
-        prior = facts;
+        if contract {
+            let mut passed: [Card; 4] = hands[2].cards()[..4].try_into().unwrap();
+            passed.sort_unstable_by(|a, b| b.cmp(a));
+            apply(&mut table, 2, ActionType::Pass(passed));
+            apply(&mut table, 0, ActionType::Pass(passed));
+        }
+        assert_eq!(table.hand(0), start);
+        apply(&mut table, 0, ActionType::CardPlayed(Card::from_index(card("g-6"))));
+        apply(&mut table, 0, ActionType::UndoRequest);
+        apply(&mut table, 1, ActionType::UndoAccept);
+        apply(&mut table, 3, ActionType::UndoAccept);
+        // First trick: with no ace but green cards, an acorn opening is illegal.
+        // Undo restores that obligation as well as the hand and allocation facts.
+        assert!(!table.game.is_legal(&GameAction {
+            player: PlaceAtTable(0),
+            action_type: ActionType::CardPlayed(Card::from_index(card("e-6"))),
+        }));
+        apply(&mut table, 0, ActionType::CardPlayed(Card::from_index(card("g-7"))));
     }
 }
 
