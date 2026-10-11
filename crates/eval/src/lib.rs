@@ -13,6 +13,7 @@
 pub mod detectors;
 pub mod duplicate;
 pub mod gamestats;
+pub mod matchstats;
 pub mod meter;
 pub mod stats;
 pub mod suite;
