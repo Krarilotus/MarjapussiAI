@@ -62,6 +62,8 @@ The AI is playable, but there is more to improve:
 - Playing-strength qualification remains open. The
   [targeted review](docs/checkpoints/2026-10-11-conditional-plan-dryrun.md)
   records remaining control-sequence failures and measured performance improvements.
+  The [conditional-sequence proposal](docs/design/conditional-sequences.md) describes
+  adaptive plans, persistent intent and dependency-aware reuse for the next iteration.
 - Agreement with human moves measures similarity, not playing strength.
 
 The [next steps](docs/NEXT_STEPS.md) and

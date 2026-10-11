@@ -57,6 +57,17 @@ No GPU training or new runtime graph framework is needed for the next iterations
 
 ## Next implementation task
 
+Implement the first vertical slice of the
+[conditional-sequence design](design/conditional-sequences.md): private plan
+receipts and one shared executor for threat removal, entry, pair activation and
+retained control. New evidence must revise value as well as feasibility. Validate
+restore/undo/cache semantics and all-seat preplay preparation before enabling the
+strategic change. The [dryrun checkpoint](checkpoints/2026-10-11-conditional-plan-dryrun.md)
+is incomplete strategically; preserving resources alone did not complete these
+sequences. Reuse its recorded cases and close controls, and measure formation,
+execution and repair separately. [Research prompts](design/sequence-research-prompts.md)
+cover adaptive planning and incremental probability computation.
+
 The paired live Debug smoke passes; use concrete owner-played mistakes to
 choose the next small iteration. The [bounded return checkpoint](checkpoints/2026-10-09-return-planning.md)
 records the fixed comparison, human development sample, deadline limitations and
