@@ -89,11 +89,7 @@ pub fn class_prior(q: &[f32; 36]) -> [f32; N_CLASSES] {
 /// of the uniform deal of the unseen cards (`class_prior`) times the likelihood. Returns the
 /// class features and per card P(the seat holds it): a half by its suit's expected halves, an
 /// ace by the ace odds, the rest uniform; 0 for the reader's own cards.
-pub fn read_class(
-    reader: CardSet,
-    held: usize,
-    likelihood: Option<&[f32; N_CLASSES]>,
-) -> (ClassFeatures, [f32; 36]) {
+pub fn read_class(reader: CardSet, held: usize, likelihood: Option<&[f32; N_CLASSES]>) -> (ClassFeatures, [f32; 36]) {
     let unseen = CardSet::ALL - reader;
     let q0 = held as f32 / unseen.len().max(1) as f32;
     let mut q = [0.0f32; 36];

@@ -51,7 +51,9 @@ impl Partner {
         let held = HAND_SIZE;
         // P(the partner holds none of `n` given unseen cards) = C(unseen - n, 9) / C(unseen, 9).
         let none = |n: u32| -> f32 {
-            (0..held).map(|i| (unseen - n as usize).saturating_sub(i) as f32 / (unseen - i) as f32).product()
+            (0..held)
+                .map(|i| (unseen - n as usize).saturating_sub(i) as f32 / (unseen - i) as f32)
+                .product()
         };
         let p = held as f32 / unseen as f32;
         let mut cards = [0.0; engine::CARDS];
@@ -103,7 +105,9 @@ pub(crate) fn level0_exchange(
     let (d, p) = (declarer as usize, partner(declarer) as usize);
     let giver = hands[p];
     let reads_declarer = Partner::read(giver, likelihood[d].as_deref());
-    let forth = best_pass(giver, &PASSING_WEIGHTS.forth, |x| forth_features(giver, &reads_declarer, known[p], x));
+    let forth = best_pass(giver, &PASSING_WEIGHTS.forth, |x| {
+        forth_features(giver, &reads_declarer, known[p], x)
+    });
     hands[p] -= forth;
     hands[d] |= forth;
     let taker = hands[d];
@@ -112,7 +116,9 @@ pub(crate) fn level0_exchange(
     let mut estimate = Partner::read(taker - forth, likelihood[p].as_deref());
     forth.iter().for_each(|c| estimate.cards[c as usize] = 0.0);
     let trump = back_plan(taker, estimate.half, partner_half_conf);
-    let back = best_pass(taker, &PASSING_WEIGHTS.back, |y| back_features(taker, &estimate, trump, y));
+    let back = best_pass(taker, &PASSING_WEIGHTS.back, |y| {
+        back_features(taker, &estimate, trump, y)
+    });
     hands[d] -= back;
     hands[p] |= back;
     hands
