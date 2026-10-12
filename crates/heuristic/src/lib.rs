@@ -76,6 +76,23 @@ impl std::fmt::Display for HeuristicError {
 
 impl std::error::Error for HeuristicError {}
 
+/// The owner's time budgets (2026-10-12): planning (passing, raising) under 5 s, bidding under
+/// 1 s, card play under 100 ms, so the agent feels believable. Bounded evaluations stop at four
+/// fifths of the budget; the last fifth is left for the work after them.
+fn budget(params: &Params, legal: &[GameAction]) -> std::time::Duration {
+    let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));
+    let ms = if has(|t| matches!(t, ActionType::Pass(_)))
+        || has(|t| matches!(t, ActionType::CardPlayed(_))) && has(|t| matches!(t, ActionType::NewBid(_)))
+    {
+        params.planning_budget_ms
+    } else if has(|t| matches!(t, ActionType::NewBid(_))) {
+        params.bidding_budget_ms
+    } else {
+        params.play_budget_ms
+    };
+    std::time::Duration::from_millis(ms as u64 * 4 / 5)
+}
+
 /// Everything a rule module needs for one decision.
 pub(crate) struct Ctx<'a> {
     pub me: Seat,
@@ -265,6 +282,7 @@ impl HeuristicAgent {
             return decision(&legal[0], RuleId::HX1, vec![]);
         }
         let seed = self.params.seed ^ (view.seat as u64) << 56 ^ view.events.len() as u64;
+        let started = std::time::Instant::now();
         let mind = sync(&mut self.mind, &self.params, view);
         let ctx = Ctx {
             me: view.seat,
@@ -273,7 +291,7 @@ impl HeuristicAgent {
             params: &self.params,
             solver: &self.solver,
             seed,
-            deadline: None,
+            deadline: Some(started + budget(&self.params, &legal)),
             routes: RefCell::new(None),
             concepts: RefCell::new(concepts::Reads::default()),
         };

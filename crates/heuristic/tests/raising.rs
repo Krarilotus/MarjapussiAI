@@ -239,10 +239,15 @@ fn interrupted_routes_are_not_relabelled_as_certified() {
 
 #[test]
 fn two_pairs_raise_by_the_expected_contract_score() {
+    // HZ-1 with the fitted contract_estimate (the route raise is off here).
     let cards = ["r-K", "r-O", "s-K", "s-O", "e-A", "g-6", "g-7", "e-6", "e-7"];
     let table = preplay(&cards, 140, 0);
     let (seat, legal) = table.to_act().unwrap();
-    let d = HeuristicAgent::new(Params::default()).decide(&table.view(seat), legal);
+    let params = Params {
+        route_raise: false,
+        ..Params::default()
+    };
+    let d = HeuristicAgent::new(params).decide(&table.view(seat), legal);
     assert_eq!(d.rule, RuleId::HZ1, "{d:?}");
     let target = bid_of(&d).unwrap();
     assert!(target > 140, "{d:?}");

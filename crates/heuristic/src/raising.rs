@@ -87,8 +87,8 @@ const TEAM_POINTS: TeamPoints = TeamPoints {
     own_pairs_share: 0.7117,
     given_pairs_share: 0.503,
     residuals: [
-        -278.7, -86.2, -65.9, -52.1, -42.9, -33.1, -24.7, -16.9, -11.9, -6.7, -2.2, 4.0, 10.4, 16.6, 22.9, 32.6,
-        43.4, 54.2, 75.3, 98.1, 179.3,
+        -278.7, -86.2, -65.9, -52.1, -42.9, -33.1, -24.7, -16.9, -11.9, -6.7, -2.2, 4.0, 10.4, 16.6, 22.9, 32.6, 43.4,
+        54.2, 75.3, 98.1, 179.3,
     ],
 };
 
@@ -114,8 +114,15 @@ impl TeamPoints {
 /// auction, the believed `derived_pair_value`).
 pub(crate) fn contract_estimate(hand: CardSet, own_pairs: i32, partner_pairs: f32) -> f32 {
     let t = &TEAM_POINTS;
-    let trump_len = hand.pair_suits().map(|s| (hand & CardSet::suit(s)).len()).max().unwrap_or(0);
-    let voids = SUITS.into_iter().filter(|&s| (hand & CardSet::suit(s)).is_empty()).count();
+    let trump_len = hand
+        .pair_suits()
+        .map(|s| (hand & CardSet::suit(s)).len())
+        .max()
+        .unwrap_or(0);
+    let voids = SUITS
+        .into_iter()
+        .filter(|&s| (hand & CardSet::suit(s)).is_empty())
+        .count();
     t.intercept
         + t.per_standing * knowledge::own_standing_of(hand).len() as f32
         + t.per_ace * (hand & CardSet::ACES).len() as f32
@@ -149,6 +156,37 @@ fn given_back(ctx: &Ctx) -> CardSet {
     given
 }
 
+/// HZ-1 by route (Astra, the owner on 2026-10-12: a raise counts the pairs and the points of
+/// clear lines, not a flat add-on): the team's final points and tricks over the believed
+/// worlds (`outlook::final_outcomes`), and the legal target with the best expected engine score
+/// difference (failure, the defenders' points and schwarz included), if it beats keeping the
+/// current value. HZ-3 caps it.
+fn route_raise(ctx: &Ctx, legal: &[GameAction], cap: i32) -> Option<(GameAction, i32, Vec<crate::Fact>)> {
+    let outcomes = crate::outlook::final_outcomes(ctx)?;
+    let us = ctx.me % 2;
+    let value = ctx.k.value();
+    let keep = outcomes.score_difference(us, value);
+    let (action, target, best) = legal
+        .iter()
+        .filter_map(|a| match a.action_type {
+            ActionType::NewBid(v) if v <= cap => Some((*a, v, outcomes.score_difference(us, v))),
+            _ => None,
+        })
+        .max_by(|a, b| a.2.total_cmp(&b.2).then(b.1.cmp(&a.1)))?;
+    (best > keep).then(|| {
+        (
+            action,
+            target,
+            vec![
+                fact("route_points", outcomes.mean_points(us)),
+                fact("expected_score", best),
+                fact("expected_score_keep", keep),
+                fact("raise_target", target),
+            ],
+        )
+    })
+}
+
 /// HZ-1 with HZ-3: the best expected-score raise, if it beats keeping the current value.
 fn estimated_raise(ctx: &Ctx, legal: &[GameAction]) -> Option<(GameAction, i32, Vec<crate::Fact>)> {
     if !ctx.params.estimated_raise || ctx.k.declarer() != Some(ctx.me) || !ctx.k.played().is_empty() {
@@ -158,11 +196,18 @@ fn estimated_raise(ctx: &Ctx, legal: &[GameAction]) -> Option<(GameAction, i32, 
     let given = given_back(ctx);
     let own_pairs: i32 = hand.pair_suits().map(beliefs::conventions::pair_value).sum();
     let given_pairs: i32 = given.pair_suits().map(beliefs::conventions::pair_value).sum();
-    let t = &TEAM_POINTS;
-    let estimate = contract_estimate(hand, own_pairs, given_pairs as f32);
     let value = ctx.k.value();
     // HZ-3 [O]: never raise across 140 without a certain team pair.
-    let cap = if value < 140 && own_pairs + given_pairs == 0 { 140 } else { i32::MAX };
+    let cap = if value < 140 && own_pairs + given_pairs == 0 {
+        140
+    } else {
+        i32::MAX
+    };
+    if ctx.params.route_raise {
+        return route_raise(ctx, legal, cap);
+    }
+    let t = &TEAM_POINTS;
+    let estimate = contract_estimate(hand, own_pairs, given_pairs as f32);
     let score = |v: i32| (2.0 * t.p_reach(estimate, v) - 1.0) * v as f32;
     let keep = score(value);
     let (action, target) = legal
@@ -305,6 +350,10 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], cards: &[GameAction]) -> D
     let mut d = play::decide(ctx, cards);
     d.why.extend([
         fact("raise_floor", certificate.map_or(0, |c| c.floor)),
+        fact(
+            "route_points",
+            crate::outlook::final_outcomes(ctx).map_or(-1.0, |o| o.mean_points(ctx.me % 2)),
+        ),
         fact("raise_target", ctx.k.value()),
     ]);
     d

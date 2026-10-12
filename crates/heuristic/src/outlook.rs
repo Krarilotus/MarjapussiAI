@@ -343,16 +343,29 @@ pub(crate) struct WorldValues<K> {
     p: Vec<f64>,
 }
 
+/// At least this many worlds are evaluated before a deadline may stop an evaluation (so the
+/// guard's standard error has a sample to stand on).
+const MIN_WORLDS: usize = 8;
+
 impl<K: Copy + PartialEq> WorldValues<K> {
-    /// Evaluates every option in every world; `None` without worlds or options.
-    fn over(worlds: &[World], options: Vec<K>, mut value: impl FnMut(&World, &K) -> Option<i32>) -> Option<Self> {
+    /// Evaluates every option in every world, until the decision's deadline (after
+    /// `MIN_WORLDS`); `None` without worlds or options. The pool is a sample, so a prefix is one.
+    fn over(
+        ctx: &Ctx,
+        worlds: &[World],
+        options: Vec<K>,
+        mut value: impl FnMut(&World, &K) -> Option<i32>,
+    ) -> Option<Self> {
         let total: f64 = worlds.iter().map(|w| w.weight).sum();
         if options.is_empty() || total <= 0.0 {
             return None;
         }
         let mut values = vec![Vec::new(); options.len()];
         let mut p = Vec::new();
-        for w in worlds {
+        for (i, w) in worlds.iter().enumerate() {
+            if i >= MIN_WORLDS && ctx.deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                break;
+            }
             let row: Option<Vec<i32>> = options.iter().map(|o| value(w, o)).collect();
             if let Some(row) = row {
                 values.iter_mut().zip(row).for_each(|(v, x)| v.push(x as f64));
@@ -431,7 +444,7 @@ fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<(WorldVal
         .flat_map(|m| Plan::all(us).map(move |p| (m, p)))
         .collect();
     let values = ctx.with_worlds(|worlds: &[World]| {
-        WorldValues::over(worlds, options, |w, &(option, plan)| {
+        WorldValues::over(ctx, worlds, options, |w, &(option, plan)| {
             let state = FastState::from_public(public, w.hands).ok()?;
             let (mut s, mut k) = (state, known);
             match option {
@@ -481,6 +494,91 @@ pub(crate) fn route_choice(
             fact("team_plan", plans[best].code()),
         ],
     )))
+}
+
+/// The game's end per believed world from the current position (before a card of the trick is
+/// played), under our team's best activation plan: the joint distribution of both teams'
+/// points and tricks (Astra: a route-derived distribution, not a sum of bonuses; it keeps a
+/// failed entry, an unactivated pair and a lost last trick together, and the tricks for schwarz).
+pub(crate) struct Outcomes {
+    pub p: Vec<f64>,
+    pub points: Vec<[i32; 2]>,
+    pub tricks: Vec<[u8; 2]>,
+}
+
+impl Outcomes {
+    /// Our expected engine score difference if our team plays the contract at `value`.
+    pub fn score_difference(&self, us: u8, value: i32) -> f64 {
+        let us = (us % 2) as usize;
+        self.p
+            .iter()
+            .zip(self.points.iter().zip(&self.tricks))
+            .map(|(p, (points, tricks))| {
+                let outcome = engine::GameOutcome {
+                    playing_team: Some(us as u8),
+                    game_value: value,
+                    team_points: *points,
+                    team_tricks: *tricks,
+                };
+                let s = engine::game_scores(&outcome, engine::SCHWARZ_FACTOR_FIFTHS);
+                p * (s[us] - s[1 - us]) as f64
+            })
+            .sum()
+    }
+
+    /// Our team's expected final points.
+    pub fn mean_points(&self, us: u8) -> f64 {
+        self.p
+            .iter()
+            .zip(&self.points)
+            .map(|(p, pts)| p * pts[(us % 2) as usize] as f64)
+            .sum()
+    }
+}
+
+/// `Outcomes` from the position before my lead (the raise): every team plan is played out in
+/// every world, and the plan with the best expected points difference is the team's.
+pub(crate) fn final_outcomes(ctx: &Ctx) -> Option<Outcomes> {
+    let _timing = beliefs::profile::scope("outlook.outcomes");
+    let public = ctx.k.public_state(ctx.me, PlayPhase::Cards);
+    let us = ctx.me % 2;
+    let known = Known::new(ctx);
+    let ends = |w: &World, plan: Plan| {
+        let mut s = FastState::from_public(public, w.hands).ok()?;
+        let mut k = known;
+        playout(&mut s, &mut k, Some(plan));
+        Some(s)
+    };
+    let plans: Vec<Plan> = Plan::all(us).collect();
+    ctx.with_worlds(|worlds: &[World]| {
+        // Per world, every plan's end; worlds past the deadline (after `MIN_WORLDS`) are left out.
+        let mut rows: Vec<(f64, Vec<FastState>)> = Vec::new();
+        for (i, w) in worlds.iter().enumerate() {
+            if i >= MIN_WORLDS && ctx.deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                break;
+            }
+            if let Some(ends) = plans.iter().map(|&plan| ends(w, plan)).collect::<Option<Vec<_>>>() {
+                rows.push((w.weight, ends));
+            }
+        }
+        let mass: f64 = rows.iter().map(|r| r.0).sum();
+        if mass <= 0.0 {
+            return None;
+        }
+        let mean = |j: usize| rows.iter().map(|(p, e)| p * margin(&e[j], us) as f64).sum::<f64>();
+        let best = (0..plans.len()).fold(0, |b, j| if mean(j) > mean(b) { j } else { b });
+        Some(Outcomes {
+            p: rows.iter().map(|r| r.0 / mass).collect(),
+            points: rows
+                .iter()
+                .map(|r| [r.1[best].points(0), r.1[best].points(1)])
+                .collect(),
+            tricks: rows
+                .iter()
+                .map(|r| [r.1[best].tricks_won(0), r.1[best].tricks_won(1)])
+                .collect(),
+        })
+    })
 }
 
 /// Per card: P(our team takes the trick) and the expected points in it.
@@ -540,7 +638,7 @@ pub(crate) fn lead_values(ctx: &Ctx, candidates: CardSet) -> Option<WorldValues<
     let known = Known::new(ctx);
     let options: Vec<u8> = candidates.iter().collect();
     ctx.with_worlds(|worlds: &[World]| {
-        WorldValues::over(worlds, options, |w, &c| {
+        WorldValues::over(ctx, worlds, options, |w, &c| {
             let mut state = FastState::from_public(public, w.hands).ok()?;
             if !state.legal_cards().contains(c) {
                 return None;

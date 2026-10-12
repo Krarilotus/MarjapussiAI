@@ -62,6 +62,12 @@ params! {
 
     /// HZ-1: raise after the exchange by `contract_estimate` (the best expected contract score).
     estimated_raise: bool = true,
+    /// The owner's time budgets per decision (ms): planning (passing, raising), bidding, card play.
+    planning_budget_ms: u32 = 5000,
+    bidding_budget_ms: u32 = 1000,
+    play_budget_ms: u32 = 100,
+    /// HZ-1 by route: the raise from the team's final points over the believed worlds.
+    route_raise: bool = true,
 
     /// HO-1: leads without a planned rule by the plan layer's chain (`outlook`).
     outlook_leads: bool = true,
