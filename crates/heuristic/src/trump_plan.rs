@@ -426,19 +426,22 @@ fn preserves_activation(ctx: &Ctx, planned: &Decision, card: u8) -> bool {
             known == 0
                 || SUITS
                     .into_iter()
-                    .any(|suit| known & (1 << suit as u8) != 0 && forced_other_suit(ctx, mate, suit, card))
+                    .any(|suit| known & (1 << suit as u8) != 0 && partner_keeps_pair(ctx, mate, suit, card))
         }
         ActionType::Question(QuestionType::YourHalf(suit)) => {
             !(ours & CardSet::halves(suit)).is_empty()
-                && (k.known_half(mate, suit) != Some(true) || forced_other_suit(ctx, mate, suit, card))
+                && (k.known_half(mate, suit) != Some(true) || partner_keeps_pair(ctx, mate, suit, card))
         }
         _ => false,
     }
 }
 
-fn forced_other_suit(ctx: &Ctx, mate: u8, pair: Suit, card: u8) -> bool {
-    let led = engine::suit_of(card);
-    led != pair && ctx.k.count_bounds(mate, led).0 > 0
+/// After I lead `card`, the partner keeps its known pair of `pair`: the lead is another suit and
+/// the partner has a card to play other than the two halves: it follows the led suit, ruffs, or
+/// discards another card, knowing its own pair (Astra's review of the reference players, S19:
+/// a blank partner preserves its pair as well as a following one).
+fn partner_keeps_pair(ctx: &Ctx, mate: u8, pair: Suit, card: u8) -> bool {
+    engine::suit_of(card) != pair && ctx.k.hand_len(mate) > 2
 }
 
 /// Root's proof of viewer knowledge, never a probability rounded to one. This
@@ -488,8 +491,32 @@ fn route_activation(
         .collect();
     let rule = planned.and_then(|d| Move::from_action(&d.action.action_type));
     let mut moves = moves;
-    // The concrete cards: the rule's (if it chose one) and the card I would lead.
-    for m in rule.into_iter().chain(lead_card.map(Move::Card)) {
+    // The concrete cards: the rule's (if it chose one), the card I would lead, and every card that
+    // certainly stands (cash now, activate later: `cash_before_activation`, Astra's review of the
+    // reference players S16/S18/S19), also in the suit of a possible pair; whether cashing it
+    // forces a half out is the route's to weigh, not a filter's.
+    let standing = ctx.k.standing(ctx.me).iter().map(Move::Card);
+    // And the lead into the partner's ruff: the lowest card of each side suit the partner is
+    // proven void in while it may still hold trump (S14: hand it the lead through its trump and
+    // keep my own controls).
+    let mine = ctx.k.certain(ctx.me);
+    let ruff_entries = ctx.k.trump().into_iter().flat_map(|t| {
+        SUITS
+            .into_iter()
+            .filter(move |&s| s != t && ctx.k.is_void(mate, s) && !ctx.k.is_void(mate, t))
+            .filter_map(move |s| {
+                (mine & CardSet::suit(s))
+                    .iter()
+                    .min_by_key(|&c| engine::CARD_POINTS[c as usize])
+            })
+            .map(Move::Card)
+    });
+    for m in rule
+        .into_iter()
+        .chain(lead_card.map(Move::Card))
+        .chain(standing)
+        .chain(ruff_entries)
+    {
         if matches!(m, Move::Card(_)) && !moves.contains(&m) {
             moves.push(m);
         }
