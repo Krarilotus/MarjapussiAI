@@ -37,8 +37,11 @@ pub enum Objective {
     /// other team.
     Reach { team: u8, target: i32 },
     /// The contract rule HC-9 for either side; criteria in order of importance:
-    /// - declarers: P(contract made), then own points. Once the contract is made (or cannot
-    ///   be made in any world), the defenders' points, to minimise;
+    /// - declarers: P(contract made); while the defenders have no trick and the scoring punishes
+    ///   that (schwarz), P(they stay without one), to minimise (the owner's
+    ///   `late_question_insurance`: with schwarz certain, no question or trump change that can
+    ///   hand them a trick); then own points. Once the contract is made (or cannot be made in
+    ///   any world), the defenders' points, to minimise;
     /// - defenders: own points. While they have no trick and the scoring punishes that
     ///   (schwarz, read from `game::scoring`), P(at least one trick) comes first.
     ///
@@ -164,13 +167,21 @@ fn criteria(objective: Objective, table: &PublicState, me: u8) -> Vec<Criterion>
             }
             if mine == s {
                 let points = (table.card_points[s as usize] + table.pair_points[s as usize]) as i32;
+                let schwarz = table.tricks[n as usize] == 0 && trickless_costs(n, s, game_value);
+                let keep_schwarz = min(Measure::ReachTricks { team: n, target: 1 });
                 if points >= game_value {
+                    if schwarz {
+                        out.push(keep_schwarz);
+                    }
                     out.push(min(Measure::Points { team: n }));
                 } else {
                     out.push(max(Measure::ReachPoints {
                         team: s,
                         target: game_value,
                     }));
+                    if schwarz {
+                        out.push(keep_schwarz);
+                    }
                     out.push(max(Measure::Points { team: s }));
                 }
             } else {

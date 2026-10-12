@@ -6,6 +6,9 @@
 //! game through the engine to that step (record actions matched against the legal actions)
 //! and prints one JSON line: the recorded action and rule, HP1's action, rule and facts, the
 //! seat's hand, the trick number and the trump. HP1 sees only the seat's view.
+//!
+//! `replaydiff --game FILE` reads one game instead, as the testbed stores it (`{"deal": [4 hands],
+//! "actions": [...]}`, e.g. from the owner's local play database); its index is 0.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -34,10 +37,13 @@ fn same(recorded: &Value, legal: &Value) -> bool {
 }
 
 fn main() {
-    let cli = Cli::parse(&["--run"], &[]);
-    let run = cli.str("--run").expect("--run DIR");
+    let cli = Cli::parse(&["--run", "--game"], &[]);
     let mut games: HashMap<u64, Value> = HashMap::new();
-    for entry in std::fs::read_dir(run).expect("run dir") {
+    if let Some(file) = cli.str("--game") {
+        let g: Value = serde_json::from_str(&std::fs::read_to_string(file).expect("game file")).expect("json");
+        games.insert(0, json!({ "index": 0, "record": { "deal": g["deal"], "actions": g["actions"] } }));
+    }
+    for entry in cli.str("--run").map(|run| std::fs::read_dir(run).expect("run dir")).into_iter().flatten() {
         let path = entry.expect("dir entry").path();
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         if !(name.starts_with("worker-") && name.ends_with(".ndjson")) {

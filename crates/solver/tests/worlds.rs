@@ -245,10 +245,17 @@ fn contract_objective_follows_hc9() {
                                 vec![]
                             };
                             let with = |rest: Vec<Criterion>| [first.clone(), rest].concat();
+                            // The defenders still without a trick: keep them schwarz (the owner's
+                            // late_question_insurance), after the contract, before own points.
+                            let keep_schwarz: Vec<Criterion> = if fast.tricks_won(n) == 0 {
+                                vec![min(Measure::ReachTricks { team: n, target: 1 })]
+                            } else {
+                                vec![]
+                            };
                             if fast.points(s) >= value {
                                 assert_eq!(
                                     d.criteria,
-                                    with(vec![min(Measure::Points { team: n })]),
+                                    with([keep_schwarz.clone(), vec![min(Measure::Points { team: n })]].concat()),
                                     "seed {seed}: made"
                                 );
                                 seen[0] += 1;
@@ -269,7 +276,11 @@ fn contract_objective_follows_hc9() {
                             } else {
                                 let reach = Measure::ReachPoints { team: s, target: value };
                                 let own = Measure::Points { team: s };
-                                assert_eq!(d.criteria, with(vec![max(reach), max(own)]), "seed {seed}: open");
+                                assert_eq!(
+                                    d.criteria,
+                                    with([vec![max(reach)], keep_schwarz.clone(), vec![max(own)]].concat()),
+                                    "seed {seed}: open"
+                                );
                                 seen[1] += 1;
                             }
                         } else if fast.tricks_won(n) == 0 {
