@@ -10,7 +10,7 @@
 
 use std::io::{BufRead, Write};
 
-use agent::Table;
+use agent::{SeatKind, Table};
 use engine::{ActionType, Card, GameAction, GameFinishedInfo};
 use heuristic::{HeuristicAgent, Params};
 use serde_json::{json, Value};
@@ -62,6 +62,17 @@ fn main() {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     let mut done = 0usize;
+    // The manifest: what continued the positions (Astra 17.1: newer continuations from the
+    // positions an older policy reached).
+    let commit = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    eprintln!(
+        "{}",
+        json!({ "manifest": { "continuation_commit": commit, "params": format!("{:?}", Params::default()), "actors": "4 x HP1 (kinds Heuristic)", "source_run": run } })
+    );
     let mut paths: Vec<_> = std::fs::read_dir(run)
         .expect("run dir")
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -100,6 +111,7 @@ fn main() {
                 let actions = g["record"]["actions"].as_array().unwrap();
                 let step = d["step"].as_u64().unwrap() as usize;
                 let mut table = Table::new(&deal);
+                table.kinds = [SeatKind::Heuristic; 4];
                 for recorded in &actions[..step] {
                     let (_, legal) = table.to_act().expect("game continues");
                     let action = *legal
@@ -120,6 +132,8 @@ fn main() {
                 let team = (to_move % 2) as usize;
                 let branch = |a: GameAction| {
                     let mut t = Table::new(&deal);
+                    // Every continuing actor is HP1, and the readers know it (Astra 17.1).
+                    t.kinds = [SeatKind::Heuristic; 4];
                     for recorded in &actions[..step] {
                         let (_, legal) = t.to_act().expect("game continues");
                         let action = *legal.iter().find(|x| same(recorded, &action_json(x, false))).unwrap();

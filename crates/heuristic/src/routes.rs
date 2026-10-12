@@ -29,7 +29,8 @@ impl Routes {
         // D1: the partner's raise is read once into these worlds (its likelihood given the
         // partner's hand at that decision: its current cards and those it played since). With a
         // reading, `RAISE_DRAWS` times as many deals are drawn and resampled by weight, so enough
-        // worlds remain that fit the raise.
+        // worlds remain that fit the raise. Scope (Astra 17.7 C): this conditions the route
+        // worlds (outlook, entries); the Mind's other belief queries don't read the raise yet.
         let raise = crate::raising::partner_raise(ctx);
         let floor = ctx.mind.params().conventions.convention_floor;
         let read = |hands: &Hands| {
@@ -122,16 +123,21 @@ fn resample(drawn: &[World], n: usize, rng: &mut Rng) -> Vec<World> {
     let step = total / n as f64;
     let mut at = (rng.next() >> 11) as f64 / (1u64 << 53) as f64 * step;
     let (mut i, mut acc) = (0, drawn[0].weight);
-    let mut out = Vec::with_capacity(n);
+    let mut out: Vec<World> = Vec::with_capacity(n);
     for _ in 0..n {
         while acc < at && i + 1 < drawn.len() {
             i += 1;
             acc += drawn[i].weight;
         }
-        out.push(World {
-            weight: 1.0,
-            ..drawn[i]
-        });
+        match out.last_mut() {
+            // A world drawn again is one world with more weight, not new evidence: the decision
+            // guard's effective sample size then counts it once (Astra 17.7 D).
+            Some(last) if last.hands == drawn[i].hands => last.weight += 1.0,
+            _ => out.push(World {
+                weight: 1.0,
+                ..drawn[i]
+            }),
+        }
         at += step;
     }
     out

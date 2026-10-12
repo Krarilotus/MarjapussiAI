@@ -356,16 +356,23 @@ const HUMAN_TARGET_OVER_PAIRS: [(i32, i32, &[u16]); 5] = [
 ];
 
 impl RaiseObservation {
-    /// P(this target | the raiser holding `hand` at its decision): an agent's by its actual rule
-    /// (HZ-1), with the convention reader's floor `floor` for anything else; a human's by
-    /// `HUMAN_TARGET_OVER_PAIRS` for its countable team pairs, add-one smoothed over the legal
-    /// targets.
+    /// P(this target | the raiser holding `hand` at its decision), normalized over its actual
+    /// choices (keeping the contract or a legal raise): an agent's by its HZ-1 rule, with the
+    /// convention reader's floor `floor` for its other branches (HZ-2 certificates and anything
+    /// else), read by the broad human model; a human's by the human model alone.
     pub fn likelihood(&self, hand: CardSet, floor: f32) -> f64 {
-        let n = engine::bid_range(engine::Points(self.before)).count() as f64 + 1.0;
-        if self.agent {
-            let hit = (hz1(hand, self.given_to_me, self.before).target == self.target) as u8 as f64;
-            return (1.0 - floor as f64) * hit + floor as f64 / n;
+        let human = self.human_likelihood(hand);
+        if !self.agent {
+            return human;
         }
+        let hit = (hz1(hand, self.given_to_me, self.before).target == self.target) as u8 as f64;
+        (1.0 - floor as f64) * hit + floor as f64 * human
+    }
+
+    /// `HUMAN_TARGET_OVER_PAIRS` for the countable team pairs of `hand`, add-one smoothed and
+    /// normalized over the available choices: an unavoidable choice (at 420 only keeping) carries
+    /// no evidence (Astra's review 17.7 A).
+    fn human_likelihood(&self, hand: CardSet) -> f64 {
         let pairs: i32 = (hand.pair_suits().chain(self.given_to_me.pair_suits()))
             .map(beliefs::conventions::pair_value)
             .sum();
@@ -375,14 +382,13 @@ impl RaiseObservation {
             .find(|b| pairs >= b.0)
             .copied()
             .unwrap_or(HUMAN_TARGET_OVER_PAIRS[0]);
-        let i = (self.target - pairs - start).div_euclid(5);
-        let count = usize::try_from(i)
-            .ok()
-            .and_then(|i| counts.get(i))
-            .copied()
-            .unwrap_or(0) as f64;
-        let total: f64 = counts.iter().map(|&c| c as f64).sum();
-        (count + 1.0) / (total + n)
+        let weight = |target: i32| {
+            let i = (target - pairs - start).div_euclid(5);
+            usize::try_from(i).ok().and_then(|i| counts.get(i)).copied().unwrap_or(0) as f64 + 1.0
+        };
+        let choices = std::iter::once(self.before).chain(engine::bid_range(engine::Points(self.before)));
+        let total: f64 = choices.map(weight).sum();
+        weight(self.target) / total
     }
 }
 
@@ -632,4 +638,28 @@ pub(crate) fn follow(ctx: &Ctx, legal: &[GameAction]) -> Option<Decision> {
         rule,
         vec![fact("certified_raise_route", 1), fact("raise_floor", c.floor)],
     ))
+}
+
+#[cfg(test)]
+mod raise_reading_tests {
+    use super::*;
+
+    /// An unavoidable choice carries no evidence (Astra's review 17.7 A): at 420 only keeping is
+    /// possible, so every hand explains it equally.
+    #[test]
+    fn keeping_at_420_reads_the_same_for_every_hand() {
+        let hand = |cards: [&str; 9]| CardSet::from_cards(&cards.map(|c| c.parse().unwrap()));
+        let obs = |agent| RaiseObservation {
+            raiser: 0,
+            before: 420,
+            target: 420,
+            given_to_me: CardSet::EMPTY,
+            agent,
+        };
+        for agent in [false, true] {
+            let a = obs(agent).likelihood(hand(["r-K", "r-O", "s-K", "s-O", "e-A", "g-6", "g-7", "e-6", "e-7"]), 0.02);
+            let b = obs(agent).likelihood(hand(["r-6", "r-7", "s-6", "s-7", "e-8", "g-8", "g-9", "e-9", "s-8"]), 0.02);
+            assert!((a - b).abs() < 1e-9 && (a - 1.0).abs() < 1e-9, "agent {agent}: {a} vs {b}");
+        }
+    }
 }
