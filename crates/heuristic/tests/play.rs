@@ -184,7 +184,8 @@ fn hl7_never_leads_a_certain_loser() {
     });
     let d = s.act(&s.card_legal());
     assert_ne!(played(&d), Some(c("r-U")));
-    assert_eq!(d.rule, RuleId::HL7);
+    // The plan layer's chain (HO-1) decides this lead now; the valuation's HL-7 without it.
+    assert!(matches!(d.rule, RuleId::HO1 | RuleId::HL7), "{d:?}");
 }
 
 /// No standing card and no plan: the valuation leads a card that gives nothing away.

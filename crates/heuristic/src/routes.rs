@@ -86,6 +86,13 @@ impl Routes {
 }
 
 impl Ctx<'_> {
+    /// The decision's shared believed worlds (the same pool as the entry estimates).
+    pub(crate) fn with_worlds<T>(&self, f: impl FnOnce(&[World]) -> T) -> T {
+        let mut routes = self.routes.borrow_mut();
+        let routes = routes.get_or_insert_with(|| Routes::new(self));
+        f(&routes.worlds)
+    }
+
     pub(crate) fn entry(&self, card: u8) -> Entry {
         self.routes
             .borrow_mut()

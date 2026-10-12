@@ -117,6 +117,27 @@ fn lead(ctx: &Ctx, legal: CardSet, val: &Valuation) -> (u8, RuleId, Vec<Fact>) {
     if let Some(l) = leads::after_standing(ctx, legal, val) {
         return l;
     }
+    // HO-1: the plan layer's chain (trick outcome + trick ownership of the rest) over the
+    // believed worlds, among the cards that keep my live pairs' halves.
+    if ctx.params.outlook_leads {
+        let candidates = match legal - val.halves {
+            open if open.is_empty() => legal,
+            open => open,
+        };
+        if let Some(values) = crate::outlook::lead_values(ctx, candidates) {
+            if let Some(&(c, v)) = values
+                .iter()
+                .max_by(|a, b| a.1.total_cmp(&b.1).then(CARD_POINTS[b.0 as usize].cmp(&CARD_POINTS[a.0 as usize])))
+            {
+                let runner_up = values.iter().filter(|x| x.0 != c).map(|x| x.1).fold(f32::NEG_INFINITY, f32::max);
+                return (
+                    c,
+                    RuleId::HO1,
+                    vec![fact("expected_difference", v), fact("margin", (v - runner_up).max(0.0))],
+                );
+            }
+        }
+    }
     choose(ctx, legal, val, true)
 }
 

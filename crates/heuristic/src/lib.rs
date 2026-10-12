@@ -11,6 +11,7 @@ mod concepts;
 mod endgame;
 mod hand;
 mod leads;
+mod outlook;
 mod legal_actions;
 mod params;
 pub mod passing;

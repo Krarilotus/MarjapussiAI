@@ -77,6 +77,7 @@ rules! {
     HZ1 "HZ-1" Raising 0 1 "[O] [A]" "after the exchange, estimate the team's points from my 9 cards and the pairs given back (contract_estimate); raise to the value with the best expected contract score";
     HZ2 "HZ-2" Raising 1 1 "[D]" "raise only within a certified own-card run and one reachable own pair; follow that route before sampled search";
     HZ3 "HZ-3" Raising 2 1 "[O]" "never raise across 140 without a certain team pair (a cap inside HZ-1)";
+    HO1 "HO-1" Play 9 1 "[O] [D]" "a lead without a planned rule: the best expected points difference over the believed worlds (trick outcome by the engine's rules and level-0 replies, then trick ownership of the rest)";
     // Passing (KB batch 2, C42): the store, score = Σ passing_weights × features
     PForth "P-forth" PassingForth 0 1 "[O] [A]" "pass forth: the best Σ passing_weights × features (human choice analysis, owner-requested)";
     PBack "P-back" PassingBack 0 1 "[O] [A]" "pass back: the best Σ passing_weights × features (human choice analysis, owner-requested)";
