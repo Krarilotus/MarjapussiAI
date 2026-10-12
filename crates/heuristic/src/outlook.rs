@@ -763,7 +763,10 @@ pub(crate) fn trick_outcomes(ctx: &Ctx) -> Option<TrickOutcomes> {
             if mass > 0.0 {
                 out[c as usize] = Some(TrickOutcome {
                     p_ours: (p_ours / mass) as f32,
-                    outcomes: outcomes.into_iter().map(|(o, pts, p)| (o, pts, (p / mass) as f32)).collect(),
+                    outcomes: outcomes
+                        .into_iter()
+                        .map(|(o, pts, p)| (o, pts, (p / mass) as f32))
+                        .collect(),
                 });
             }
         }

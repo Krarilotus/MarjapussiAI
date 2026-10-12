@@ -398,10 +398,7 @@ impl Choice {
         };
         let plan = if leading { v.plan[c as usize] } else { 0.0 };
         [
-            (
-                Term::Trick,
-                trick_worth + v.lead_value(ctx, c),
-            ),
+            (Term::Trick, trick_worth + v.lead_value(ctx, c)),
             (Term::Future, -v.future[c as usize]),
             (Term::Pair, -v.pair[c as usize]),
             (Term::Plan, -plan),
