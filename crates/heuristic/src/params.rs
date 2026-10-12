@@ -84,6 +84,9 @@ params! {
     outlook_leads: bool = true,
     /// The valuation's trick term from the trick outcome over the believed worlds.
     outlook_trick: bool = true,
+    /// The believed worlds per decision for the outlook and the routes (a compute budget; the
+    /// decision deadline stops the evaluations early).
+    outlook_worlds: u32 = 64,
     /// The outlook's simulated players see each believed world's hands (classic Monte-Carlo
     /// actors) instead of only the table's knowledge.
     outlook_world_known: bool = true,

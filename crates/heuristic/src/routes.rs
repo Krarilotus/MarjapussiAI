@@ -23,10 +23,10 @@ impl Routes {
     fn new(ctx: &Ctx) -> Self {
         let _timing = beliefs::profile::scope("routes");
         // A computational budget, not a fitted playing-strength parameter.
-        const WORLDS: usize = 64;
+        let worlds_max = ctx.params.outlook_worlds as usize;
         let model = ctx.mind.deal_model();
         let (space, weights) = (model.space(), model.weights());
-        let worlds = if space.count() <= WORLDS as u64 {
+        let worlds = if space.count() <= worlds_max as u64 {
             let mut worlds = Vec::new();
             space.for_each_deal(|hands| {
                 worlds.push(World {
@@ -36,7 +36,7 @@ impl Routes {
             });
             worlds
         } else {
-            space.sample_worlds(&mut Rng::new(ctx.seed), WORLDS, weights)
+            space.sample_worlds(&mut Rng::new(ctx.seed), worlds_max, weights)
         };
         Self {
             worlds,
