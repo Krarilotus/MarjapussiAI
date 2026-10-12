@@ -66,10 +66,14 @@ params! {
     planning_budget_ms: u32 = 5000,
     bidding_budget_ms: u32 = 1000,
     play_budget_ms: u32 = 100,
-    /// B-take: bid on over an opponent's contract at 140 or more by the fitted rule. With today's
-    /// play, bidding was worse than passing at its own decisions (branchdiff over 439 of them,
-    /// both branches played out by HP1: -40 per game).
-    b_take: bool = true,
+    /// B-take: bid on over an opponent's contract at 140 or more by the fitted rule. Off for the
+    /// deployed execution (2026-10-13, Astra's review 17.4: a restriction to reassess once the
+    /// declarer play improves): at its own decisions bidding was worse than passing (branchdiff,
+    /// 439 positions, both branches played out by four HP1: -33 per decision); in 175 of 201
+    /// both-fail cases the team missed even the bid price, by a median 51 points; against live,
+    /// off vs on +8.8 per game [+2.0, +15.5] on the development deals, and off vs live -1.3
+    /// [-10.1, +7.5] on 2,000 untouched games.
+    b_take: bool = false,
     /// B-take by route: take_vs_defend over the believed worlds can overrule the fitted rule.
     /// Off: with the level-0 exchange (no signals read) the playouts are pessimistic about
     /// every declarer: from the bidding position the simulated declaring team makes about 40 %
