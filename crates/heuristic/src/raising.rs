@@ -384,7 +384,12 @@ impl RaiseObservation {
             .unwrap_or(HUMAN_TARGET_OVER_PAIRS[0]);
         let weight = |target: i32| {
             let i = (target - pairs - start).div_euclid(5);
-            usize::try_from(i).ok().and_then(|i| counts.get(i)).copied().unwrap_or(0) as f64 + 1.0
+            usize::try_from(i)
+                .ok()
+                .and_then(|i| counts.get(i))
+                .copied()
+                .unwrap_or(0) as f64
+                + 1.0
         };
         let choices = std::iter::once(self.before).chain(engine::bid_range(engine::Points(self.before)));
         let total: f64 = choices.map(weight).sum();
@@ -657,9 +662,18 @@ mod raise_reading_tests {
             agent,
         };
         for agent in [false, true] {
-            let a = obs(agent).likelihood(hand(["r-K", "r-O", "s-K", "s-O", "e-A", "g-6", "g-7", "e-6", "e-7"]), 0.02);
-            let b = obs(agent).likelihood(hand(["r-6", "r-7", "s-6", "s-7", "e-8", "g-8", "g-9", "e-9", "s-8"]), 0.02);
-            assert!((a - b).abs() < 1e-9 && (a - 1.0).abs() < 1e-9, "agent {agent}: {a} vs {b}");
+            let a = obs(agent).likelihood(
+                hand(["r-K", "r-O", "s-K", "s-O", "e-A", "g-6", "g-7", "e-6", "e-7"]),
+                0.02,
+            );
+            let b = obs(agent).likelihood(
+                hand(["r-6", "r-7", "s-6", "s-7", "e-8", "g-8", "g-9", "e-9", "s-8"]),
+                0.02,
+            );
+            assert!(
+                (a - b).abs() < 1e-9 && (a - 1.0).abs() < 1e-9,
+                "agent {agent}: {a} vs {b}"
+            );
         }
     }
 }
