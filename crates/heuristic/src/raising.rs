@@ -198,7 +198,7 @@ fn estimated_raise(ctx: &Ctx, legal: &[GameAction]) -> Option<(GameAction, i32, 
     let given_pairs: i32 = given.pair_suits().map(beliefs::conventions::pair_value).sum();
     let value = ctx.k.value();
     // HZ-3 [O]: never raise across 140 without a certain team pair.
-    let cap = if value < 140 && own_pairs + given_pairs == 0 {
+    let cap = if value <= 140 && own_pairs + given_pairs == 0 {
         140
     } else {
         i32::MAX
@@ -350,10 +350,6 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], cards: &[GameAction]) -> D
     let mut d = play::decide(ctx, cards);
     d.why.extend([
         fact("raise_floor", certificate.map_or(0, |c| c.floor)),
-        fact(
-            "route_points",
-            crate::outlook::final_outcomes(ctx).map_or(-1.0, |o| o.mean_points(ctx.me % 2)),
-        ),
         fact("raise_target", ctx.k.value()),
     ]);
     d

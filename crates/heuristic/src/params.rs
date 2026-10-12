@@ -88,8 +88,9 @@ params! {
     /// decision deadline stops the evaluations early).
     outlook_worlds: u32 = 64,
     /// The outlook's simulated players see each believed world's hands (classic Monte-Carlo
-    /// actors) instead of only the table's knowledge.
-    outlook_world_known: bool = true,
+    /// actors) instead of only the table's knowledge. Off (owner, 2026-10-12, following Astra's
+    /// review): actors decide from what they know; they are improved, not given the deal.
+    outlook_world_known: bool = false,
     /// HO-2: the trump plan's activation and the answer chosen by route over the believed worlds.
     outlook_activation: bool = true,
 

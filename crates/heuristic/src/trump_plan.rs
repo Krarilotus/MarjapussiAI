@@ -63,7 +63,10 @@ pub(crate) struct Control {
 
 impl Control {
     pub fn with_own_lead(self) -> Self {
-        Self { own: self.own + 1.0, ..self }
+        Self {
+            own: self.own + 1.0,
+            ..self
+        }
     }
 }
 
@@ -174,9 +177,7 @@ impl Reach {
         1.0 + SUITS
             .into_iter()
             .filter(|&other| {
-                other != s
-                    && pair_value(other) > pair_value(s)
-                    && known.certain() & (1 << other as u8) != 0
+                other != s && pair_value(other) > pair_value(s) && known.certain() & (1 << other as u8) != 0
             })
             .filter(|&other| {
                 let routes = self.alternatives(ctx, other, k.rights(ctx.me));
@@ -323,11 +324,15 @@ pub(crate) fn timing(ctx: &Ctx, legal: &[GameAction], reach: &Reach, val: &Valua
         }
     }
     let chosen = connected_entry(ctx, legal, cards - val.plan_cards, reach, planned.as_ref()).or(planned);
-    match chosen {
-        Some(d) if ctx.params.outlook_activation && !matches!(d.action.action_type, ActionType::CardPlayed(_)) => {
-            route_activation(ctx, legal, &d).unwrap_or(Some(d))
-        }
-        other => other,
+    if !ctx.params.outlook_activation {
+        return chosen;
+    }
+    // HO-2 compares the rule's choice, a card included, with the activations it would leave out
+    // (Astra: a baseline's choice is a prior, not a gate that hides the alternatives).
+    match route_activation(ctx, legal, chosen.as_ref()) {
+        Some(Some(d)) => Some(d),
+        Some(None) => chosen.filter(|d| matches!(d.action.action_type, ActionType::CardPlayed(_))),
+        None => chosen,
     }
 }
 
@@ -408,9 +413,10 @@ fn preserves_activation(ctx: &Ctx, planned: &Decision, card: u8) -> bool {
                 return false;
             }
             let known = k.pairs(mate).certain;
-            known == 0 || SUITS.into_iter().any(|suit| {
-                known & (1 << suit as u8) != 0 && forced_other_suit(ctx, mate, suit, card)
-            })
+            known == 0
+                || SUITS
+                    .into_iter()
+                    .any(|suit| known & (1 << suit as u8) != 0 && forced_other_suit(ctx, mate, suit, card))
         }
         ActionType::Question(QuestionType::YourHalf(suit)) => {
             !(ours & CardSet::halves(suit)).is_empty()
@@ -431,18 +437,25 @@ fn partner_knows_pair(ctx: &Ctx, suit: Suit) -> bool {
     ctx.mind
         .perspective_concept(
             partner(ctx.me),
-            &ConceptQuery { event: vec![Concept::Pair { seat: ctx.me, suit }.into()], given: vec![] },
-            PerspectiveBudget { outer_nodes: 0, inner: ConceptBudget { max_nodes: 0 }, max_hypotheses: 0 },
+            &ConceptQuery {
+                event: vec![Concept::Pair { seat: ctx.me, suit }.into()],
+                given: vec![],
+            },
+            PerspectiveBudget {
+                outer_nodes: 0,
+                inner: ConceptBudget { max_nodes: 0 },
+                max_hypotheses: 0,
+            },
         )
         .ok()
         .and_then(|p| p.known_by_viewer)
         == Some(true)
 }
 
-/// HO-2: once the trump plan activates (`planned`), another activation or a card instead where
-/// the route over the believed worlds is clearly better. Questions the partner certainly
+/// HO-2: the rule's choice (`planned`: an activation, a card, or none) against the activations
+/// open to me, where the route over the believed worlds is clearly better. Questions the partner certainly
 /// answers no are not options. `None` keeps the plan; `Some(None)` plays a card.
-fn route_activation(ctx: &Ctx, legal: &[GameAction], planned: &Decision) -> Option<Option<Decision>> {
+fn route_activation(ctx: &Ctx, legal: &[GameAction], planned: Option<&Decision>) -> Option<Option<Decision>> {
     let k = ctx.k;
     let mate = partner(ctx.me);
     let mine = k.certain(ctx.me);
@@ -458,7 +471,14 @@ fn route_activation(ctx: &Ctx, legal: &[GameAction], planned: &Decision) -> Opti
             _ => false,
         })
         .collect();
-    let plan = Move::from_action(&planned.action.action_type);
+    if moves.is_empty() {
+        return None;
+    }
+    // The rule's card (or no activation) is the route's "card instead" option.
+    let plan = planned.and_then(|d| match Move::from_action(&d.action.action_type) {
+        Some(Move::Card(_)) => None,
+        m => m,
+    });
     crate::outlook::route_choice(ctx, legal, PlayPhase::from_actions(legal), &moves, plan)
 }
 

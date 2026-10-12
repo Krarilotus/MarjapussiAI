@@ -257,9 +257,12 @@ fn two_pairs_raise_by_the_expected_contract_score() {
 
 #[test]
 fn no_certain_team_pair_never_raises_across_140() {
+    // From below 140 and from exactly 140 (HZ-3: no raise across 140 without a certain team pair).
     let cards = ["r-A", "r-Z", "g-A", "g-Z", "e-A", "e-Z", "s-A", "s-Z", "r-9"];
-    let table = preplay(&cards, 120, 0);
-    let (seat, legal) = table.to_act().unwrap();
-    let d = HeuristicAgent::new(Params::default()).decide(&table.view(seat), legal);
-    assert!(bid_of(&d).is_none_or(|v| v <= 140), "{d:?}");
+    for value in [120, 140] {
+        let table = preplay(&cards, value, 0);
+        let (seat, legal) = table.to_act().unwrap();
+        let d = HeuristicAgent::new(Params::default()).decide(&table.view(seat), legal);
+        assert!(bid_of(&d).is_none_or(|v| v <= 140), "at {value}: {d:?}");
+    }
 }

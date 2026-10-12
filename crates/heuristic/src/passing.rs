@@ -34,12 +34,31 @@ impl Partner {
     /// cards the giver doesn't see (`beliefs::conventions::read_class`); voids by counting.
     /// The level-0 exchange of the outlook's take-or-defend routes uses it.
     pub fn read(reader: CardSet, likelihood: Option<&[f32; beliefs::conventions::N_CLASSES]>) -> Self {
-        let (features, cards) = beliefs::conventions::read_class(reader, HAND_SIZE, likelihood);
+        let (features, cards) = beliefs::conventions::read_class(reader, CardSet::EMPTY, HAND_SIZE, likelihood);
         Self {
             cards,
             ace: features.ace,
             void: Self::uniform(reader).void,
             half: features.half,
+        }
+    }
+
+    /// The giver's remaining hand after it passed me `received`, as I read it from its dealt-hand
+    /// class likelihood and my own dealt cards `mine`: the received cards are certain parts of its
+    /// dealt hand and now mine; its halves and voids follow from its remaining cards.
+    pub fn read_after_pass(
+        mine: CardSet,
+        received: CardSet,
+        likelihood: Option<&[f32; beliefs::conventions::N_CLASSES]>,
+    ) -> Self {
+        let (features, mut cards) = beliefs::conventions::read_class(mine, received, HAND_SIZE, likelihood);
+        received.iter().for_each(|c| cards[c as usize] = 0.0);
+        let none = |set: CardSet| set.iter().map(|c| 1.0 - cards[c as usize]).product::<f32>();
+        Self {
+            cards,
+            ace: features.ace,
+            void: SUITS.map(|s| none(CardSet::suit(s))),
+            half: SUITS.map(|s| 1.0 - none(CardSet::halves(s))),
         }
     }
 
@@ -111,10 +130,7 @@ pub fn level0_exchange(
     hands[p] -= forth;
     hands[d] |= forth;
     let taker = hands[d];
-    // The giver's dealt hand as the declarer reads it from its dealt cards; the cards received
-    // are certain now.
-    let mut estimate = Partner::read(taker - forth, likelihood[p].as_deref());
-    forth.iter().for_each(|c| estimate.cards[c as usize] = 0.0);
+    let estimate = Partner::read_after_pass(taker - forth, forth, likelihood[p].as_deref());
     let trump = back_plan(taker, estimate.half, partner_half_conf);
     let back = best_pass(taker, &PASSING_WEIGHTS.back, |y| {
         back_features(taker, &estimate, trump, y)

@@ -206,8 +206,13 @@ impl Plan {
         })
     }
 
-    /// The step for the trick start in `state`, if the plan's team leads and steps are left.
-    fn take(plan: &mut Option<Plan>, state: &FastState) -> Option<Step> {
+    /// The step for the trick start in `state`, if the plan's team leads, steps are left and the
+    /// leader has an `eligible` activation (Astra: a step belongs to an actual activation
+    /// opportunity; the empty trick after an announcement or answer is not one).
+    fn take(plan: &mut Option<Plan>, state: &FastState, eligible: bool) -> Option<Step> {
+        if !eligible {
+            return None;
+        }
         let p = plan
             .as_mut()
             .filter(|p| p.team == state.leader() % 2 && p.next < PLAN_STEPS)?;
@@ -271,7 +276,10 @@ fn ask(state: &FastState, known: &Known) -> Option<Move> {
         .rev()
         .find(|&s| {
             let h = CardSet::halves(s);
-            open(s) && !(mine & h).is_empty() && (mine & h) != h && !(known.may(mine, mate as u8) & (h - mine)).is_empty()
+            open(s)
+                && !(mine & h).is_empty()
+                && (mine & h) != h
+                && !(known.may(mine, mate as u8) & (h - mine)).is_empty()
         })
         .map(QuestionType::YourHalf)
         .filter(|&q| legal(q))
@@ -296,11 +304,18 @@ fn answer0(state: &FastState) -> Move {
 }
 
 /// Applies `m` and, after a question, the asked seat's answer.
-fn apply(state: &mut FastState, m: Move) {
+fn apply(state: &mut FastState, known: &mut Known, m: Move) {
+    let asker = state.leader();
     state.apply(m);
-    if let PlayPhase::Answer(_) = state.phase() {
+    if let PlayPhase::Answer(q) = state.phase() {
         let a = answer0(state);
         state.apply(a);
+        // A "no half" proves the answerer lacks the half the asker doesn't hold. A "no pair" is a
+        // joint fact (no complete uncalled pair) that the per-seat possible cards can't hold.
+        if let (QuestionType::YourHalf(s), Move::Answer(AnswerType::NoHalf(_))) = (q, a) {
+            let missing = CardSet::halves(s) - state.hand(asker);
+            known.may[partner(asker) as usize] -= missing;
+        }
     }
 }
 
@@ -317,8 +332,9 @@ fn lead0(state: &FastState, known: &Known) -> u8 {
     let legal = state.legal_cards();
     let own = state.hand(seat);
     // As far as the knowledge goes: proven void in the side suit and possibly holding trump.
-    let ruffs =
-        |p: u8, s: Suit| trump.is_some_and(|t| t != s && !known.may_hold_suit(own, p, s) && known.may_hold_suit(own, p, t));
+    let ruffs = |p: u8, s: Suit| {
+        trump.is_some_and(|t| t != s && !known.may_hold_suit(own, p, s) && known.may_hold_suit(own, p, t))
+    };
     if let Some(c) = legal
         .iter()
         .filter(|&c| top_of(all, suit_of(c)) == Some(c) && ![1u8, 3].iter().any(|&o| ruffs(seat + o, suit_of(c))))
@@ -341,9 +357,10 @@ fn lead0(state: &FastState, known: &Known) -> u8 {
 fn playout(state: &mut FastState, known: &mut Known, mut plan: Option<Plan>) {
     while !state.is_over() {
         let c = if state.trick().is_empty() {
-            let step = Plan::take(&mut plan, state);
+            let eligible = activation(state, known, None).is_some();
+            let step = Plan::take(&mut plan, state, eligible);
             if let Some(m) = activation(state, known, step) {
-                apply(state, m);
+                apply(state, known, m);
             }
             lead0(state, known)
         } else {
@@ -473,7 +490,7 @@ fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<(WorldVal
             let state = FastState::from_public(public, w.hands).ok()?;
             let (mut s, mut k) = (state, known.in_world(ctx, &w.hands));
             match option {
-                Some(m) if s.moves().any(|x| x == m) => apply(&mut s, m),
+                Some(m) if s.moves().any(|x| x == m) => apply(&mut s, &mut k, m),
                 Some(_) => return None,
                 None => {
                     let c = lead0(&s, &k);
@@ -738,4 +755,31 @@ pub(crate) fn lead_values(ctx: &Ctx, candidates: CardSet) -> Option<WorldValues<
             Some(margin(&state, us) - before)
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A plan step belongs to an activation opportunity (Astra's review, B): without one, the
+    /// step is not used up, so the alternatives keep the same horizon.
+    #[test]
+    fn a_plan_step_is_only_used_at_an_activation_opportunity() {
+        let hands = [
+            CardSet::from_cards(&["r-K", "r-O", "s-6"].map(|c| c.parse().unwrap())),
+            CardSet::from_cards(&["g-6", "g-7", "g-8"].map(|c| c.parse().unwrap())),
+            CardSet::from_cards(&["e-6", "e-7", "e-8"].map(|c| c.parse().unwrap())),
+            CardSet::from_cards(&["s-7", "s-8", "s-9"].map(|c| c.parse().unwrap())),
+        ];
+        let state = FastState::new(hands, 0);
+        let mut plan = Some(Plan {
+            team: 0,
+            steps: [Step::Ask, Step::Own],
+            next: 0,
+        });
+        assert_eq!(Plan::take(&mut plan, &state, false), None);
+        assert_eq!(plan.unwrap().next, 0);
+        assert_eq!(Plan::take(&mut plan, &state, true), Some(Step::Ask));
+        assert_eq!(plan.unwrap().next, 1);
+    }
 }

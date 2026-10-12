@@ -84,16 +84,23 @@ pub fn class_prior(q: &[f32; 36]) -> [f32; N_CLASSES] {
     prior
 }
 
-/// What a reader holding `reader` can believe about a seat holding `held` of the cards it
-/// doesn't see, from that seat's class likelihood (`Mind::class_likelihood`): the class prior
+/// What a reader holding `reader` can believe about a seat whose dealt hand of `held` cards
+/// certainly contains `known` (e.g. the cards it passed to the reader) and otherwise cards the
+/// reader doesn't see, from that seat's class likelihood (`Mind::class_likelihood`): the class prior
 /// of the uniform deal of the unseen cards (`class_prior`) times the likelihood. Returns the
 /// class features and per card P(the seat holds it): a half by its suit's expected halves, an
 /// ace by the ace odds, the rest uniform; 0 for the reader's own cards.
-pub fn read_class(reader: CardSet, held: usize, likelihood: Option<&[f32; N_CLASSES]>) -> (ClassFeatures, [f32; 36]) {
-    let unseen = CardSet::ALL - reader;
-    let q0 = held as f32 / unseen.len().max(1) as f32;
+pub fn read_class(
+    reader: CardSet,
+    known: CardSet,
+    held: usize,
+    likelihood: Option<&[f32; N_CLASSES]>,
+) -> (ClassFeatures, [f32; 36]) {
+    let unseen = CardSet::ALL - reader - known;
+    let q0 = held.saturating_sub(known.len() as usize) as f32 / unseen.len().max(1) as f32;
     let mut q = [0.0f32; 36];
     unseen.iter().for_each(|c| q[c as usize] = q0);
+    known.iter().for_each(|c| q[c as usize] = 1.0);
     let prior = class_prior(&q);
     let mut post = prior;
     if let Some(l) = likelihood {
@@ -116,7 +123,8 @@ pub fn read_class(reader: CardSet, held: usize, likelihood: Option<&[f32; N_CLAS
         let s = engine::suit_of(c);
         let unseen_halves = (unseen & CardSet::halves(s)).len() as f32;
         if CardSet::HALVES.contains(c) {
-            cards[c as usize] = halves_held[s as usize] / unseen_halves;
+            let certain = (known & CardSet::halves(s)).len() as f32;
+            cards[c as usize] = ((halves_held[s as usize] - certain) / unseen_halves).clamp(0.0, 1.0);
         } else if CardSet::ACES.contains(c) && prior_ace > 0.0 {
             cards[c as usize] = (q0 * features.ace / prior_ace).min(1.0);
         }

@@ -291,7 +291,7 @@ impl Mind {
             if y == self.seat {
                 return None;
             }
-            self.seat_likelihood(&record, y, self.seat)
+            self.seat_likelihood(&record, y, self.seat, self.knowledge())
         });
         self.cache.borrow_mut().signals = Some((key, record, lik));
     }
@@ -299,7 +299,7 @@ impl Mind {
     /// The auction's likelihood of `y`'s dealt-hand class as `reader` reads it: `y`'s steps by
     /// the convention, trusted by the reader's relation to `y` (partner or opponent), at the
     /// floor for a bluffing seat. Public: only the bids. `None` without bids.
-    fn seat_likelihood(&self, record: &Record, y: Seat, reader: Seat) -> Option<Box<[f32; N_CLASSES]>> {
+    fn seat_likelihood(&self, record: &Record, y: Seat, reader: Seat, k: &Knowledge) -> Option<Box<[f32; N_CLASSES]>> {
         let p = &self.params.conventions;
         let s = &record.seats[y as usize];
         if s.bids.is_empty() || self.params.signals == Signals::BaseOnly {
@@ -307,7 +307,7 @@ impl Mind {
         }
         // KB `bluffing(y)`: a seat whose step has no support under the facts is read at the
         // floor ε for the rest of the game ([O] Q1b).
-        let trust = if self.bluffs(record, y) {
+        let trust = if self.bluffs(record, y, k) {
             p.convention_floor
         } else {
             p.trust(s.kind, y == engine::partner(reader))
@@ -323,19 +323,19 @@ impl Mind {
     }
 
     /// `seat`'s dealt-hand class likelihood as `reader` reads the auction (any seat, mine
-    /// included: my partner reads me too). For simulating another seat's view.
+    /// included: my partner reads me too). For simulating another seat's view: its bluff check uses
+    /// only the public facts, which every reader has, not my private ones.
     pub fn class_likelihood(&self, seat: Seat, reader: Seat) -> Option<Box<[f32; N_CLASSES]>> {
         self.signals();
         let cache = self.cache.borrow();
         let record = &cache.signals.as_ref().expect("computed above").1;
-        self.seat_likelihood(record, seat, reader)
+        self.seat_likelihood(record, seat, reader, self.public())
     }
 
     /// KB `bluffing(y)`: some step of `y` carries a message that no hand class of `y`'s dealt
     /// hand can hold under the facts (e.g. "ace" while `y` can have been dealt no ace; "pair"
     /// while a half of every such pair was certainly dealt elsewhere).
-    fn bluffs(&self, record: &Record, y: Seat) -> bool {
-        let k = self.knowledge();
+    fn bluffs(&self, record: &Record, y: Seat, k: &Knowledge) -> bool {
         let (certain, possible) = (k.dealt_certain(y), k.dealt_possible(y));
         let fits = |c: HandClass| {
             let aces =
@@ -357,7 +357,7 @@ impl Mind {
 
     /// KB `bluffing(y)` for the current facts and signals.
     pub fn bluffing(&self, y: Seat) -> bool {
-        y != self.seat && self.bluffs(&self.record(), y)
+        y != self.seat && self.bluffs(&self.record(), y, self.knowledge())
     }
 
     /// The exact base table (facts only), cached per fact epoch.

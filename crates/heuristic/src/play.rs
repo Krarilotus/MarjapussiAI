@@ -131,10 +131,11 @@ fn lead(ctx: &Ctx, legal: CardSet, val: &Valuation) -> (u8, RuleId, Vec<Fact>) {
     // It overrules the valuation's lead only where it is clearly better.
     let valued = choose(ctx, legal, val, true);
     if ctx.params.outlook_leads {
+        // The valuation's own card always takes part in the comparison (it is the baseline).
         let candidates = match legal - val.halves {
             open if open.is_empty() => legal,
             open => open,
-        };
+        } | CardSet::single(valued.0);
         if let Some(values) = crate::outlook::lead_values(ctx, candidates) {
             let best = values.best();
             let clear = values
