@@ -713,12 +713,22 @@ pub(crate) fn open_playout(hands: [CardSet; 4], leader: u8) -> [i32; 2] {
     [s.points(0), s.points(1)]
 }
 
-/// Per card: P(our team takes the trick) and the expected points in it.
-pub(crate) type TrickOutcomes = [Option<(f32, f32)>; 36];
+/// One card's trick over the believed worlds, kept joint: who takes it and what it holds then.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TrickOutcome {
+    /// P(our team takes the trick).
+    pub p_ours: f32,
+    /// The expected points in the trick (cards and a last-trick bonus) if we take it, and if
+    /// they take it (each falls back to the overall mean where it never happens).
+    pub points_ours: f32,
+    pub points_theirs: f32,
+}
 
-/// The trick outcome of playing each of my cards now, over the believed worlds: P(our team
-/// takes the trick) and the expected points in the trick (cards and a last-trick bonus).
-/// The engine's legal replies are exact; genuine choices use the level-0 response.
+/// Per card: its trick outcome.
+pub(crate) type TrickOutcomes = [Option<TrickOutcome>; 36];
+
+/// The trick outcome of playing each of my cards now, over the believed worlds. The engine's
+/// legal replies are exact; genuine choices use the level-0 response.
 pub(crate) fn trick_outcomes(ctx: &Ctx) -> Option<TrickOutcomes> {
     let _timing = beliefs::profile::scope("outlook.trick");
     let public = ctx.k.public_state(ctx.me, PlayPhase::Cards);
@@ -731,7 +741,8 @@ pub(crate) fn trick_outcomes(ctx: &Ctx) -> Option<TrickOutcomes> {
         }
         let mut out = [None; 36];
         for c in mine.iter() {
-            let (mut p_ours, mut pts, mut mass) = (0.0f64, 0.0f64, 0.0f64);
+            let (mut p_ours, mut mass) = (0.0f64, 0.0f64);
+            let (mut pts_ours, mut pts_theirs) = (0.0f64, 0.0f64);
             for w in worlds {
                 let Ok(mut state) = FastState::from_public(public, w.hands) else {
                     continue;
@@ -748,13 +759,22 @@ pub(crate) fn trick_outcomes(ctx: &Ctx) -> Option<TrickOutcomes> {
                 }
                 let p = w.weight / total;
                 mass += p;
-                pts += p * (state.card_points(0) + state.card_points(1) - before) as f64;
+                let points = p * (state.card_points(0) + state.card_points(1) - before) as f64;
                 if state.leader() % 2 == us {
                     p_ours += p;
+                    pts_ours += points;
+                } else {
+                    pts_theirs += points;
                 }
             }
             if mass > 0.0 {
-                out[c as usize] = Some(((p_ours / mass) as f32, (pts / mass) as f32));
+                let mean = (pts_ours + pts_theirs) / mass;
+                let given = |pts: f64, p: f64| if p > 0.0 { pts / p } else { mean };
+                out[c as usize] = Some(TrickOutcome {
+                    p_ours: (p_ours / mass) as f32,
+                    points_ours: given(pts_ours, p_ours) as f32,
+                    points_theirs: given(pts_theirs, mass - p_ours) as f32,
+                });
             }
         }
         Some(out)
