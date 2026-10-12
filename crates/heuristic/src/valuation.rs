@@ -341,11 +341,14 @@ impl Choice {
     }
 
     /// The world-resolved trick outcome of `c`, when the outlook is on.
-    fn world_outcome(&self, ctx: &Ctx, c: u8) -> Option<crate::outlook::TrickOutcome> {
+    fn world_outcome(&self, ctx: &Ctx, c: u8) -> Option<&crate::outlook::TrickOutcome> {
         if !ctx.params.outlook_trick {
             return None;
         }
-        self.worlds.get_or_init(|| crate::outlook::trick_outcomes(ctx)).and_then(|o| o[c as usize])
+        self.worlds
+            .get_or_init(|| crate::outlook::trick_outcomes(ctx))
+            .as_ref()
+            .and_then(|o| o[c as usize].as_ref())
     }
 
     /// P(our team takes the trick if I play `c`): over the believed worlds when the outlook is on,
@@ -374,20 +377,30 @@ impl Choice {
 
     /// The terms of playing `c` now (higher is better); the value is their sum.
     fn terms(&self, ctx: &Ctx, v: &Valuation, c: u8, leading: bool) -> [(Term, f32); 4] {
-        let p = self.p_ours(ctx, c);
-        // The trick's worth if we take it and if they do, each with the points it then holds (the
-        // joint outcome over the believed worlds; else one estimate for both).
-        let estimate = self.trick_points + pts(c) + self.later.len() as f32 * v.avg_card;
-        let (ours, theirs) = self
-            .world_outcome(ctx, c)
-            .map_or((estimate, estimate), |o| (o.points_ours, o.points_theirs));
+        // The trick's worth: over the joint outcomes of the believed worlds (who takes it, with
+        // the points it then holds), each valued by the score model before averaging; else from
+        // P(ours) and one points estimate.
         let worth = |trick: f32| v.stakes.trick(trick as f64, (trick - self.in_trick) as f64);
-        let (take, give) = (worth(ours).0, worth(theirs).1);
+        let trick_worth = match self.world_outcome(ctx, c) {
+            Some(o) => o
+                .outcomes
+                .iter()
+                .map(|&(ours, pts, p)| {
+                    let (take, give) = worth(pts as f32);
+                    p * if ours { take } else { give } as f32
+                })
+                .sum::<f32>(),
+            None => {
+                let p = self.p_ours(ctx, c);
+                let (take, give) = worth(self.trick_points + pts(c) + self.later.len() as f32 * v.avg_card);
+                p * take as f32 + (1.0 - p) * give as f32
+            }
+        };
         let plan = if leading { v.plan[c as usize] } else { 0.0 };
         [
             (
                 Term::Trick,
-                p * take as f32 + (1.0 - p) * give as f32 + v.lead_value(ctx, c),
+                trick_worth + v.lead_value(ctx, c),
             ),
             (Term::Future, -v.future[c as usize]),
             (Term::Pair, -v.pair[c as usize]),

@@ -319,11 +319,6 @@ fn apply(state: &mut FastState, known: &mut Known, m: Move) {
     }
 }
 
-/// `team`'s points minus the other team's (raw points: a resource, not the objective).
-fn margin(state: &FastState, team: u8) -> i32 {
-    state.points(team) - state.points(1 - team)
-}
-
 /// The contract a playout is judged by: the playing team and the game value (`None` before a
 /// contract exists).
 type Contract = Option<(u8, i32)>;
@@ -334,15 +329,12 @@ fn contract(ctx: &Ctx) -> Contract {
 
 /// The objective (the owner's choice; Astra's review §2): `us`'s engine score difference at the
 /// end of the played-out game under `contract` (made or failed, the defenders' rounded points,
-/// schwarz), from `engine::game_scores`, the one owner of the scoring. Without a contract, the
-/// raw points difference.
+/// schwarz), from `engine::game_scores`, the one owner of the scoring; without a contract, the
+/// engine's all-pass scoring (each team's rounded points).
 fn score(state: &FastState, contract: Contract, us: u8) -> i32 {
-    let Some((playing_team, game_value)) = contract else {
-        return margin(state, us);
-    };
     let outcome = engine::GameOutcome {
-        playing_team: Some(playing_team),
-        game_value,
+        playing_team: contract.map(|c| c.0),
+        game_value: contract.map_or(0, |c| c.1),
         team_points: [state.points(0), state.points(1)],
         team_tricks: [state.tricks_won(0), state.tricks_won(1)],
     };
@@ -713,15 +705,14 @@ pub(crate) fn open_playout(hands: [CardSet; 4], leader: u8) -> [i32; 2] {
     [s.points(0), s.points(1)]
 }
 
-/// One card's trick over the believed worlds, kept joint: who takes it and what it holds then.
-#[derive(Clone, Copy, Debug)]
+/// One card's trick over the believed worlds, kept joint: per outcome (our team takes it or not,
+/// the points it holds: cards and a last-trick bonus) its probability.
+#[derive(Clone, Debug, Default)]
 pub(crate) struct TrickOutcome {
     /// P(our team takes the trick).
     pub p_ours: f32,
-    /// The expected points in the trick (cards and a last-trick bonus) if we take it, and if
-    /// they take it (each falls back to the overall mean where it never happens).
-    pub points_ours: f32,
-    pub points_theirs: f32,
+    /// (ours, points, probability), summing to 1.
+    pub outcomes: Vec<(bool, i32, f32)>,
 }
 
 /// Per card: its trick outcome.
@@ -739,10 +730,10 @@ pub(crate) fn trick_outcomes(ctx: &Ctx) -> Option<TrickOutcomes> {
         if worlds.is_empty() || total <= 0.0 {
             return None;
         }
-        let mut out = [None; 36];
+        let mut out: TrickOutcomes = std::array::from_fn(|_| None);
         for c in mine.iter() {
             let (mut p_ours, mut mass) = (0.0f64, 0.0f64);
-            let (mut pts_ours, mut pts_theirs) = (0.0f64, 0.0f64);
+            let mut outcomes: Vec<(bool, i32, f64)> = Vec::new();
             for w in worlds {
                 let Ok(mut state) = FastState::from_public(public, w.hands) else {
                     continue;
@@ -759,21 +750,20 @@ pub(crate) fn trick_outcomes(ctx: &Ctx) -> Option<TrickOutcomes> {
                 }
                 let p = w.weight / total;
                 mass += p;
-                let points = p * (state.card_points(0) + state.card_points(1) - before) as f64;
-                if state.leader() % 2 == us {
+                let ours = state.leader() % 2 == us;
+                let points = state.card_points(0) + state.card_points(1) - before;
+                if ours {
                     p_ours += p;
-                    pts_ours += points;
-                } else {
-                    pts_theirs += points;
+                }
+                match outcomes.iter_mut().find(|o| o.0 == ours && o.1 == points) {
+                    Some(o) => o.2 += p,
+                    None => outcomes.push((ours, points, p)),
                 }
             }
             if mass > 0.0 {
-                let mean = (pts_ours + pts_theirs) / mass;
-                let given = |pts: f64, p: f64| if p > 0.0 { pts / p } else { mean };
                 out[c as usize] = Some(TrickOutcome {
                     p_ours: (p_ours / mass) as f32,
-                    points_ours: given(pts_ours, p_ours) as f32,
-                    points_theirs: given(pts_theirs, mass - p_ours) as f32,
+                    outcomes: outcomes.into_iter().map(|(o, pts, p)| (o, pts, (p / mass) as f32)).collect(),
                 });
             }
         }
