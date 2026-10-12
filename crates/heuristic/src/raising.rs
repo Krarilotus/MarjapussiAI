@@ -188,48 +188,202 @@ fn route_raise(ctx: &Ctx, legal: &[GameAction], cap: i32) -> Option<(GameAction,
 }
 
 /// HZ-1 with HZ-3: the best expected-score raise, if it beats keeping the current value.
-fn estimated_raise(ctx: &Ctx, legal: &[GameAction]) -> Option<(GameAction, i32, Vec<crate::Fact>)> {
-    if !ctx.params.estimated_raise || ctx.k.declarer() != Some(ctx.me) || !ctx.k.played().is_empty() {
-        return None;
-    }
-    let hand = ctx.k.certain(ctx.me);
-    let given = given_back(ctx);
+/// HZ-1 with HZ-3 for a declarer holding `hand` after passing back `given`, at the contract
+/// `value`: the legal target with the best expected contract score, or `value` to keep it. The
+/// one owner of this rule: the raise decision and the reading of a raise both use it.
+pub(crate) struct Hz1 {
+    pub target: i32,
+    pub estimate: f32,
+    pub score: f32,
+    pub keep: f32,
+    /// HZ-3 [O]: never raise across 140 without a certain team pair.
+    pub cap: i32,
+}
+
+pub(crate) fn hz1(hand: CardSet, given: CardSet, value: i32) -> Hz1 {
     let own_pairs: i32 = hand.pair_suits().map(beliefs::conventions::pair_value).sum();
     let given_pairs: i32 = given.pair_suits().map(beliefs::conventions::pair_value).sum();
-    let value = ctx.k.value();
-    // HZ-3 [O]: never raise across 140 without a certain team pair.
     let cap = if value <= 140 && own_pairs + given_pairs == 0 {
         140
     } else {
         i32::MAX
     };
-    if ctx.params.route_raise {
-        return route_raise(ctx, legal, cap);
-    }
     let t = &TEAM_POINTS;
     let estimate = contract_estimate(hand, own_pairs, given_pairs as f32);
     let score = |v: i32| (2.0 * t.p_reach(estimate, v) - 1.0) * v as f32;
     let keep = score(value);
-    let (action, target) = legal
+    let best = engine::bid_range(engine::Points(value))
+        .filter(|&v| v <= cap)
+        .max_by(|&a, &b| score(a).total_cmp(&score(b)).then(b.cmp(&a)))
+        .filter(|&v| score(v) > keep);
+    Hz1 {
+        target: best.unwrap_or(value),
+        estimate,
+        score: best.map_or(keep, score),
+        keep,
+        cap,
+    }
+}
+
+fn estimated_raise(ctx: &Ctx, legal: &[GameAction]) -> Option<(GameAction, i32, Vec<crate::Fact>)> {
+    if !ctx.params.estimated_raise || ctx.k.declarer() != Some(ctx.me) || !ctx.k.played().is_empty() {
+        return None;
+    }
+    let value = ctx.k.value();
+    let h = hz1(ctx.k.certain(ctx.me), given_back(ctx), value);
+    if ctx.params.route_raise {
+        return route_raise(ctx, legal, h.cap);
+    }
+    if h.target == value {
+        return None;
+    }
+    let action = legal
         .iter()
-        .filter_map(|a| match a.action_type {
-            ActionType::NewBid(v) if v <= cap => Some((*a, v)),
-            _ => None,
-        })
-        .max_by(|a, b| score(a.1).total_cmp(&score(b.1)).then(b.1.cmp(&a.1)))?;
-    (score(target) > keep).then(|| {
-        (
-            action,
-            target,
-            vec![
-                fact("contract_estimate", estimate),
-                fact("p_make", t.p_reach(estimate, target)),
-                fact("expected_score", score(target)),
-                fact("expected_score_keep", keep),
-                fact("raise_target", target),
-            ],
-        )
-    })
+        .find(|a| matches!(a.action_type, ActionType::NewBid(v) if v == h.target))?;
+    Some((
+        *action,
+        h.target,
+        vec![
+            fact("contract_estimate", h.estimate),
+            fact("p_make", TEAM_POINTS.p_reach(h.estimate, h.target)),
+            fact("expected_score", h.score),
+            fact("expected_score_keep", h.keep),
+            fact("raise_target", h.target),
+        ],
+    ))
+}
+
+/// The partner's raise decision as I observed it (D1, Astra's review §16): the contract before
+/// it, the target it chose (the same value when it kept the contract and led), and the cards
+/// it passed back to me. `None` while it hasn't decided or isn't the declarer.
+pub(crate) struct RaiseObservation {
+    pub raiser: observation::Seat,
+    pub before: i32,
+    pub target: i32,
+    pub given_to_me: CardSet,
+    /// Its seat kind: an agent's raise is read by its actual rule, a human's by the measured
+    /// human choices.
+    pub agent: bool,
+}
+
+pub(crate) fn partner_raise(ctx: &Ctx) -> Option<RaiseObservation> {
+    let raiser = partner(ctx.me);
+    if ctx.k.declarer() != Some(raiser) {
+        return None;
+    }
+    let (mut value, mut returned, mut given) = (engine::NO_BID.0, false, CardSet::EMPTY);
+    let mut before = None;
+    for event in ctx.mind.events() {
+        match *event {
+            SeatEvent::Pass { from, to, cards } if from == raiser && to == ctx.me => {
+                given = cards?;
+                returned = true;
+            }
+            SeatEvent::Bid { seat, value: target } if returned && seat == raiser => {
+                return Some(RaiseObservation {
+                    raiser,
+                    before: before.unwrap_or(value),
+                    target,
+                    given_to_me: given,
+                    agent: ctx.mind.kinds()[raiser as usize] == crate::SeatKind::Heuristic,
+                });
+            }
+            SeatEvent::Bid { value: v, .. } => {
+                value = v;
+                before = Some(v);
+            }
+            SeatEvent::CardPlayed { .. } if returned => {
+                return Some(RaiseObservation {
+                    raiser,
+                    before: value,
+                    target: value,
+                    given_to_me: given,
+                    agent: ctx.mind.kinds()[raiser as usize] == crate::SeatKind::Heuristic,
+                });
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Human contracts after the exchange relative to the declarer's countable team pairs P (its own
+/// complete pairs plus those it passed back), by band of P: (lowest P of the band, the first
+/// V - P of the counts, counts of V - P in steps of 5). From the 1,577 human games
+/// (`tools/kbstudy/raisepairs.py`; n = 477, 374, 498, 110, 118). The owner reads a raise the
+/// same way: 245 with the Green pair passed back says "two more pairs" (game 1187).
+const HUMAN_TARGET_OVER_PAIRS: [(i32, i32, &[u16]); 5] = [
+    (
+        0,
+        120,
+        &[
+            7, 13, 25, 54, 219, 61, 24, 16, 13, 7, 8, 1, 8, 10, 1, 2, 0, 1, 0, 1, 1, 0, 1, 0, 2, 0, 0, 0, 1, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 1,
+        ],
+    ),
+    (
+        40,
+        60,
+        &[
+            3, 2, 2, 9, 30, 57, 28, 26, 55, 43, 15, 9, 8, 3, 4, 2, 40, 7, 2, 0, 4, 4, 1, 2, 5, 3, 1, 1, 3, 0, 0, 1, 1,
+            0, 0, 0, 3,
+        ],
+    ),
+    (
+        80,
+        25,
+        &[
+            2, 1, 3, 19, 54, 28, 28, 30, 52, 36, 36, 32, 30, 20, 14, 14, 18, 6, 7, 5, 6, 2, 6, 31, 3, 2, 0, 1, 2, 1, 0,
+            2, 0, 3, 1, 0, 0, 0, 0, 2, 0, 0, 0, 1,
+        ],
+    ),
+    (
+        120,
+        -10,
+        &[
+            1, 1, 2, 2, 5, 2, 4, 5, 8, 6, 3, 12, 4, 3, 4, 9, 8, 2, 4, 4, 5, 0, 1, 3, 2, 0, 1, 0, 0, 1, 4, 0, 1, 0, 0,
+            0, 0, 1, 1, 0, 0, 1,
+        ],
+    ),
+    (
+        160,
+        -80,
+        &[
+            1, 0, 0, 1, 0, 0, 0, 0, 2, 1, 1, 2, 2, 2, 4, 2, 3, 9, 0, 2, 4, 5, 2, 3, 5, 20, 4, 1, 2, 5, 9, 1, 2, 6, 2,
+            0, 2, 0, 1, 2, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        ],
+    ),
+];
+
+impl RaiseObservation {
+    /// P(this target | the raiser holding `hand` at its decision): an agent's by its actual rule
+    /// (HZ-1), with the convention reader's floor `floor` for anything else; a human's by
+    /// `HUMAN_TARGET_OVER_PAIRS` for its countable team pairs, add-one smoothed over the legal
+    /// targets.
+    pub fn likelihood(&self, hand: CardSet, floor: f32) -> f64 {
+        let n = engine::bid_range(engine::Points(self.before)).count() as f64 + 1.0;
+        if self.agent {
+            let hit = (hz1(hand, self.given_to_me, self.before).target == self.target) as u8 as f64;
+            return (1.0 - floor as f64) * hit + floor as f64 / n;
+        }
+        let pairs: i32 = (hand.pair_suits().chain(self.given_to_me.pair_suits()))
+            .map(beliefs::conventions::pair_value)
+            .sum();
+        let (_, start, counts) = HUMAN_TARGET_OVER_PAIRS
+            .iter()
+            .rev()
+            .find(|b| pairs >= b.0)
+            .copied()
+            .unwrap_or(HUMAN_TARGET_OVER_PAIRS[0]);
+        let i = (self.target - pairs - start).div_euclid(5);
+        let count = usize::try_from(i)
+            .ok()
+            .and_then(|i| counts.get(i))
+            .copied()
+            .unwrap_or(0) as f64;
+        let total: f64 = counts.iter().map(|&c| c as f64).sum();
+        (count + 1.0) / (total + n)
+    }
 }
 
 /// The same seat-visible proof used by the optional human claim. Recompute its

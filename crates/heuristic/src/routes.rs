@@ -3,7 +3,7 @@
 //! informed future play or calibrated probabilities of human choices.
 
 use engine::{opponents, suit_of, FastState, Move, PlayPhase, SUITS};
-use knowledge::{Belief, World};
+use knowledge::{Belief, Hands, World};
 
 use crate::{Ctx, Rng};
 
@@ -26,15 +26,37 @@ impl Routes {
         let worlds_max = ctx.params.outlook_worlds as usize;
         let model = ctx.mind.deal_model();
         let (space, weights) = (model.space(), model.weights());
+        // D1: the partner's raise is read once into these worlds (its likelihood given the
+        // partner's hand at that decision: its current cards and those it played since). With a
+        // reading, `RAISE_DRAWS` times as many deals are drawn and resampled by weight, so enough
+        // worlds remain that fit the raise.
+        let raise = crate::raising::partner_raise(ctx);
+        let floor = ctx.mind.params().conventions.convention_floor;
+        let read = |hands: &Hands| {
+            raise.as_ref().map_or(1.0, |r| {
+                r.likelihood(hands[r.raiser as usize] | ctx.k.played_by(r.raiser), floor)
+            })
+        };
         let worlds = if space.count() <= worlds_max as u64 {
             let mut worlds = Vec::new();
             space.for_each_deal(|hands| {
                 worlds.push(World {
                     hands: *hands,
-                    weight: weights.weight(hands),
+                    weight: weights.weight(hands) * read(hands),
                 })
             });
             worlds
+        } else if raise.is_some() {
+            let mut rng = Rng::new(ctx.seed);
+            let drawn: Vec<World> = space
+                .sample_worlds(&mut rng, RAISE_DRAWS * worlds_max, weights)
+                .into_iter()
+                .map(|w| World {
+                    weight: w.weight * read(&w.hands),
+                    ..w
+                })
+                .collect();
+            resample(&drawn, worlds_max, &mut rng)
         } else {
             space.sample_worlds(&mut Rng::new(ctx.seed), worlds_max, weights)
         };
@@ -83,6 +105,36 @@ impl Routes {
         self.entries[card as usize] = Some(entry);
         entry
     }
+}
+
+/// Candidate deals per world when a raise is read: a matching combination of the raiser's
+/// pairs can be rare under the uniform draw (game 1187: about 0.5 %); drawing is cheap (2,048
+/// deals in under 1 ms), the playouts are not, so only the resampled pool is played out.
+const RAISE_DRAWS: usize = 32;
+
+/// `n` worlds drawn from `drawn` with probability proportional to weight (systematic
+/// resampling), each then of equal weight: the importance weights become sample frequency.
+fn resample(drawn: &[World], n: usize, rng: &mut Rng) -> Vec<World> {
+    let total: f64 = drawn.iter().map(|w| w.weight).sum();
+    if drawn.is_empty() || total <= 0.0 {
+        return drawn.iter().take(n).copied().collect();
+    }
+    let step = total / n as f64;
+    let mut at = (rng.next() >> 11) as f64 / (1u64 << 53) as f64 * step;
+    let (mut i, mut acc) = (0, drawn[0].weight);
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        while acc < at && i + 1 < drawn.len() {
+            i += 1;
+            acc += drawn[i].weight;
+        }
+        out.push(World {
+            weight: 1.0,
+            ..drawn[i]
+        });
+        at += step;
+    }
+    out
 }
 
 impl Ctx<'_> {
