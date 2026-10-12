@@ -67,6 +67,8 @@ params! {
     outlook_leads: bool = true,
     /// The valuation's trick term from the trick outcome over the believed worlds.
     outlook_trick: bool = true,
+    /// HO-2: the trump plan's activation and the answer chosen by route over the believed worlds.
+    outlook_activation: bool = true,
 
     /// HL-2: cash a side-suit standing card before the valuation leads.
     lead_cash_standing: bool = true,

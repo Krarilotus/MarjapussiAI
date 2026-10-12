@@ -6,7 +6,7 @@
 
 use engine::CARD_POINTS;
 use engine::{partner, takes, CardSet};
-use engine::{ActionType, AnswerType, GameAction};
+use engine::{ActionType, AnswerType, GameAction, Move, PlayPhase};
 
 use crate::leads;
 use crate::rules::RuleId;
@@ -65,6 +65,15 @@ pub(crate) fn answer(ctx: &Ctx, legal: &[GameAction]) -> Decision {
         .iter()
         .max_by(|a, b| risk(a).total_cmp(&risk(b)))
         .unwrap_or(&legal[0]);
+    // HO-2: another answer only where the route is clearly better than HC-6's.
+    if ctx.params.outlook_activation {
+        let moves: Vec<Move> = legal.iter().filter_map(|a| Move::from_action(&a.action_type)).collect();
+        let planned = Move::from_action(&best.action_type);
+        if let Some(Some(d)) = crate::outlook::route_choice(ctx, legal, PlayPhase::from_actions(legal), &moves, planned)
+        {
+            return d;
+        }
+    }
     decision(best, RuleId::HC6, vec![fact("at_risk", risk(best))])
 }
 
@@ -117,28 +126,32 @@ fn lead(ctx: &Ctx, legal: CardSet, val: &Valuation) -> (u8, RuleId, Vec<Fact>) {
     if let Some(l) = leads::after_standing(ctx, legal, val) {
         return l;
     }
-    // HO-1: the plan layer's chain (trick outcome + trick ownership of the rest) over the
-    // believed worlds, among the cards that keep my live pairs' halves.
+    // HO-1: the plan layer's chain (the trick, then the rest played out with both teams'
+    // activations) over the believed worlds, among the cards that keep my live pairs' halves.
+    // It overrules the valuation's lead only where it is clearly better.
+    let valued = choose(ctx, legal, val, true);
     if ctx.params.outlook_leads {
         let candidates = match legal - val.halves {
             open if open.is_empty() => legal,
             open => open,
         };
         if let Some(values) = crate::outlook::lead_values(ctx, candidates) {
-            if let Some(&(c, v)) = values
-                .iter()
-                .max_by(|a, b| a.1.total_cmp(&b.1).then(CARD_POINTS[b.0 as usize].cmp(&CARD_POINTS[a.0 as usize])))
-            {
-                let runner_up = values.iter().filter(|x| x.0 != c).map(|x| x.1).fold(f32::NEG_INFINITY, f32::max);
+            let best = values.best();
+            let clear = values
+                .index(valued.0)
+                .is_none_or(|v| v != best && values.clearly_better(best, v));
+            if clear {
+                let mean = values.mean(best);
+                let over = values.index(valued.0).map_or(0.0, |v| mean - values.mean(v));
                 return (
-                    c,
+                    values.options[best],
                     RuleId::HO1,
-                    vec![fact("expected_difference", v), fact("margin", (v - runner_up).max(0.0))],
+                    vec![fact("expected_difference", mean), fact("over_valuation", over)],
                 );
             }
         }
     }
-    choose(ctx, legal, val, true)
+    valued
 }
 
 fn follow(ctx: &Ctx, legal: CardSet, val: &Valuation) -> (u8, RuleId, Vec<Fact>) {

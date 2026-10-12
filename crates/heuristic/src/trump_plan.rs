@@ -3,7 +3,7 @@
 
 use engine::Suit;
 use engine::{partner, CardSet, SUITS};
-use engine::{ActionType, GameAction, QuestionType};
+use engine::{ActionType, GameAction, Move, PlayPhase, QuestionType};
 
 use beliefs::conventions::pair_value;
 use beliefs::{Concept, ConceptBudget, ConceptQuery, Literal, PerspectiveBudget};
@@ -322,7 +322,13 @@ pub(crate) fn timing(ctx: &Ctx, legal: &[GameAction], reach: &Reach, val: &Valua
             ));
         }
     }
-    connected_entry(ctx, legal, cards - val.plan_cards, reach, planned.as_ref()).or(planned)
+    let chosen = connected_entry(ctx, legal, cards - val.plan_cards, reach, planned.as_ref()).or(planned);
+    match chosen {
+        Some(d) if ctx.params.outlook_activation && !matches!(d.action.action_type, ActionType::CardPlayed(_)) => {
+            route_activation(ctx, legal, &d).unwrap_or(Some(d))
+        }
+        other => other,
+    }
 }
 
 /// Follow an available conditional route even after my question rights have
@@ -431,6 +437,29 @@ fn partner_knows_pair(ctx: &Ctx, suit: Suit) -> bool {
         .ok()
         .and_then(|p| p.known_by_viewer)
         == Some(true)
+}
+
+/// HO-2: once the trump plan activates (`planned`), another activation or a card instead where
+/// the route over the believed worlds is clearly better. Questions the partner certainly
+/// answers no are not options. `None` keeps the plan; `Some(None)` plays a card.
+fn route_activation(ctx: &Ctx, legal: &[GameAction], planned: &Decision) -> Option<Option<Decision>> {
+    let k = ctx.k;
+    let mate = partner(ctx.me);
+    let mine = k.certain(ctx.me);
+    let moves: Vec<Move> = legal
+        .iter()
+        .filter_map(|a| Move::from_action(&a.action_type))
+        .filter(|m| match *m {
+            Move::Announce(_) => true,
+            Move::Question(QuestionType::Yours) => k.pairs(mate).possible != 0,
+            Move::Question(QuestionType::YourHalf(s)) => {
+                !k.is_called(s) && !(mine & CardSet::halves(s)).is_empty() && k.known_half(mate, s) != Some(false)
+            }
+            _ => false,
+        })
+        .collect();
+    let plan = Move::from_action(&planned.action.action_type);
+    crate::outlook::route_choice(ctx, legal, PlayPhase::from_actions(legal), &moves, plan)
 }
 
 fn action(ctx: &Ctx, legal: &[GameAction], reach: &Reach) -> Option<Decision> {
