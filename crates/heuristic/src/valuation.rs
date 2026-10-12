@@ -273,6 +273,9 @@ pub(crate) struct Choice {
     /// The card currently winning and its seat (None when I lead).
     pub winner: Option<(Seat, u8)>,
     pub led: Option<Suit>,
+    /// The trick outcome over the believed worlds (`outlook::trick_outcomes`), computed once on
+    /// first use: P(ours) and the expected trick points per card.
+    worlds: std::cell::OnceCell<Option<[Option<(f32, f32)>; 36]>>,
 }
 
 impl Choice {
@@ -288,6 +291,7 @@ impl Choice {
             later,
             winner: ctx.k.winning(),
             led: trick.first().map(|&c| suit_of(c)),
+            worlds: std::cell::OnceCell::new(),
         }
     }
 
@@ -336,8 +340,20 @@ impl Choice {
         }
     }
 
-    /// P(our team takes the trick if I play `c`).
+    /// The world-resolved trick outcome of `c`, when the outlook is on.
+    fn world_outcome(&self, ctx: &Ctx, c: u8) -> Option<(f32, f32)> {
+        if !ctx.params.outlook_trick {
+            return None;
+        }
+        self.worlds.get_or_init(|| crate::outlook::trick_outcomes(ctx)).and_then(|o| o[c as usize])
+    }
+
+    /// P(our team takes the trick if I play `c`): over the believed worlds when the outlook is on,
+    /// else from the single-seat estimates below.
     pub fn p_ours(&self, ctx: &Ctx, c: u8) -> f32 {
+        if let Some((p, _)) = self.world_outcome(ctx, c) {
+            return p;
+        }
         let mate = partner(ctx.me);
         let trump = ctx.k.trump();
         let (seat, w) = match self.winner {
@@ -359,7 +375,10 @@ impl Choice {
     /// The terms of playing `c` now (higher is better); the value is their sum.
     fn terms(&self, ctx: &Ctx, v: &Valuation, c: u8, leading: bool) -> [(Term, f32); 4] {
         let p = self.p_ours(ctx, c);
-        let trick = self.trick_points + pts(c) + self.later.len() as f32 * v.avg_card;
+        let trick = match self.world_outcome(ctx, c) {
+            Some((_, expected)) => expected,
+            None => self.trick_points + pts(c) + self.later.len() as f32 * v.avg_card,
+        };
         let (take, give) = v.stakes.trick(trick as f64, (trick - self.in_trick) as f64);
         let plan = if leading { v.plan[c as usize] } else { 0.0 };
         [

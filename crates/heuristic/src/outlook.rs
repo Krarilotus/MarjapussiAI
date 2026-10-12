@@ -151,6 +151,49 @@ fn remainder(mut hands: [CardSet; 4], trump: Option<Suit>, leader: u8) -> [i32; 
     pts
 }
 
+/// The trick outcome of playing each of my cards now, over the believed worlds: P(our team
+/// takes the trick) and the expected points in the trick (cards and a last-trick bonus).
+/// The engine's legal replies are exact; genuine choices use the level-0 response.
+pub(crate) fn trick_outcomes(ctx: &Ctx) -> Option<[Option<(f32, f32)>; 36]> {
+    let _timing = beliefs::profile::scope("outlook.trick");
+    let public = ctx.k.public_state(ctx.me, PlayPhase::Cards);
+    let us = ctx.me % 2;
+    let mine = ctx.k.certain(ctx.me);
+    ctx.with_worlds(|worlds: &[World]| {
+        let total: f64 = worlds.iter().map(|w| w.weight).sum();
+        if worlds.is_empty() || total <= 0.0 {
+            return None;
+        }
+        let mut out = [None; 36];
+        for c in mine.iter() {
+            let (mut p_ours, mut pts, mut mass) = (0.0f64, 0.0f64, 0.0f64);
+            for w in worlds {
+                let Ok(mut state) = FastState::from_public(public, w.hands) else { continue };
+                if !state.legal_cards().contains(c) {
+                    continue;
+                }
+                let before = state.card_points(0) + state.card_points(1);
+                let tricks = state.tricks_done();
+                state.play(c);
+                while state.tricks_done() == tricks && !state.is_over() {
+                    let r = respond(&state);
+                    state.play(r);
+                }
+                let p = w.weight / total;
+                mass += p;
+                pts += p * (state.card_points(0) + state.card_points(1) - before) as f64;
+                if state.leader() % 2 == us {
+                    p_ours += p;
+                }
+            }
+            if mass > 0.0 {
+                out[c as usize] = Some(((p_ours / mass) as f32, (pts / mass) as f32));
+            }
+        }
+        Some(out)
+    })
+}
+
 /// The expected value (our points minus theirs) of leading each card in `candidates`, over the
 /// believed worlds. `None` when there are no worlds.
 pub(crate) fn lead_values(ctx: &Ctx, candidates: CardSet) -> Option<Vec<(u8, f32)>> {

@@ -65,6 +65,8 @@ params! {
 
     /// HO-1: leads without a planned rule by the plan layer's chain (`outlook`).
     outlook_leads: bool = true,
+    /// The valuation's trick term from the trick outcome over the believed worlds.
+    outlook_trick: bool = true,
 
     /// HL-2: cash a side-suit standing card before the valuation leads.
     lead_cash_standing: bool = true,
