@@ -348,6 +348,12 @@ pub(crate) struct WorldValues<K> {
 /// guard's standard error has a sample to stand on).
 const MIN_WORLDS: usize = 8;
 
+/// The decision's deadline has passed: an evaluation not yet started is skipped (its rule
+/// decides), one under way stops after `MIN_WORLDS`.
+fn past(ctx: &Ctx) -> bool {
+    ctx.deadline.is_some_and(|d| std::time::Instant::now() >= d)
+}
+
 impl<K: Copy + PartialEq> WorldValues<K> {
     /// Evaluates every option in every world, until the decision's deadline (after
     /// `MIN_WORLDS`); `None` without worlds or options. The pool is a sample, so a prefix is one.
@@ -358,13 +364,13 @@ impl<K: Copy + PartialEq> WorldValues<K> {
         mut value: impl FnMut(&World, &K) -> Option<i32>,
     ) -> Option<Self> {
         let total: f64 = worlds.iter().map(|w| w.weight).sum();
-        if options.is_empty() || total <= 0.0 {
+        if options.is_empty() || total <= 0.0 || past(ctx) {
             return None;
         }
         let mut values = vec![Vec::new(); options.len()];
         let mut p = Vec::new();
         for (i, w) in worlds.iter().enumerate() {
-            if i >= MIN_WORLDS && ctx.deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            if i >= MIN_WORLDS && past(ctx) {
                 break;
             }
             let row: Option<Vec<i32>> = options.iter().map(|o| value(w, o)).collect();
@@ -554,8 +560,11 @@ pub(crate) fn final_outcomes(ctx: &Ctx) -> Option<Outcomes> {
     ctx.with_worlds(|worlds: &[World]| {
         // Per world, every plan's end; worlds past the deadline (after `MIN_WORLDS`) are left out.
         let mut rows: Vec<(f64, Vec<FastState>)> = Vec::new();
+        if past(ctx) {
+            return None;
+        }
         for (i, w) in worlds.iter().enumerate() {
-            if i >= MIN_WORLDS && ctx.deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            if i >= MIN_WORLDS && past(ctx) {
                 break;
             }
             if let Some(ends) = plans.iter().map(|&plan| ends(w, plan)).collect::<Option<Vec<_>>>() {

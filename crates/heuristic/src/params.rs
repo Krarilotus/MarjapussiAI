@@ -71,8 +71,11 @@ params! {
     /// every declarer (human games: take -77, defend +131 on average where humans make about
     /// two thirds), so it would defend far too often. Needs the exchange to read the auction.
     route_take: bool = false,
-    /// HZ-1 by route: the raise from the team's final points over the believed worlds.
-    route_raise: bool = true,
+    /// HZ-1 by route: the raise from the team's final points over the believed worlds. Off: in
+    /// 2,000 games vs live it raised 560 times (vs 205) by 37 on average and made 68 % (-6.4 per
+    /// game vs without); choosing the highest target picks the hands whose playout estimate is
+    /// too high (human games: estimates of 240+ overshoot by 5 to 22 points).
+    route_raise: bool = false,
 
     /// HO-1: leads without a planned rule by the plan layer's chain (`outlook`).
     outlook_leads: bool = true,
