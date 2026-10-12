@@ -21,6 +21,11 @@ name = "tools"
 
 # These drivers have no unit tests; integration tests exercise their shared library.
 [[bin]]
+name = "exchangediag"
+test = false
+bench = false
+
+[[bin]]
 name = "arena"
 test = false
 bench = false

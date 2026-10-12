@@ -95,7 +95,7 @@ fn best_pass<const N: usize>(hand: CardSet, weights: &[f64; N], features: impl F
 /// passes back by the passing store, each reading the other only from the auction
 /// (`Partner::read` with `likelihood[seat]`, the seat's class likelihood as its partner reads
 /// it) and knowing its own pair messages (`known[seat]`). Returns the hands after the exchange.
-pub(crate) fn level0_exchange(
+pub fn level0_exchange(
     mut hands: [CardSet; 4],
     declarer: u8,
     partner_half_conf: f32,

@@ -659,6 +659,15 @@ pub(crate) fn take_or_defend(ctx: &Ctx, ours: i32, their_declarer: u8, theirs: i
     })
 }
 
+/// Both teams' final points when `hands` are played out from the first trick with `leader` on
+/// lead by the level-0 actors seeing the hands (offline diagnostics, `diagnostics`).
+pub(crate) fn open_playout(hands: [CardSet; 4], leader: u8) -> [i32; 2] {
+    let mut s = FastState::new(hands, leader);
+    let mut k = Known { may: hands };
+    playout(&mut s, &mut k, None);
+    [s.points(0), s.points(1)]
+}
+
 /// Per card: P(our team takes the trick) and the expected points in it.
 pub(crate) type TrickOutcomes = [Option<(f32, f32)>; 36];
 

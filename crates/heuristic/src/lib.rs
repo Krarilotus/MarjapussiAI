@@ -14,6 +14,7 @@ mod leads;
 mod outlook;
 mod legal_actions;
 mod params;
+pub mod diagnostics;
 pub mod passing;
 mod play;
 mod raising;
