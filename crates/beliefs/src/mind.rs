@@ -288,27 +288,47 @@ impl Mind {
         let record = Record::new(&self.events, self.kinds, p);
         let lik = std::array::from_fn(|y| {
             let y = y as Seat;
-            let s = &record.seats[y as usize];
-            if y == self.seat || s.bids.is_empty() || self.params.signals == Signals::BaseOnly {
+            if y == self.seat {
                 return None;
             }
-            // KB `bluffing(y)`: a seat whose step has no support under the facts is read at the
-            // floor ε for the rest of the game ([O] Q1b).
-            let trust = if self.bluffs(&record, y) {
-                p.convention_floor
-            } else {
-                p.trust(s.kind, y == engine::partner(self.seat))
-            };
-            let mut l = [1.0f64; N_CLASSES];
-            for obs in &s.bids {
-                for (x, t) in l.iter_mut().zip(bid_table(obs, trust, p)) {
-                    *x *= t as f64;
-                }
-            }
-            let max = l.iter().cloned().fold(0.0, f64::max);
-            (max > 0.0).then(|| Box::new(l.map(|x| (x / max) as f32)))
+            self.seat_likelihood(&record, y, self.seat)
         });
         self.cache.borrow_mut().signals = Some((key, record, lik));
+    }
+
+    /// The auction's likelihood of `y`'s dealt-hand class as `reader` reads it: `y`'s steps by
+    /// the convention, trusted by the reader's relation to `y` (partner or opponent), at the
+    /// floor for a bluffing seat. Public: only the bids. `None` without bids.
+    fn seat_likelihood(&self, record: &Record, y: Seat, reader: Seat) -> Option<Box<[f32; N_CLASSES]>> {
+        let p = &self.params.conventions;
+        let s = &record.seats[y as usize];
+        if s.bids.is_empty() || self.params.signals == Signals::BaseOnly {
+            return None;
+        }
+        // KB `bluffing(y)`: a seat whose step has no support under the facts is read at the
+        // floor ε for the rest of the game ([O] Q1b).
+        let trust = if self.bluffs(record, y) {
+            p.convention_floor
+        } else {
+            p.trust(s.kind, y == engine::partner(reader))
+        };
+        let mut l = [1.0f64; N_CLASSES];
+        for obs in &s.bids {
+            for (x, t) in l.iter_mut().zip(bid_table(obs, trust, p)) {
+                *x *= t as f64;
+            }
+        }
+        let max = l.iter().cloned().fold(0.0, f64::max);
+        (max > 0.0).then(|| Box::new(l.map(|x| (x / max) as f32)))
+    }
+
+    /// `seat`'s dealt-hand class likelihood as `reader` reads the auction (any seat, mine
+    /// included: my partner reads me too). For simulating another seat's view.
+    pub fn class_likelihood(&self, seat: Seat, reader: Seat) -> Option<Box<[f32; N_CLASSES]>> {
+        self.signals();
+        let cache = self.cache.borrow();
+        let record = &cache.signals.as_ref().expect("computed above").1;
+        self.seat_likelihood(record, seat, reader)
     }
 
     /// KB `bluffing(y)`: some step of `y` carries a message that no hand class of `y`'s dealt

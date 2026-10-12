@@ -84,6 +84,50 @@ pub fn class_prior(q: &[f32; 36]) -> [f32; N_CLASSES] {
     prior
 }
 
+/// What a reader holding `reader` can believe about a seat holding `held` of the cards it
+/// doesn't see, from that seat's class likelihood (`Mind::class_likelihood`): the class prior
+/// of the uniform deal of the unseen cards (`class_prior`) times the likelihood. Returns the
+/// class features and per card P(the seat holds it): a half by its suit's expected halves, an
+/// ace by the ace odds, the rest uniform; 0 for the reader's own cards.
+pub fn read_class(
+    reader: CardSet,
+    held: usize,
+    likelihood: Option<&[f32; N_CLASSES]>,
+) -> (ClassFeatures, [f32; 36]) {
+    let unseen = CardSet::ALL - reader;
+    let q0 = held as f32 / unseen.len().max(1) as f32;
+    let mut q = [0.0f32; 36];
+    unseen.iter().for_each(|c| q[c as usize] = q0);
+    let prior = class_prior(&q);
+    let mut post = prior;
+    if let Some(l) = likelihood {
+        post.iter_mut().zip(l.iter()).for_each(|(p, l)| *p *= l);
+    }
+    let mass: f32 = post.iter().sum();
+    if mass > 0.0 {
+        post.iter_mut().for_each(|p| *p /= mass);
+    }
+    let features = class_features(&post);
+    let prior_ace = class_features(&prior).ace;
+    let halves_held: [f32; 4] = std::array::from_fn(|s| {
+        post.iter()
+            .enumerate()
+            .map(|(i, w)| w * HandClass::from_index(i).halves[s] as f32)
+            .sum()
+    });
+    let mut cards = q;
+    for c in unseen.iter() {
+        let s = engine::suit_of(c);
+        let unseen_halves = (unseen & CardSet::halves(s)).len() as f32;
+        if CardSet::HALVES.contains(c) {
+            cards[c as usize] = halves_held[s as usize] / unseen_halves;
+        } else if CardSet::ACES.contains(c) && prior_ace > 0.0 {
+            cards[c as usize] = (q0 * features.ace / prior_ace).min(1.0);
+        }
+    }
+    (features, cards)
+}
+
 /// Features of a class distribution: P(ace), P(pair) and P(≥ 1 half) per suit.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ClassFeatures {

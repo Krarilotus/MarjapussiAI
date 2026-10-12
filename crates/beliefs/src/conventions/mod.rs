@@ -12,7 +12,7 @@ pub use bids::{
     next_context, nominal, walk_auction, BidContext, BidObs, Message, BARRIERS, MESSAGES, PAIR_LINE, PAIR_MESSAGES,
 };
 pub use classes::{
-    class_features, class_prior, len_in, pair_value, ClassFeatures, HandClass, BIG_PAIRS, LUSCHE, N_CLASSES,
+    class_features, class_prior, len_in, pair_value, read_class, ClassFeatures, HandClass, BIG_PAIRS, LUSCHE, N_CLASSES,
     SMALL_PAIRS,
 };
 pub use params::Params;

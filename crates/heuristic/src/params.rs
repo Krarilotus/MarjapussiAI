@@ -68,8 +68,11 @@ params! {
     play_budget_ms: u32 = 100,
     /// B-take by route: take_vs_defend over the believed worlds can overrule the fitted rule.
     /// Off: with the level-0 exchange (no signals read) the playouts are pessimistic about
-    /// every declarer (human games: take -77, defend +131 on average where humans make about
-    /// two thirds), so it would defend far too often. Needs the exchange to read the auction.
+    /// every declarer: from the bidding position the simulated declaring team makes about 40 %
+    /// of these contracts (pairs 57, cards about 80 on average) where humans who bid on made
+    /// 60 % (358 of 595), even with the exchange reading the auction; from after the exchange
+    /// the playout is unbiased, so the gap is in the hands believed at bidding and the
+    /// simulated exchange.
     route_take: bool = false,
     /// HZ-1 by route: the raise from the team's final points over the believed worlds. Off: in
     /// 2,000 games vs live it raised 560 times (vs 205) by 37 on average and made 68 % (-6.4 per

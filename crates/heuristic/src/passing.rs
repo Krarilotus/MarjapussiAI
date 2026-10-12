@@ -29,9 +29,23 @@ impl Partner {
 }
 
 impl Partner {
+    /// What a giver holding `reader` reads about its partner from the auction alone: the
+    /// partner's class likelihood (`Mind::class_likelihood`) over the uniform deal of the
+    /// cards the giver doesn't see (`beliefs::conventions::read_class`); voids by counting.
+    /// The level-0 exchange of the outlook's take-or-defend routes uses it.
+    pub fn read(reader: CardSet, likelihood: Option<&[f32; beliefs::conventions::N_CLASSES]>) -> Self {
+        let (features, cards) = beliefs::conventions::read_class(reader, HAND_SIZE, likelihood);
+        Self {
+            cards,
+            ace: features.ace,
+            void: Self::uniform(reader).void,
+            half: features.half,
+        }
+    }
+
     /// What a giver can estimate about its partner from its own hand alone: the partner holds 9
     /// of the 27 cards it doesn't see, uniformly (P(card) = 1/3; an ace, a void, a half by
-    /// counting). The level-0 exchange of the outlook's take-or-defend routes uses it.
+    /// counting).
     pub fn uniform(hand: CardSet) -> Self {
         let unseen = 36 - hand.len() as usize;
         let held = HAND_SIZE;
@@ -76,18 +90,27 @@ fn best_pass<const N: usize>(hand: CardSet, weights: &[f64; N], features: impl F
 }
 
 /// The level-0 exchange of a deal in which `declarer` plays: its partner passes forth and it
-/// passes back by the passing store, each with only the uniform estimate of the other
-/// (`Partner::uniform`; no signals read). Returns the hands after the exchange.
-pub(crate) fn level0_exchange(mut hands: [CardSet; 4], declarer: u8, partner_half_conf: f32) -> [CardSet; 4] {
+/// passes back by the passing store, each reading the other only from the auction
+/// (`Partner::read` with `likelihood[seat]`, the seat's class likelihood as its partner reads
+/// it) and knowing its own pair messages (`known[seat]`). Returns the hands after the exchange.
+pub(crate) fn level0_exchange(
+    mut hands: [CardSet; 4],
+    declarer: u8,
+    partner_half_conf: f32,
+    likelihood: &[Option<Box<[f32; beliefs::conventions::N_CLASSES]>>; 4],
+    known: [[bool; 4]; 4],
+) -> [CardSet; 4] {
     let (d, p) = (declarer as usize, partner(declarer) as usize);
     let giver = hands[p];
-    let forth = best_pass(giver, &PASSING_WEIGHTS.forth, |x| {
-        forth_features(giver, &Partner::uniform(giver), [false; 4], x)
-    });
+    let reads_declarer = Partner::read(giver, likelihood[d].as_deref());
+    let forth = best_pass(giver, &PASSING_WEIGHTS.forth, |x| forth_features(giver, &reads_declarer, known[p], x));
     hands[p] -= forth;
     hands[d] |= forth;
     let taker = hands[d];
-    let estimate = Partner::uniform(taker);
+    // The giver's dealt hand as the declarer reads it from its dealt cards; the cards received
+    // are certain now.
+    let mut estimate = Partner::read(taker - forth, likelihood[p].as_deref());
+    forth.iter().for_each(|c| estimate.cards[c as usize] = 0.0);
     let trump = back_plan(taker, estimate.half, partner_half_conf);
     let back = best_pass(taker, &PASSING_WEIGHTS.back, |y| back_features(taker, &estimate, trump, y));
     hands[d] -= back;

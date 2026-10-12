@@ -593,8 +593,9 @@ pub(crate) fn final_outcomes(ctx: &Ctx) -> Option<Outcomes> {
 
 /// `take_vs_defend` (Astra and the owner, 2026-10-12): our expected engine score difference if
 /// we take the contract at `ours` (I declare), against defending the opponents' `theirs`
-/// (`their_declarer` plays), per believed world: each side's level-0 exchange
-/// (`passing::level0_exchange`), then the playout to the end with the default activations, and
+/// (`their_declarer` plays), per believed world: each side's level-0 exchange, reading the
+/// auction by the convention (`passing::level0_exchange`), then the playout to the end with
+/// the default activations, and
 /// the engine's scoring (failure, the defenders' points, schwarz). Options: [take, defend].
 /// Not modelled: the auction continuing after the bid, and what the opponents' pass tells.
 pub(crate) fn take_or_defend(ctx: &Ctx, ours: i32, their_declarer: u8, theirs: i32) -> Option<WorldValues<bool>> {
@@ -611,6 +612,12 @@ pub(crate) fn take_or_defend(ctx: &Ctx, ours: i32, their_declarer: u8, theirs: i
         k
     };
     let (mine, theirs_known) = (known(ctx.me), known(their_declarer));
+    // Each seat as its partner reads it from the auction, and the pairs it told.
+    let likelihood: [_; 4] = std::array::from_fn(|s| ctx.mind.class_likelihood(s as u8, partner(s as u8)));
+    let told: [[bool; 4]; 4] = {
+        let record = ctx.mind.record();
+        std::array::from_fn(|s| crate::passing::known_pairs(&record.seats[s].bids))
+    };
     ctx.with_worlds(|worlds: &[World]| {
         WorldValues::over(ctx, worlds, vec![true, false], |w, &take| {
             let (declarer, value, k) = if take {
@@ -618,7 +625,7 @@ pub(crate) fn take_or_defend(ctx: &Ctx, ours: i32, their_declarer: u8, theirs: i
             } else {
                 (their_declarer, theirs, theirs_known)
             };
-            let hands = crate::passing::level0_exchange(w.hands, declarer, conf);
+            let hands = crate::passing::level0_exchange(w.hands, declarer, conf, &likelihood, told);
             let mut s = FastState::new(hands, declarer);
             let mut k = k;
             playout(&mut s, &mut k, None);
