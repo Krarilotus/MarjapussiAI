@@ -153,23 +153,94 @@ fn order(hand: CardSet, s: Suit) -> (u32, i32) {
     ((hand & CardSet::suit(s)).len(), engine::trump_points(s, false))
 }
 
-/// The leader's activation at a trick start (see the module doc, step 2).
-fn activation(state: &FastState, known: &Known) -> Option<Move> {
+/// One step of a team's activation plan (the owner's games 938 and 1187; Astra's authored
+/// routes): at the team's next trick start its leader announces its own pair, asks its
+/// partner, or activates nothing. Which pair or question follows from the leader's knowledge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    Own,
+    Ask,
+    Wait,
+}
+
+/// How many of the team's next trick starts a plan fixes; the default `activation` follows.
+const PLAN_STEPS: usize = 2;
+
+/// A team's activation plan for its next trick starts. The team commits to one plan in every
+/// world (it is communicated through the moves, the owner on game 1187).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Plan {
+    team: u8,
+    steps: [Step; PLAN_STEPS],
+    next: usize,
+}
+
+impl Plan {
+    /// Every plan for `team`.
+    fn all(team: u8) -> impl Iterator<Item = Plan> {
+        let steps = [Step::Own, Step::Ask, Step::Wait];
+        steps.into_iter().flat_map(move |a| {
+            steps.into_iter().map(move |b| Plan {
+                team,
+                steps: [a, b],
+                next: 0,
+            })
+        })
+    }
+
+    /// The step for the trick start in `state`, if the plan's team leads and steps are left.
+    fn take(plan: &mut Option<Plan>, state: &FastState) -> Option<Step> {
+        let p = plan
+            .as_mut()
+            .filter(|p| p.team == state.leader() % 2 && p.next < PLAN_STEPS)?;
+        p.next += 1;
+        Some(p.steps[p.next - 1])
+    }
+
+    /// The plan as digits for the decision facts (own 1, ask 2, wait 0; first step first).
+    fn code(&self) -> u32 {
+        self.steps.iter().fold(0, |n, s| {
+            10 * n
+                + match s {
+                    Step::Own => 1,
+                    Step::Ask => 2,
+                    Step::Wait => 0,
+                }
+        })
+    }
+}
+
+/// The leader's own announcement: its own pair in `order`.
+fn announce(state: &FastState) -> Option<Move> {
+    let own = state.announcements();
+    SUITS
+        .into_iter()
+        .filter(|&s| own >> s as u8 & 1 == 1)
+        .min_by_key(|&s| order(state.hand(state.leader()), s))
+        .map(Move::Announce)
+}
+
+/// The leader's activation at a trick start: the plan's `step`, or the default (see the module
+/// doc, step 2).
+fn activation(state: &FastState, known: &Known, step: Option<Step>) -> Option<Move> {
     if state.phase() != PlayPhase::Start {
         return None;
     }
+    match step {
+        Some(Step::Wait) => None,
+        Some(Step::Own) => announce(state),
+        Some(Step::Ask) => ask(state, known),
+        None => announce(state).or_else(|| ask(state, known)),
+    }
+}
+
+/// The leader's question: "Yours" while the partner may still hold a pair, else the most
+/// valuable half the partner may complete (a half question spends the remaining rights).
+fn ask(state: &FastState, known: &Known) -> Option<Move> {
     let leader = state.leader();
     let mate = partner(leader) as usize;
     let mine = state.hand(leader);
     let open = |s: Suit| state.called() >> s as u8 & 1 == 0;
-    let own = state.announcements();
-    if let Some(s) = SUITS
-        .into_iter()
-        .filter(|&s| own >> s as u8 & 1 == 1)
-        .min_by_key(|&s| order(mine, s))
-    {
-        return Some(Move::Announce(s));
-    }
     let legal = |q: QuestionType| state.moves().any(|m| m == Move::Question(q));
     let may_pair = SUITS
         .into_iter()
@@ -177,7 +248,6 @@ fn activation(state: &FastState, known: &Known) -> Option<Move> {
     if may_pair && legal(QuestionType::Yours) {
         return Some(Move::Question(QuestionType::Yours));
     }
-    // A half question spends the remaining rights: the most valuable half the partner may complete.
     SUITS
         .into_iter()
         .rev()
@@ -249,10 +319,11 @@ fn lead0(state: &FastState, known: &Known) -> u8 {
 }
 
 /// Plays the game to its end at level 0 (see the module doc, steps 2 and 3).
-fn playout(state: &mut FastState, known: &mut Known) {
+fn playout(state: &mut FastState, known: &mut Known, mut plan: Option<Plan>) {
     while !state.is_over() {
         let c = if state.trick().is_empty() {
-            if let Some(m) = activation(state, known) {
+            let step = Plan::take(&mut plan, state);
+            if let Some(m) = activation(state, known, step) {
                 apply(state, m);
             }
             lead0(state, known)
@@ -296,6 +367,27 @@ impl<K: Copy + PartialEq> WorldValues<K> {
         Some(WorldValues { options, values, p })
     }
 
+    /// Per distinct `key` of the options, the option with the best expected value: the rows
+    /// of the chosen options keyed by `key`, and the chosen options.
+    fn best_per<J: Copy + PartialEq>(self, key: impl Fn(&K) -> J) -> (WorldValues<J>, Vec<K>) {
+        let mut chosen: Vec<(J, usize)> = Vec::new();
+        for i in 0..self.options.len() {
+            let j = key(&self.options[i]);
+            match chosen.iter_mut().find(|(k, _)| *k == j) {
+                Some(c) if self.mean(i) > self.mean(c.1) => c.1 = i,
+                Some(_) => {}
+                None => chosen.push((j, i)),
+            }
+        }
+        let picked: Vec<K> = chosen.iter().map(|&(_, i)| self.options[i]).collect();
+        let values = WorldValues {
+            options: chosen.iter().map(|&(j, _)| j).collect(),
+            values: chosen.iter().map(|&(_, i)| self.values[i].clone()).collect(),
+            p: self.p,
+        };
+        (values, picked)
+    }
+
     pub fn index(&self, k: K) -> Option<usize> {
         self.options.iter().position(|&o| o == k)
     }
@@ -323,21 +415,23 @@ impl<K: Copy + PartialEq> WorldValues<K> {
 
 /// The value (our points minus theirs from now on) of each of my non-card moves now (an
 /// announcement, a question, an answer), and of `None`: leading a card instead (at a trick
-/// start). Per believed world; the partner answers my question from its own cards; after an
-/// answer of mine, the asker leads.
-fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<WorldValues<Option<Move>>> {
+/// start), each with our team's best activation plan for its next trick starts (`Plan`), the
+/// same plan in every world. Per believed world; the partner answers my question from its own
+/// cards; after an answer of mine, the asker leads. Also returns the plan chosen per option.
+fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<(WorldValues<Option<Move>>, Vec<Plan>)> {
     let _timing = beliefs::profile::scope("outlook.route");
     let public = ctx.k.public_state(ctx.me, phase);
     let us = ctx.me % 2;
     let known = Known::new(ctx);
-    let options: Vec<Option<Move>> = moves
+    let options: Vec<(Option<Move>, Plan)> = moves
         .iter()
         .copied()
         .map(Some)
         .chain((phase == PlayPhase::Start).then_some(None))
+        .flat_map(|m| Plan::all(us).map(move |p| (m, p)))
         .collect();
-    ctx.with_worlds(|worlds: &[World]| {
-        WorldValues::over(worlds, options, |w, &option| {
+    let values = ctx.with_worlds(|worlds: &[World]| {
+        WorldValues::over(worlds, options, |w, &(option, plan)| {
             let state = FastState::from_public(public, w.hands).ok()?;
             let (mut s, mut k) = (state, known);
             match option {
@@ -349,10 +443,12 @@ fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<WorldValu
                     s.play(c);
                 }
             }
-            playout(&mut s, &mut k);
+            playout(&mut s, &mut k, Some(plan));
             Some(margin(&s, us) - margin(&state, us))
         })
-    })
+    })?;
+    let (values, picked) = values.best_per(|&(m, _)| m);
+    Some((values, picked.into_iter().map(|(_, p)| p).collect()))
 }
 
 /// HO-2: my activation or answer by route. `planned` is the rule's choice (`None`: a card);
@@ -366,7 +462,7 @@ pub(crate) fn route_choice(
     moves: &[Move],
     planned: Option<Move>,
 ) -> Option<Option<Decision>> {
-    let values = route_values(ctx, phase, moves)?;
+    let (values, plans) = route_values(ctx, phase, moves)?;
     let best = values.best();
     let plan = values.index(planned)?;
     if best == plan || !values.clearly_better(best, plan) {
@@ -382,6 +478,7 @@ pub(crate) fn route_choice(
         vec![
             fact("expected_difference", values.mean(best)),
             fact("over_plan", values.mean(best) - values.mean(plan)),
+            fact("team_plan", plans[best].code()),
         ],
     )))
 }
@@ -452,7 +549,7 @@ pub(crate) fn lead_values(ctx: &Ctx, candidates: CardSet) -> Option<WorldValues<
             let mut k = known;
             k.play(&state, c);
             state.play(c);
-            playout(&mut state, &mut k);
+            playout(&mut state, &mut k, None);
             Some(margin(&state, us) - before)
         })
     })
