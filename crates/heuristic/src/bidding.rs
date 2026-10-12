@@ -177,6 +177,7 @@ fn take_over_140(
     class: HandClass,
     value: i32,
     mate: PartnerCalls,
+    holder: Option<observation::Seat>,
     why: &mut Vec<Fact>,
 ) -> Option<Decision> {
     let w = &TAKE_OVER_140;
@@ -199,7 +200,25 @@ fn take_over_140(
         fact("contract_estimate", estimate),
         fact("p_make", p_make),
     ]);
-    if p_take < 0.5 || p_make < 0.5 {
+    let rule_takes = p_take >= 0.5 && p_make >= 0.5;
+    // The route (take_vs_defend over the believed worlds) overrules the fitted rule only where
+    // it is clearly better.
+    let takes = match holder.filter(|_| ctx.params.route_take) {
+        Some(theirs) => match crate::outlook::take_or_defend(ctx, bid, theirs, value) {
+            Some(v) => {
+                why.extend([fact("take_value", v.mean(0)), fact("defend_value", v.mean(1))]);
+                let (take, defend) = (0, 1);
+                if rule_takes {
+                    !v.clearly_better(defend, take)
+                } else {
+                    v.clearly_better(take, defend)
+                }
+            }
+            None => rule_takes,
+        },
+        None => rule_takes,
+    };
+    if !takes {
         return None;
     }
     find(legal, Some(bid)).map(|a| decision(a, RuleId::BTake, why.clone()))
@@ -381,7 +400,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     let p = ctx.params.conv();
     let class = HandClass::of(ctx.k.certain(ctx.me));
     // Read the record once (the believed reads below recompute the Mind's cache).
-    let (bctx, calls, plan_formed, opponents_stepped, mate, opponent_holds) = {
+    let (bctx, calls, plan_formed, opponents_stepped, mate, opponent_holds, holder) = {
         let record = ctx.mind.record();
         let holder = record.auction.iter().rev().find_map(|&(s, b)| b.map(|_| s));
         let bids = &record.seats[engine::partner(ctx.me) as usize].bids;
@@ -398,6 +417,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
                     .any(|b| b.nominal.is_some_and(|m| PAIR_MESSAGES & m.bit() != 0)),
             },
             holder.is_some_and(|s| s % 2 != ctx.me % 2),
+            holder,
         )
     };
     let v = bctx.value;
@@ -501,7 +521,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     // B-take (KB `take_vs_defend`; owner: "often better to take than be played"): at 140 or
     // more against an opponent's bid.
     if v >= PAIR_LINE && opponent_holds {
-        if let Some(d) = take_over_140(ctx, legal, class, v, mate, &mut why) {
+        if let Some(d) = take_over_140(ctx, legal, class, v, mate, holder, &mut why) {
             return d;
         }
     }

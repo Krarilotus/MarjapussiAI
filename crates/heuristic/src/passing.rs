@@ -28,6 +28,73 @@ impl Partner {
     }
 }
 
+impl Partner {
+    /// What a giver can estimate about its partner from its own hand alone: the partner holds 9
+    /// of the 27 cards it doesn't see, uniformly (P(card) = 1/3; an ace, a void, a half by
+    /// counting). The level-0 exchange of the outlook's take-or-defend routes uses it.
+    pub fn uniform(hand: CardSet) -> Self {
+        let unseen = 36 - hand.len() as usize;
+        let held = HAND_SIZE;
+        // P(the partner holds none of `n` given unseen cards) = C(unseen - n, 9) / C(unseen, 9).
+        let none = |n: u32| -> f32 {
+            (0..held).map(|i| (unseen - n as usize).saturating_sub(i) as f32 / (unseen - i) as f32).product()
+        };
+        let p = held as f32 / unseen as f32;
+        let mut cards = [0.0; engine::CARDS];
+        for c in (CardSet::ALL - hand).iter() {
+            cards[c as usize] = p;
+        }
+        Self {
+            cards,
+            ace: 1.0 - none((CardSet::ACES - hand).len()),
+            void: SUITS.map(|s| none((CardSet::suit(s) - hand).len())),
+            half: SUITS.map(|s| 1.0 - none((CardSet::halves(s) - hand).len())),
+        }
+    }
+}
+
+/// The best option of `hand` by the passing store: every 4-card set, scored by `features`.
+fn best_pass<const N: usize>(hand: CardSet, weights: &[f64; N], features: impl Fn(CardSet) -> [f64; N]) -> CardSet {
+    let cards: Vec<u8> = hand.iter().collect();
+    let mut best = (f64::NEG_INFINITY, CardSet::EMPTY);
+    for a in 0..cards.len() {
+        for b in a + 1..cards.len() {
+            for c in b + 1..cards.len() {
+                for d in c + 1..cards.len() {
+                    let x = [cards[a], cards[b], cards[c], cards[d]]
+                        .iter()
+                        .fold(CardSet::EMPTY, |s, &k| s | CardSet::single(k));
+                    let v = score(weights, &features(x));
+                    if v > best.0 {
+                        best = (v, x);
+                    }
+                }
+            }
+        }
+    }
+    best.1
+}
+
+/// The level-0 exchange of a deal in which `declarer` plays: its partner passes forth and it
+/// passes back by the passing store, each with only the uniform estimate of the other
+/// (`Partner::uniform`; no signals read). Returns the hands after the exchange.
+pub(crate) fn level0_exchange(mut hands: [CardSet; 4], declarer: u8, partner_half_conf: f32) -> [CardSet; 4] {
+    let (d, p) = (declarer as usize, partner(declarer) as usize);
+    let giver = hands[p];
+    let forth = best_pass(giver, &PASSING_WEIGHTS.forth, |x| {
+        forth_features(giver, &Partner::uniform(giver), [false; 4], x)
+    });
+    hands[p] -= forth;
+    hands[d] |= forth;
+    let taker = hands[d];
+    let estimate = Partner::uniform(taker);
+    let trump = back_plan(taker, estimate.half, partner_half_conf);
+    let back = best_pass(taker, &PASSING_WEIGHTS.back, |y| back_features(taker, &estimate, trump, y));
+    hands[d] -= back;
+    hands[p] |= back;
+    hands
+}
+
 /// Suits covered by my own nominal pair messages. This is the existing convention's
 /// "partner knows" feature, not a claim that the partner is certain I hold that pair.
 pub fn known_pairs(bids: &[BidObs]) -> [bool; 4] {

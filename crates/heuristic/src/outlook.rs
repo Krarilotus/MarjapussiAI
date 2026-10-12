@@ -21,8 +21,9 @@
 //! sampled hands (strategy fusion, Astra): `Known` carries every seat's possible cards from the
 //! knowledge layer and narrows them along the line with the engine's play-level exclusions (a
 //! card off the led suit proves the void). The world only resolves what stays open: which cards
-//! a seat really holds and so what it can play and answer. `Known` starts from my seat's
-//! knowledge for every actor, an approximation of each actor's own view.
+//! a seat really holds and so what it can play and answer. `Known` starts from the public
+//! facts (what every seat knows; each actor also knows its own cards from the world), so no
+//! actor uses my private knowledge.
 //!
 //! So pairs live or die by their guards and by the discard material in the suits their holder
 //! is void in; one won lead can start two activations (the owner's game 938); and asker and
@@ -120,8 +121,8 @@ fn respond(state: &FastState) -> u8 {
     cheapest(legal)
 }
 
-/// What every seat may still hold: the knowledge layer's possible cards, narrowed along a
-/// played line by the engine's play-level exclusions (the rule engine's facts).
+/// What every seat may still hold as far as the table knows: the public facts' possible cards,
+/// narrowed along a played line by the engine's play-level exclusions (the rule engine's facts).
 #[derive(Clone, Copy)]
 struct Known {
     may: [CardSet; 4],
@@ -130,7 +131,7 @@ struct Known {
 impl Known {
     fn new(ctx: &Ctx) -> Known {
         Known {
-            may: std::array::from_fn(|s| ctx.k.may_hold(s as u8)),
+            may: std::array::from_fn(|s| ctx.mind.public().may_hold(s as u8)),
         }
     }
 
@@ -577,6 +578,49 @@ pub(crate) fn final_outcomes(ctx: &Ctx) -> Option<Outcomes> {
                 .iter()
                 .map(|r| [r.1[best].tricks_won(0), r.1[best].tricks_won(1)])
                 .collect(),
+        })
+    })
+}
+
+/// `take_vs_defend` (Astra and the owner, 2026-10-12): our expected engine score difference if
+/// we take the contract at `ours` (I declare), against defending the opponents' `theirs`
+/// (`their_declarer` plays), per believed world: each side's level-0 exchange
+/// (`passing::level0_exchange`), then the playout to the end with the default activations, and
+/// the engine's scoring (failure, the defenders' points, schwarz). Options: [take, defend].
+/// Not modelled: the auction continuing after the bid, and what the opponents' pass tells.
+pub(crate) fn take_or_defend(ctx: &Ctx, ours: i32, their_declarer: u8, theirs: i32) -> Option<WorldValues<bool>> {
+    let _timing = beliefs::profile::scope("outlook.take");
+    let us = ctx.me % 2;
+    let conf = ctx.params.partner_half_conf;
+    // The exchange moves cards between partners: either may now hold the other's possible cards.
+    let known = |declarer: u8| {
+        let mut k = Known::new(ctx);
+        let (d, p) = (declarer as usize, partner(declarer) as usize);
+        let team = k.may[d] | k.may[p];
+        k.may[d] = team;
+        k.may[p] = team;
+        k
+    };
+    let (mine, theirs_known) = (known(ctx.me), known(their_declarer));
+    ctx.with_worlds(|worlds: &[World]| {
+        WorldValues::over(ctx, worlds, vec![true, false], |w, &take| {
+            let (declarer, value, k) = if take {
+                (ctx.me, ours, mine)
+            } else {
+                (their_declarer, theirs, theirs_known)
+            };
+            let hands = crate::passing::level0_exchange(w.hands, declarer, conf);
+            let mut s = FastState::new(hands, declarer);
+            let mut k = k;
+            playout(&mut s, &mut k, None);
+            let outcome = engine::GameOutcome {
+                playing_team: Some(declarer % 2),
+                game_value: value,
+                team_points: [s.points(0), s.points(1)],
+                team_tricks: [s.tricks_won(0), s.tricks_won(1)],
+            };
+            let sc = engine::game_scores(&outcome, engine::SCHWARZ_FACTOR_FIFTHS);
+            Some(sc[us as usize] - sc[1 - us as usize])
         })
     })
 }
