@@ -5,29 +5,35 @@
 //!    genuine choices use a level-0 response (`respond`): with the partner winning, play cheap
 //!    (the last player feeds points that are not a live pair's half); otherwise win with the
 //!    cheapest winning card, else discard the cheapest card, keeping pair halves.
-//! 2. **Next leader and what it can do (`activate`):** at every trick start the leader's team
-//!    chooses among what the rules let it do: announce an own pair, ask "Yours" (the partner
-//!    names one of its pairs), ask for the other half of a half it holds, or nothing. Each option
-//!    is played out (step 3, with the default activation below) and the best for the team is
-//!    taken. The default: an own pair, else the partner's pair, else the most valuable split
-//!    pair; the shorter suit first, at equal length the smaller pair, so the biggest and longest
-//!    stays trump. Rights, the trump change and the pair points are the engine's.
-//! 3. **The rest of the game (`playout`):** the leader cashes a card that stands (the top card of
-//!    its suit that no void opponent can ruff), else leads into the partner's ruff (a side suit
-//!    the partner is void in while it holds trump that the next opponent can't overruff), else
-//!    its cheapest card outside its live pairs; the others respond as in 1. So pairs live or die
-//!    by their guards and by the discard material in the suits their holder is void in; one won
-//!    lead can activate both pairs (announce, keep the lead with a standing card, then ask) as in
-//!    the owner's game 938; and asker and answerer can cross-ruff while each answer names the
-//!    trump in which the answerer ruffs the asker's next lead, as in the owner's game 1187.
+//! 2. **Next leader and what it can do (`activation`):** at every trick start the leader
+//!    activates what the rules allow and its knowledge leaves open: an own pair (`order`: the
+//!    shorter suit first, at equal length the smaller pair, so the biggest and longest stays
+//!    trump); else "Yours" while the partner may still hold a pair; else the most valuable half
+//!    whose other half the partner may hold. The asked seat answers truthfully from its own
+//!    cards (`answer0`, the same order); a "no" leaves the trump but spends the rights.
+//! 3. **The rest of the game (`playout`):** the leader cashes a card that stands (every higher
+//!    card of its suit is played) unless an opponent may ruff it, else leads into the partner's
+//!    ruff (a side suit the partner is proven void in while it may hold trump, and not where
+//!    the opponent behind it may ruff too), else its cheapest card outside its live pairs; the
+//!    others respond as in 1.
 //!
-//! At the root (`route_values`) my own activation options and answers are compared the same way
-//! over the believed worlds: the same choice in every world, the partner's answer per world.
+//! **Knowledge first (owner, 2026-10-12):** the actors decide from what is known, never from the
+//! sampled hands (strategy fusion, Astra): `Known` carries every seat's possible cards from the
+//! knowledge layer and narrows them along the line with the engine's play-level exclusions (a
+//! card off the led suit proves the void). The world only resolves what stays open: which cards
+//! a seat really holds and so what it can play and answer. `Known` starts from my seat's
+//! knowledge for every actor, an approximation of each actor's own view.
+//!
+//! So pairs live or die by their guards and by the discard material in the suits their holder
+//! is void in; one won lead can start two activations (the owner's game 938); and asker and
+//! answerer can cross-ruff while the trump changes (the owner's game 1187) where the default
+//! order happens to produce it. Competing authored routes for that are the next step.
+//!
+//! At the root (`route_values`) my own activation options and answers are compared over the
+//! believed worlds: the same choice in every world.
 //!
 //! The value of a candidate is our expected points (cards, last trick, pairs) minus theirs over
-//! those worlds: an estimate under level-0 play, not a proof. Exposed-world estimates can use
-//! cards the players cannot see (strategy fusion: a question is asked only where it is answered
-//! yes); this is the stated approximation.
+//! those worlds: an estimate under level-0 play, not a proof.
 
 use engine::{
     partner, suit_of, AnswerType, CardSet, FastState, Move, PlayPhase, QuestionType, Suit, CARD_POINTS, SUITS,
@@ -114,59 +120,98 @@ fn respond(state: &FastState) -> u8 {
     cheapest(legal)
 }
 
-/// One activation: the leader's announcement or question, and the answer to a question.
-type Activation = (Move, Option<Move>);
-
-/// The activations open to the leader's team at a trick start, in the default order (see the
-/// module doc, step 2). Questions only where the partner can answer yes (exposed worlds).
-fn activations(state: &FastState) -> Vec<Activation> {
-    let mut out = Vec::new();
-    if state.phase() != PlayPhase::Start {
-        return out;
-    }
-    let leader = state.leader();
-    let mine = state.hand(leader);
-    let mate = state.hand(partner(leader));
-    let open = |s: Suit| state.called() >> s as u8 & 1 == 0;
-    let order = |s: &Suit| {
-        (
-            ((mine | mate) & CardSet::suit(*s)).len(),
-            engine::trump_points(*s, false),
-        )
-    };
-    let mut own: Vec<Suit> = SUITS
-        .into_iter()
-        .filter(|&s| state.announcements() >> s as u8 & 1 == 1)
-        .collect();
-    own.sort_by_key(order);
-    out.extend(own.into_iter().map(|s| (Move::Announce(s), None)));
-    if state.rights(leader).may_ask_pair() {
-        let mut theirs: Vec<Suit> = mate.pair_suits().filter(|&s| open(s)).collect();
-        theirs.sort_by_key(order);
-        out.extend(theirs.into_iter().map(|s| {
-            (
-                Move::Question(QuestionType::Yours),
-                Some(Move::Answer(AnswerType::YesPair(s))),
-            )
-        }));
-    }
-    let moves = state.moves();
-    for s in SUITS.into_iter().rev() {
-        let split = open(s)
-            && !(mine & CardSet::halves(s)).is_empty()
-            && (mine & CardSet::halves(s)) != CardSet::halves(s)
-            && (mine | mate) & CardSet::halves(s) == CardSet::halves(s);
-        let ask = Move::Question(QuestionType::YourHalf(s));
-        if split && moves.clone().any(|m| m == ask) {
-            out.push((ask, Some(Move::Answer(AnswerType::YesHalf(s)))));
-        }
-    }
-    out
+/// What every seat may still hold: the knowledge layer's possible cards, narrowed along a
+/// played line by the engine's play-level exclusions (the rule engine's facts).
+#[derive(Clone, Copy)]
+struct Known {
+    may: [CardSet; 4],
 }
 
-fn apply(state: &mut FastState, (first, answer): Activation) {
-    state.apply(first);
-    if let Some(a) = answer {
+impl Known {
+    fn new(ctx: &Ctx) -> Known {
+        Known {
+            may: std::array::from_fn(|s| ctx.k.may_hold(s as u8)),
+        }
+    }
+
+    /// The seat to move plays `card` into `state`'s trick (called before `state.play`).
+    fn play(&mut self, state: &FastState, card: u8) {
+        let seat = state.to_move() as usize;
+        let first = state.tricks_done() == 0;
+        self.may[seat] -= engine::play_levels(state.trick(), state.trump(), first).excluded_by(card);
+        self.may.iter_mut().for_each(|m| *m -= CardSet::single(card));
+    }
+
+    fn may_hold_suit(&self, seat: u8, s: Suit) -> bool {
+        !(self.may[(seat % 4) as usize] & CardSet::suit(s)).is_empty()
+    }
+}
+
+/// The activation order of a seat's own pairs: the shorter suit first, at equal length the
+/// smaller pair, so the biggest and longest stays trump.
+fn order(hand: CardSet, s: Suit) -> (u32, i32) {
+    ((hand & CardSet::suit(s)).len(), engine::trump_points(s, false))
+}
+
+/// The leader's activation at a trick start (see the module doc, step 2).
+fn activation(state: &FastState, known: &Known) -> Option<Move> {
+    if state.phase() != PlayPhase::Start {
+        return None;
+    }
+    let leader = state.leader();
+    let mate = partner(leader) as usize;
+    let mine = state.hand(leader);
+    let open = |s: Suit| state.called() >> s as u8 & 1 == 0;
+    let own = state.announcements();
+    if let Some(s) = SUITS
+        .into_iter()
+        .filter(|&s| own >> s as u8 & 1 == 1)
+        .min_by_key(|&s| order(mine, s))
+    {
+        return Some(Move::Announce(s));
+    }
+    let legal = |q: QuestionType| state.moves().any(|m| m == Move::Question(q));
+    let may_pair = SUITS
+        .into_iter()
+        .any(|s| open(s) && (known.may[mate] & CardSet::halves(s)) == CardSet::halves(s));
+    if may_pair && legal(QuestionType::Yours) {
+        return Some(Move::Question(QuestionType::Yours));
+    }
+    // A half question spends the remaining rights: the most valuable half the partner may complete.
+    SUITS
+        .into_iter()
+        .rev()
+        .find(|&s| {
+            let h = CardSet::halves(s);
+            open(s) && !(mine & h).is_empty() && (mine & h) != h && !(known.may[mate] & (h - mine)).is_empty()
+        })
+        .map(QuestionType::YourHalf)
+        .filter(|&q| legal(q))
+        .map(Move::Question)
+}
+
+/// The truthful level-0 answer of the asked seat (its own cards decide, in `order`).
+fn answer0(state: &FastState) -> Move {
+    let held = state.hand(state.to_move());
+    let open = |s: Suit| state.called() >> s as u8 & 1 == 0;
+    Move::Answer(match state.phase() {
+        PlayPhase::Answer(QuestionType::YourHalf(s)) if !(held & CardSet::halves(s)).is_empty() => {
+            AnswerType::YesHalf(s)
+        }
+        PlayPhase::Answer(QuestionType::YourHalf(s)) => AnswerType::NoHalf(s),
+        _ => held
+            .pair_suits()
+            .filter(|&s| open(s))
+            .min_by_key(|&s| order(held, s))
+            .map_or(AnswerType::NoPair, AnswerType::YesPair),
+    })
+}
+
+/// Applies `m` and, after a question, the asked seat's answer.
+fn apply(state: &mut FastState, m: Move) {
+    state.apply(m);
+    if let PlayPhase::Answer(_) = state.phase() {
+        let a = answer0(state);
         state.apply(a);
     }
 }
@@ -176,87 +221,45 @@ fn margin(state: &FastState, team: u8) -> i32 {
     state.points(team) - state.points(1 - team)
 }
 
-/// The activation at a trick start: the best option for the leader's team by a playout with
-/// the default activation (`smart`), or the default itself (inside those playouts).
-fn activate(state: &mut FastState, smart: bool) {
-    let options = activations(state);
-    if options.is_empty() {
-        return;
-    }
-    if !smart {
-        apply(state, options[0]);
-        return;
-    }
-    let team = state.leader() % 2;
-    let value = |option: Option<Activation>| {
-        let mut s = *state;
-        match option {
-            Some(o) => apply(&mut s, o),
-            // Nothing now: lead first; the default may activate at a later trick start.
-            None => {
-                let c = lead0(&s);
-                s.play(c);
-            }
-        }
-        playout(&mut s, false);
-        margin(&s, team)
-    };
-    // Nothing is preferred on a tie: an activation that gains nothing spends rights.
-    let mut best = (value(None), None);
-    for o in options {
-        let v = value(Some(o));
-        if v > best.0 {
-            best = (v, Some(o));
-        }
-    }
-    if let (_, Some(o)) = best {
-        apply(state, o);
-    }
-}
-
 /// The level-0 lead (see the module doc, step 3).
-fn lead0(state: &FastState) -> u8 {
+fn lead0(state: &FastState, known: &Known) -> u8 {
     let seat = state.leader();
-    let hands = state.hands();
     let all = state.in_hands();
     let trump = state.trump();
     let legal = state.legal_cards();
-    let holds = |p: u8, s: Suit| !(hands[(p % 4) as usize] & CardSet::suit(s)).is_empty();
-    let ruffable =
-        |s: Suit| trump.is_some_and(|t| t != s && [1u8, 3].iter().any(|&o| !holds(seat + o, s) && holds(seat + o, t)));
+    // As far as the knowledge goes: proven void in the side suit and possibly holding trump.
+    let ruffs =
+        |p: u8, s: Suit| trump.is_some_and(|t| t != s && !known.may_hold_suit(p, s) && known.may_hold_suit(p, t));
     if let Some(c) = legal
         .iter()
-        .filter(|&c| top_of(all, suit_of(c)) == Some(c) && !ruffable(suit_of(c)))
+        .filter(|&c| top_of(all, suit_of(c)) == Some(c) && ![1u8, 3].iter().any(|&o| ruffs(seat + o, suit_of(c))))
         .max_by_key(|&c| (CARD_POINTS[c as usize], Some(suit_of(c)) != trump))
     {
         return c;
     }
-    // Into the partner's ruff: it is void in the suit and holds trump above whatever trump the
-    // opponent after it could overruff with.
-    if let Some(t) = trump {
-        let mate = partner(seat);
-        let top_trump = |p: u8| top_of(hands[(p % 4) as usize], t).map(beats_key);
-        let ruff = |s: Suit| {
-            s != t && !holds(mate, s) && holds(mate, t) && (holds(seat + 3, s) || top_trump(seat + 3) < top_trump(mate))
-        };
-        let keep = live_halves(state.hand(seat), state.called());
-        let into_ruff = (legal - keep).iter().filter(|&c| ruff(suit_of(c)));
-        if let Some(c) = into_ruff.min_by_key(|&c| (CARD_POINTS[c as usize], beats_key(c))) {
-            return c;
-        }
+    let keep = live_halves(state.hand(seat), state.called());
+    if let Some(c) = (legal - keep)
+        .iter()
+        .filter(|&c| ruffs(partner(seat), suit_of(c)) && !ruffs(seat + 3, suit_of(c)))
+        .min_by_key(|&c| (CARD_POINTS[c as usize], beats_key(c)))
+    {
+        return c;
     }
     respond(state)
 }
 
 /// Plays the game to its end at level 0 (see the module doc, steps 2 and 3).
-fn playout(state: &mut FastState, smart: bool) {
+fn playout(state: &mut FastState, known: &mut Known) {
     while !state.is_over() {
         let c = if state.trick().is_empty() {
-            activate(state, smart);
-            lead0(state)
+            if let Some(m) = activation(state, known) {
+                apply(state, m);
+            }
+            lead0(state, known)
         } else {
             respond(state)
         };
+        known.play(state, c);
         state.play(c);
     }
 }
@@ -320,12 +323,13 @@ impl<K: Copy + PartialEq> WorldValues<K> {
 
 /// The value (our points minus theirs from now on) of each of my non-card moves now (an
 /// announcement, a question, an answer), and of `None`: leading a card instead (at a trick
-/// start). Per believed world; the partner's answer to my question is its best in that world
-/// (it knows its hand); after an answer of mine, the asker leads.
+/// start). Per believed world; the partner answers my question from its own cards; after an
+/// answer of mine, the asker leads.
 fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<WorldValues<Option<Move>>> {
     let _timing = beliefs::profile::scope("outlook.route");
     let public = ctx.k.public_state(ctx.me, phase);
     let us = ctx.me % 2;
+    let known = Known::new(ctx);
     let options: Vec<Option<Move>> = moves
         .iter()
         .copied()
@@ -335,29 +339,17 @@ fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<WorldValu
     ctx.with_worlds(|worlds: &[World]| {
         WorldValues::over(worlds, options, |w, &option| {
             let state = FastState::from_public(public, w.hands).ok()?;
-            let mut s = state;
+            let (mut s, mut k) = (state, known);
             match option {
-                Some(m) if s.moves().any(|x| x == m) => s.apply(m),
+                Some(m) if s.moves().any(|x| x == m) => apply(&mut s, m),
                 Some(_) => return None,
                 None => {
-                    let c = lead0(&s);
+                    let c = lead0(&s, &k);
+                    k.play(&s, c);
                     s.play(c);
                 }
             }
-            if let PlayPhase::Answer(_) = s.phase() {
-                let best = s
-                    .moves()
-                    .map(|a| {
-                        let mut t = s.after(a);
-                        playout(&mut t, false);
-                        (a, margin(&t, us))
-                    })
-                    .max_by_key(|&(_, v)| v);
-                if let Some((a, _)) = best {
-                    s.apply(a);
-                }
-            }
-            playout(&mut s, true);
+            playout(&mut s, &mut k);
             Some(margin(&s, us) - margin(&state, us))
         })
     })
@@ -448,6 +440,7 @@ pub(crate) fn lead_values(ctx: &Ctx, candidates: CardSet) -> Option<WorldValues<
     let _timing = beliefs::profile::scope("outlook");
     let public = ctx.k.public_state(ctx.me, PlayPhase::Cards);
     let us = ctx.me % 2;
+    let known = Known::new(ctx);
     let options: Vec<u8> = candidates.iter().collect();
     ctx.with_worlds(|worlds: &[World]| {
         WorldValues::over(worlds, options, |w, &c| {
@@ -456,8 +449,10 @@ pub(crate) fn lead_values(ctx: &Ctx, candidates: CardSet) -> Option<WorldValues<
                 return None;
             }
             let before = margin(&state, us);
+            let mut k = known;
+            k.play(&state, c);
             state.play(c);
-            playout(&mut state, true);
+            playout(&mut state, &mut k);
             Some(margin(&state, us) - before)
         })
     })
