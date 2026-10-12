@@ -520,7 +520,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     }
     // B-take (KB `take_vs_defend`; owner: "often better to take than be played"): at 140 or
     // more against an opponent's bid.
-    if v >= PAIR_LINE && opponent_holds {
+    if v >= PAIR_LINE && opponent_holds && ctx.params.b_take {
         if let Some(d) = take_over_140(ctx, legal, class, v, mate, holder, &mut why) {
             return d;
         }

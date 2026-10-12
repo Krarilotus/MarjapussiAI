@@ -66,6 +66,10 @@ params! {
     planning_budget_ms: u32 = 5000,
     bidding_budget_ms: u32 = 1000,
     play_budget_ms: u32 = 100,
+    /// B-take: bid on over an opponent's contract at 140 or more by the fitted rule. With today's
+    /// play, bidding was worse than passing at its own decisions (branchdiff over 439 of them,
+    /// both branches played out by HP1: -40 per game).
+    b_take: bool = true,
     /// B-take by route: take_vs_defend over the believed worlds can overrule the fitted rule.
     /// Off: with the level-0 exchange (no signals read) the playouts are pessimistic about
     /// every declarer: from the bidding position the simulated declaring team makes about 40 %
