@@ -486,9 +486,8 @@ impl<K: Copy + PartialEq> WorldValues<K> {
     }
 }
 
-/// The value (our points minus theirs from now on) of each of my non-card moves now (an
-/// announcement, a question, an answer), and of `None`: leading a card instead (at a trick
-/// start), each with our team's best activation plan for its next trick starts (`Plan`), the
+/// The value of each of my moves now (an announcement, a question, an answer or a concrete
+/// card), each with our team's best activation plan for its next trick starts (`Plan`), the
 /// same plan in every world. Per believed world; the partner answers my question from its own
 /// cards; after an answer of mine, the asker leads. Also returns the plan chosen per option.
 fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<(WorldValues<Option<Move>>, Vec<Plan>)> {
@@ -501,7 +500,6 @@ fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<(WorldVal
         .iter()
         .copied()
         .map(Some)
-        .chain((phase == PlayPhase::Start).then_some(None))
         .flat_map(|m| Plan::all(us).map(move |p| (m, p)))
         .collect();
     let values = ctx.with_worlds(|worlds: &[World]| {
@@ -509,6 +507,10 @@ fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<(WorldVal
             let state = FastState::from_public(public, w.hands).ok()?;
             let (mut s, mut k) = (state, known.in_world(ctx, &w.hands));
             match option {
+                Some(Move::Card(c)) if s.legal_cards().contains(c) => {
+                    k.play(&s, c);
+                    s.play(c);
+                }
                 Some(m) if s.moves().any(|x| x == m) => apply(&mut s, &mut k, m),
                 Some(_) => return None,
                 None => {
@@ -525,28 +527,25 @@ fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<(WorldVal
     Some((values, picked.into_iter().map(|(_, p)| p).collect()))
 }
 
-/// HO-2: my activation or answer by route. `planned` is the rule's choice (`None`: a card);
-/// it stands unless another option is clearly better (`WorldValues::clearly_better`).
-/// Returns `None` to keep the plan, `Some(None)` for a card, `Some(Some(d))` for the route's
-/// activation or answer.
+/// HO-2: my move by route among `moves` (activations, answers, concrete cards). `planned` is the
+/// rule's move; it stands unless another is clearly better (`WorldValues::clearly_better`).
+/// Returns `None` to keep the plan, else the route's move as played (the evaluated move).
 pub(crate) fn route_choice(
     ctx: &Ctx,
     legal: &[GameAction],
     phase: PlayPhase,
     moves: &[Move],
-    planned: Option<Move>,
-) -> Option<Option<Decision>> {
+    planned: Move,
+) -> Option<Decision> {
     let (values, plans) = route_values(ctx, phase, moves)?;
     let best = values.best();
-    let plan = values.index(planned)?;
+    let plan = values.index(Some(planned))?;
     if best == plan || !values.clearly_better(best, plan) {
         return None;
     }
-    let Some(m) = values.options[best] else {
-        return Some(None);
-    };
+    let m = values.options[best]?;
     let action = legal.iter().find(|a| Move::from_action(&a.action_type) == Some(m))?;
-    Some(Some(decision(
+    Some(decision(
         action,
         RuleId::HO2,
         vec![
@@ -554,7 +553,7 @@ pub(crate) fn route_choice(
             fact("over_plan", values.mean(best) - values.mean(plan)),
             fact("team_plan", plans[best].code()),
         ],
-    )))
+    ))
 }
 
 /// The game's end per believed world from the current position (before a card of the trick is

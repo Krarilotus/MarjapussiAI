@@ -33,17 +33,20 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     let can_ask = legal
         .iter()
         .any(|a| matches!(a.action_type, ActionType::Question(_) | ActionType::AnnounceTrump(_)));
+    let cards = cards_of(legal);
+    let set = cards.iter().fold(CardSet::EMPTY, |a, &(c, _)| a | CardSet::single(c));
+    // At a lead, the card I would lead is decided first: the activation comparison weighs exactly
+    // that card, and plays it if no activation is clearly better (Astra: the emitted action must
+    // be the evaluated action).
+    let led = ctx.k.trick().is_empty().then(|| lead(ctx, set, &val));
     if can_ask {
-        if let Some(d) = trump_plan::timing(ctx, legal, &reach, &val) {
+        if let Some(d) = trump_plan::timing(ctx, legal, &reach, &val, led.as_ref().map(|l| l.0)) {
             return d;
         }
     }
-    let cards = cards_of(legal);
-    let set = cards.iter().fold(CardSet::EMPTY, |a, &(c, _)| a | CardSet::single(c));
-    let (card, rule, why) = if ctx.k.trick().is_empty() {
-        lead(ctx, set, &val)
-    } else {
-        follow(ctx, set, &val)
+    let (card, rule, why) = match led {
+        Some(l) => l,
+        None => follow(ctx, set, &val),
     };
     let action = cards.iter().find(|&&(c, _)| c == card).map_or(&legal[0], |&(_, a)| a);
     decision(action, rule, why)
@@ -68,10 +71,10 @@ pub(crate) fn answer(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     // HO-2: another answer only where the route is clearly better than HC-6's.
     if ctx.params.outlook_activation {
         let moves: Vec<Move> = legal.iter().filter_map(|a| Move::from_action(&a.action_type)).collect();
-        let planned = Move::from_action(&best.action_type);
-        if let Some(Some(d)) = crate::outlook::route_choice(ctx, legal, PlayPhase::from_actions(legal), &moves, planned)
-        {
-            return d;
+        if let Some(planned) = Move::from_action(&best.action_type) {
+            if let Some(d) = crate::outlook::route_choice(ctx, legal, PlayPhase::from_actions(legal), &moves, planned) {
+                return d;
+            }
         }
     }
     decision(best, RuleId::HC6, vec![fact("at_risk", risk(best))])
@@ -111,10 +114,44 @@ fn lead(ctx: &Ctx, legal: CardSet, val: &Valuation) -> (u8, RuleId, Vec<Fact>) {
         open if open.is_empty() => legal,
         open => open,
     };
+    let rule = rule_lead(ctx, legal, val);
+    // HO-1: the plan layer's chain (the trick, then the rest played out with both teams'
+    // activations) over the believed worlds, among the cards that keep my live pairs' halves.
+    // The rule's lead (planned, cash-first or the valuation's) is the prior and always takes part;
+    // another card replaces it only where it is clearly better (Astra's review of the reference
+    // players: a cash-first certificate is a resource fact, not proof that spending it now is
+    // best, e.g. developing a side suit while keeping the trumps as entries).
+    if ctx.params.outlook_leads {
+        let candidates = match legal - val.halves {
+            open if open.is_empty() => legal,
+            open => open,
+        } | CardSet::single(rule.0);
+        if let Some(values) = crate::outlook::lead_values(ctx, candidates) {
+            let best = values.best();
+            let clear = values
+                .index(rule.0)
+                .is_none_or(|v| v != best && values.clearly_better(best, v));
+            if clear {
+                let mean = values.mean(best);
+                let over = values.index(rule.0).map_or(0.0, |v| mean - values.mean(v));
+                return (
+                    values.options[best],
+                    RuleId::HO1,
+                    vec![fact("expected_score_difference", mean), fact("over_rule", over)],
+                );
+            }
+        }
+    }
+    rule
+}
+
+/// The rules' lead: planned leads before the standing cards, HL-2 (side-suit standing cards
+/// outside our reachable pairs' suits, P7, highest first), planned leads after them, else the
+/// valuation's card.
+fn rule_lead(ctx: &Ctx, legal: CardSet, val: &Valuation) -> (u8, RuleId, Vec<Fact>) {
     if let Some(l) = leads::before_standing(ctx, legal) {
         return l;
     }
-    // HL-2: side-suit standing cards outside our reachable pairs' suits (P7), highest first.
     let stand = if ctx.params.lead_cash_standing {
         (ctx.k.standing(ctx.me) & legal) - val.plan_cards
     } else {
@@ -126,33 +163,7 @@ fn lead(ctx: &Ctx, legal: CardSet, val: &Valuation) -> (u8, RuleId, Vec<Fact>) {
     if let Some(l) = leads::after_standing(ctx, legal, val) {
         return l;
     }
-    // HO-1: the plan layer's chain (the trick, then the rest played out with both teams'
-    // activations) over the believed worlds, among the cards that keep my live pairs' halves.
-    // It overrules the valuation's lead only where it is clearly better.
-    let valued = choose(ctx, legal, val, true);
-    if ctx.params.outlook_leads {
-        // The valuation's own card always takes part in the comparison (it is the baseline).
-        let candidates = match legal - val.halves {
-            open if open.is_empty() => legal,
-            open => open,
-        } | CardSet::single(valued.0);
-        if let Some(values) = crate::outlook::lead_values(ctx, candidates) {
-            let best = values.best();
-            let clear = values
-                .index(valued.0)
-                .is_none_or(|v| v != best && values.clearly_better(best, v));
-            if clear {
-                let mean = values.mean(best);
-                let over = values.index(valued.0).map_or(0.0, |v| mean - values.mean(v));
-                return (
-                    values.options[best],
-                    RuleId::HO1,
-                    vec![fact("expected_score_difference", mean), fact("over_valuation", over)],
-                );
-            }
-        }
-    }
-    valued
+    choose(ctx, legal, val, true)
 }
 
 fn follow(ctx: &Ctx, legal: CardSet, val: &Valuation) -> (u8, RuleId, Vec<Fact>) {
