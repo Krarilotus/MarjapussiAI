@@ -147,7 +147,7 @@ fn lead(ctx: &Ctx, legal: CardSet, val: &Valuation) -> (u8, RuleId, Vec<Fact>) {
                 return (
                     values.options[best],
                     RuleId::HO1,
-                    vec![fact("expected_difference", mean), fact("over_valuation", over)],
+                    vec![fact("expected_score_difference", mean), fact("over_valuation", over)],
                 );
             }
         }

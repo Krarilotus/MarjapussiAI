@@ -319,9 +319,35 @@ fn apply(state: &mut FastState, known: &mut Known, m: Move) {
     }
 }
 
-/// `team`'s points minus the other team's.
+/// `team`'s points minus the other team's (raw points: a resource, not the objective).
 fn margin(state: &FastState, team: u8) -> i32 {
     state.points(team) - state.points(1 - team)
+}
+
+/// The contract a playout is judged by: the playing team and the game value (`None` before a
+/// contract exists).
+type Contract = Option<(u8, i32)>;
+
+fn contract(ctx: &Ctx) -> Contract {
+    ctx.k.declarer().map(|d| (d % 2, ctx.k.value()))
+}
+
+/// The objective (the owner's choice; Astra's review §2): `us`'s engine score difference at the
+/// end of the played-out game under `contract` (made or failed, the defenders' rounded points,
+/// schwarz), from `engine::game_scores`, the one owner of the scoring. Without a contract, the
+/// raw points difference.
+fn score(state: &FastState, contract: Contract, us: u8) -> i32 {
+    let Some((playing_team, game_value)) = contract else {
+        return margin(state, us);
+    };
+    let outcome = engine::GameOutcome {
+        playing_team: Some(playing_team),
+        game_value,
+        team_points: [state.points(0), state.points(1)],
+        team_tricks: [state.tricks_won(0), state.tricks_won(1)],
+    };
+    let s = engine::game_scores(&outcome, engine::SCHWARZ_FACTOR_FIFTHS);
+    s[us as usize] - s[1 - us as usize]
 }
 
 /// The level-0 lead (see the module doc, step 3).
@@ -478,6 +504,7 @@ fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<(WorldVal
     let public = ctx.k.public_state(ctx.me, phase);
     let us = ctx.me % 2;
     let known = Known::new(ctx);
+    let game = contract(ctx);
     let options: Vec<(Option<Move>, Plan)> = moves
         .iter()
         .copied()
@@ -499,7 +526,7 @@ fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<(WorldVal
                 }
             }
             playout(&mut s, &mut k, Some(plan));
-            Some(margin(&s, us) - margin(&state, us))
+            Some(score(&s, game, us))
         })
     })?;
     let (values, picked) = values.best_per(|&(m, _)| m);
@@ -531,7 +558,7 @@ pub(crate) fn route_choice(
         action,
         RuleId::HO2,
         vec![
-            fact("expected_difference", values.mean(best)),
+            fact("expected_score_difference", values.mean(best)),
             fact("over_plan", values.mean(best) - values.mean(plan)),
             fact("team_plan", plans[best].code()),
         ],
@@ -585,6 +612,7 @@ pub(crate) fn final_outcomes(ctx: &Ctx) -> Option<Outcomes> {
     let public = ctx.k.public_state(ctx.me, PlayPhase::Cards);
     let us = ctx.me % 2;
     let known = Known::new(ctx);
+    let game = contract(ctx);
     let ends = |w: &World, plan: Plan| {
         let mut s = FastState::from_public(public, w.hands).ok()?;
         let mut k = known.in_world(ctx, &w.hands);
@@ -610,7 +638,7 @@ pub(crate) fn final_outcomes(ctx: &Ctx) -> Option<Outcomes> {
         if mass <= 0.0 {
             return None;
         }
-        let mean = |j: usize| rows.iter().map(|(p, e)| p * margin(&e[j], us) as f64).sum::<f64>();
+        let mean = |j: usize| rows.iter().map(|(p, e)| p * score(&e[j], game, us) as f64).sum::<f64>();
         let best = (0..plans.len()).fold(0, |b, j| if mean(j) > mean(b) { j } else { b });
         Some(Outcomes {
             p: rows.iter().map(|r| r.0 / mass).collect(),
@@ -740,6 +768,7 @@ pub(crate) fn lead_values(ctx: &Ctx, candidates: CardSet) -> Option<WorldValues<
     let public = ctx.k.public_state(ctx.me, PlayPhase::Cards);
     let us = ctx.me % 2;
     let known = Known::new(ctx);
+    let game = contract(ctx);
     let options: Vec<u8> = candidates.iter().collect();
     ctx.with_worlds(|worlds: &[World]| {
         WorldValues::over(ctx, worlds, options, |w, &c| {
@@ -747,12 +776,12 @@ pub(crate) fn lead_values(ctx: &Ctx, candidates: CardSet) -> Option<WorldValues<
             if !state.legal_cards().contains(c) {
                 return None;
             }
-            let before = margin(&state, us);
+
             let mut k = known.in_world(ctx, &w.hands);
             k.play(&state, c);
             state.play(c);
             playout(&mut state, &mut k, None);
-            Some(margin(&state, us) - before)
+            Some(score(&state, game, us))
         })
     })
 }
