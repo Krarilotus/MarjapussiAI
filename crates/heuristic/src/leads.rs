@@ -73,11 +73,12 @@ fn schnippeln(ctx: &Ctx, legal: CardSet) -> Option<Lead> {
     Some((c, RuleId::HL1, vec![fact("suit", s as u8)]))
 }
 
-/// HL-1b (`schnippeln_line`, owner #235–#237): after my standing cards, hand the partner the
-/// lead by a low card toward the ace it **certainly** holds (e.g. one I passed it), when it has
-/// a purpose with the lead: a pair to announce (believed >= `partner_pair_min`, it keeps its
-/// right) or aces of its own to play down. Never a half of my live pair. The entry must hold
-/// with P >= `partner_lead_conf` (the same joint entry estimate as HL-3).
+/// HL-1b (`schnippeln_line`, owner #235–#237): after my standing cards, a low card toward the
+/// ace the partner **certainly** holds (e.g. one I passed it): the opponent in between must go
+/// over it, the partner takes it with the ace and has the lead. Never a half of my live pair.
+/// The entry must hold with P >= `partner_lead_conf` (the same joint entry estimate as HL-3).
+/// The live planner's overrides show the capture alone pays (91-100 % of such tricks won,
+/// +14 to +20 card points net), so no further purpose is required.
 fn schnippeln_line(ctx: &Ctx, legal: CardSet, val: &Valuation) -> Option<Lead> {
     if !ctx.params.lead_schnippeln || ctx.k.played().is_empty() {
         return None;
@@ -89,10 +90,6 @@ fn schnippeln_line(ctx: &Ctx, legal: CardSet, val: &Valuation) -> Option<Lead> {
         .filter(|&s| !ctx.k.is_called(s))
         .map(|s| ctx.mind.features(mate).pair[s as usize])
         .fold(0.0, f32::max);
-    let purpose = (pair >= ctx.params.partner_pair_min && ctx.k.rights(mate).may_announce()) || mates_aces.len() >= 2;
-    if !purpose {
-        return None;
-    }
     let (s, c, entry) = SUITS
         .into_iter()
         .filter(|&s| mates_aces.contains(ace_of(s)))
