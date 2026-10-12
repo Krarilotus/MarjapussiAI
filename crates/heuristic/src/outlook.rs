@@ -143,6 +143,17 @@ impl Known {
         self.may.iter_mut().for_each(|m| *m -= CardSet::single(card));
     }
 
+    /// The view the actors use in one world: the table's knowledge, or with
+    /// `outlook_world_known` the world's hands themselves (the classic Monte-Carlo actors that
+    /// play each sampled deal open; strategy fusion is then the stated approximation).
+    fn in_world(self, ctx: &Ctx, hands: &[CardSet; 4]) -> Known {
+        if ctx.params.outlook_world_known {
+            Known { may: *hands }
+        } else {
+            self
+        }
+    }
+
     fn may_hold_suit(&self, seat: u8, s: Suit) -> bool {
         !(self.may[(seat % 4) as usize] & CardSet::suit(s)).is_empty()
     }
@@ -453,7 +464,7 @@ fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<(WorldVal
     let values = ctx.with_worlds(|worlds: &[World]| {
         WorldValues::over(ctx, worlds, options, |w, &(option, plan)| {
             let state = FastState::from_public(public, w.hands).ok()?;
-            let (mut s, mut k) = (state, known);
+            let (mut s, mut k) = (state, known.in_world(ctx, &w.hands));
             match option {
                 Some(m) if s.moves().any(|x| x == m) => apply(&mut s, m),
                 Some(_) => return None,
@@ -552,7 +563,7 @@ pub(crate) fn final_outcomes(ctx: &Ctx) -> Option<Outcomes> {
     let known = Known::new(ctx);
     let ends = |w: &World, plan: Plan| {
         let mut s = FastState::from_public(public, w.hands).ok()?;
-        let mut k = known;
+        let mut k = known.in_world(ctx, &w.hands);
         playout(&mut s, &mut k, Some(plan));
         Some(s)
     };
@@ -627,7 +638,7 @@ pub(crate) fn take_or_defend(ctx: &Ctx, ours: i32, their_declarer: u8, theirs: i
             };
             let hands = crate::passing::level0_exchange(w.hands, declarer, conf, &likelihood, told);
             let mut s = FastState::new(hands, declarer);
-            let mut k = k;
+            let mut k = k.in_world(ctx, &hands);
             playout(&mut s, &mut k, None);
             let outcome = engine::GameOutcome {
                 playing_team: Some(declarer % 2),
@@ -704,7 +715,7 @@ pub(crate) fn lead_values(ctx: &Ctx, candidates: CardSet) -> Option<WorldValues<
                 return None;
             }
             let before = margin(&state, us);
-            let mut k = known;
+            let mut k = known.in_world(ctx, &w.hands);
             k.play(&state, c);
             state.play(c);
             playout(&mut state, &mut k, None);

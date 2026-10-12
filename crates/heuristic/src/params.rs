@@ -84,6 +84,9 @@ params! {
     outlook_leads: bool = true,
     /// The valuation's trick term from the trick outcome over the believed worlds.
     outlook_trick: bool = true,
+    /// The outlook's simulated players see each believed world's hands (classic Monte-Carlo
+    /// actors) instead of only the table's knowledge.
+    outlook_world_known: bool = true,
     /// HO-2: the trump plan's activation and the answer chosen by route over the believed worlds.
     outlook_activation: bool = true,
 
