@@ -275,7 +275,7 @@ pub(crate) struct Choice {
     pub led: Option<Suit>,
     /// The trick outcome over the believed worlds (`outlook::trick_outcomes`), computed once on
     /// first use: P(ours) and the expected trick points per card.
-    worlds: std::cell::OnceCell<Option<[Option<(f32, f32)>; 36]>>,
+    worlds: std::cell::OnceCell<Option<crate::outlook::TrickOutcomes>>,
 }
 
 impl Choice {
