@@ -154,8 +154,14 @@ impl Known {
         }
     }
 
-    fn may_hold_suit(&self, seat: u8, s: Suit) -> bool {
-        !(self.may[(seat % 4) as usize] & CardSet::suit(s)).is_empty()
+    /// What `seat` may hold as an actor holding `own` sees it: the table's knowledge without
+    /// the actor's own cards (Astra: an actor reasons with its own hand, not only the public).
+    fn may(&self, own: CardSet, seat: u8) -> CardSet {
+        self.may[(seat % 4) as usize] - own
+    }
+
+    fn may_hold_suit(&self, own: CardSet, seat: u8, s: Suit) -> bool {
+        !(self.may(own, seat) & CardSet::suit(s)).is_empty()
     }
 }
 
@@ -256,7 +262,7 @@ fn ask(state: &FastState, known: &Known) -> Option<Move> {
     let legal = |q: QuestionType| state.moves().any(|m| m == Move::Question(q));
     let may_pair = SUITS
         .into_iter()
-        .any(|s| open(s) && (known.may[mate] & CardSet::halves(s)) == CardSet::halves(s));
+        .any(|s| open(s) && (known.may(mine, mate as u8) & CardSet::halves(s)) == CardSet::halves(s));
     if may_pair && legal(QuestionType::Yours) {
         return Some(Move::Question(QuestionType::Yours));
     }
@@ -265,7 +271,7 @@ fn ask(state: &FastState, known: &Known) -> Option<Move> {
         .rev()
         .find(|&s| {
             let h = CardSet::halves(s);
-            open(s) && !(mine & h).is_empty() && (mine & h) != h && !(known.may[mate] & (h - mine)).is_empty()
+            open(s) && !(mine & h).is_empty() && (mine & h) != h && !(known.may(mine, mate as u8) & (h - mine)).is_empty()
         })
         .map(QuestionType::YourHalf)
         .filter(|&q| legal(q))
@@ -309,9 +315,10 @@ fn lead0(state: &FastState, known: &Known) -> u8 {
     let all = state.in_hands();
     let trump = state.trump();
     let legal = state.legal_cards();
+    let own = state.hand(seat);
     // As far as the knowledge goes: proven void in the side suit and possibly holding trump.
     let ruffs =
-        |p: u8, s: Suit| trump.is_some_and(|t| t != s && !known.may_hold_suit(p, s) && known.may_hold_suit(p, t));
+        |p: u8, s: Suit| trump.is_some_and(|t| t != s && !known.may_hold_suit(own, p, s) && known.may_hold_suit(own, p, t));
     if let Some(c) = legal
         .iter()
         .filter(|&c| top_of(all, suit_of(c)) == Some(c) && ![1u8, 3].iter().any(|&o| ruffs(seat + o, suit_of(c))))
