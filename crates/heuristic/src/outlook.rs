@@ -135,11 +135,13 @@ fn respond(state: &FastState, known: &Known) -> u8 {
 /// What every seat may still hold as far as the table knows: the public facts' possible cards,
 /// narrowed along a played line by the engine's play-level exclusions (the rule engine's facts).
 /// `read`: per seat, the suits its partner reads it blank in from its pass forth (`blank_signs`),
-/// until it follows one of them.
+/// until it follows one of them. `held`: per seat, the cards its partner knows it holds from the
+/// exchange (the team's private transfer facts; Astra's review 2026-10-13), until played.
 #[derive(Clone, Copy)]
 struct Known {
     may: [CardSet; 4],
     read: [u8; 4],
+    held: [CardSet; 4],
 }
 
 /// The suits of `cards` as bits.
@@ -147,19 +149,28 @@ fn suits_of(cards: CardSet) -> u8 {
     cards.iter().fold(0, |bits, c| bits | 1 << suit_of(c) as u8)
 }
 
-/// The suits the giver's partner reads it blank in: those of the Lusche its pass forth contains
-/// (the owner's live test 2026-10-12: "not a single blank sign, not a single lusche in there. So
-/// i can not know where its blank"; R1/R4 of the passing store), except where the exact
-/// transfer facts or its play say otherwise: a suit returned to it, a suit it played (Astra's
-/// review 2026-10-13: exact transfer knowledge overrides the reading).
+/// The suits the giver's partner reads it blank in: those of which its pass forth contains at
+/// least two Luschen (the owner's R1: "the first passer passed >= 2 low cards of s -> P(blank in
+/// s) high"; his live test 2026-10-12: "not a single blank sign, not a single lusche in there";
+/// a lone Lusche may be padding from a kept suit, R4), except where the exact transfer facts or
+/// its play say otherwise: a suit returned to it, a suit it played (Astra's review 2026-10-13).
 fn blank_signs(forth: CardSet, back: CardSet, played: CardSet) -> u8 {
-    suits_of(forth & beliefs::conventions::LUSCHE) & !suits_of(back) & !suits_of(played)
+    let low = forth & beliefs::conventions::LUSCHE;
+    let signed = SUITS
+        .into_iter()
+        .filter(|&s| (low & CardSet::suit(s)).len() >= 2)
+        .fold(0, |bits, s| bits | 1 << s as u8);
+    signed & !suits_of(back) & !suits_of(played)
 }
 
 impl Known {
     /// The table's knowledge, and the pass forth my team exchanged if I saw it.
     fn new(ctx: &Ctx) -> Known {
-        let mut read = [0; 4];
+        let mut known = Known {
+            may: std::array::from_fn(|s| ctx.mind.public().may_hold(s as u8)),
+            read: [0; 4],
+            held: [CardSet::EMPTY; 4],
+        };
         let seen = |p: knowledge::Passed| match p {
             knowledge::Passed::Seen(cards) => Some(cards),
             _ => None,
@@ -167,13 +178,21 @@ impl Known {
         if let Some(first) = ctx.k.first_passer().filter(|f| f % 2 == ctx.me % 2) {
             if let Some(forth) = seen(ctx.k.given(first)) {
                 let back = seen(ctx.k.received(first)).unwrap_or(CardSet::EMPTY);
-                read[first as usize] = blank_signs(forth, back, ctx.k.played_by(first));
+                let played = [ctx.k.played_by(first), ctx.k.played_by(partner(first))];
+                known.exchanged(first, forth, back, played);
             }
         }
-        Known {
-            may: std::array::from_fn(|s| ctx.mind.public().may_hold(s as u8)),
-            read,
-        }
+        known
+    }
+
+    /// My team's exchange: `giver` passed `forth`, its partner returned `back`; `played` are the
+    /// cards each of them (giver, receiver) has played since. Each partner knows what the other
+    /// holds of the transfers; the giver's blank signs are read against them.
+    fn exchanged(&mut self, giver: u8, forth: CardSet, back: CardSet, played: [CardSet; 2]) {
+        let receiver = partner(giver) as usize;
+        self.read[giver as usize] = blank_signs(forth, back, played[0]);
+        self.held[giver as usize] = back - played[0];
+        self.held[receiver] = forth - back - played[1];
     }
 
     /// The seat to move plays `card` into `state`'s trick (called before `state.play`).
@@ -183,6 +202,7 @@ impl Known {
         self.may[seat] -= engine::play_levels(state.trick(), state.trump(), first).excluded_by(card);
         self.may.iter_mut().for_each(|m| *m -= CardSet::single(card));
         self.read[seat] &= !(1 << suit_of(card) as u8);
+        self.held[seat] -= CardSet::single(card);
     }
 
     /// The view the actors use in one world: the table's knowledge, or with
@@ -190,10 +210,7 @@ impl Known {
     /// play each sampled deal open; strategy fusion is then the stated approximation).
     fn in_world(self, ctx: &Ctx, hands: &[CardSet; 4]) -> Known {
         if ctx.params.outlook_world_known {
-            Known {
-                may: *hands,
-                read: self.read,
-            }
+            Known { may: *hands, ..self }
         } else {
             self
         }
@@ -410,6 +427,20 @@ fn lead0(state: &FastState, known: &Known) -> u8 {
         return c;
     }
     let keep = live_halves(state.hand(seat), state.called());
+    // A low lead toward my partner's ace that I know of from the exchange, where no opponent may
+    // ruff it (Astra's review 2026-10-13: a route to the giver's kept entry the receiver can read).
+    let mate = partner(seat);
+    let known_ace = |s: Suit| !(known.held[mate as usize] & CardSet::ACES & CardSet::suit(s)).is_empty();
+    if let Some(c) = (legal - keep)
+        .iter()
+        .filter(|&c| {
+            let s = suit_of(c);
+            Some(s) != trump && known_ace(s) && ![1u8, 3].iter().any(|&o| ruffs(seat + o, s))
+        })
+        .min_by_key(|&c| (CARD_POINTS[c as usize], beats_key(c)))
+    {
+        return c;
+    }
     if let Some(c) = (legal - keep)
         .iter()
         .filter(|&c| ruffs(partner(seat), suit_of(c)) && !ruffs(seat + 3, suit_of(c)))
@@ -783,7 +814,7 @@ pub(crate) fn pass_values(ctx: &Ctx, candidates: &[CardSet]) -> Option<WorldValu
             let mut s = FastState::new(hands, declarer);
             let mut k = known.in_world(ctx, &hands);
             let back = hands[me as usize] - (w.hands[me as usize] - x);
-            k.read[me as usize] = blank_signs(x, back, CardSet::EMPTY);
+            k.exchanged(me, x, back, [CardSet::EMPTY; 2]);
             playout(&mut s, &mut k, Some(plan));
             Some(score(&s, game, us))
         })
@@ -798,6 +829,7 @@ pub(crate) fn open_playout(hands: [CardSet; 4], leader: u8) -> [i32; 2] {
     let mut k = Known {
         may: hands,
         read: [0; 4],
+        held: [CardSet::EMPTY; 4],
     };
     playout(&mut s, &mut k, None);
     [s.points(0), s.points(1)]
@@ -971,18 +1003,46 @@ mod tests {
         assert_eq!(plan.unwrap().next, 1);
     }
 
-    /// A Lusche passed forth reads as a blank sign; a card of that suit returned to the giver, or
-    /// one it played, overrides the reading (Astra's review 2026-10-13).
+    /// Two Luschen of a suit passed forth read as a blank sign, a lone padding Lusche doesn't; a
+    /// card of that suit returned to the giver, or one it played, overrides the reading (the
+    /// owner's R1; Astra's review 2026-10-13).
     #[test]
     fn exact_transfers_override_a_blank_sign() {
         let cards = |c: &[&str]| CardSet::from_cards(&c.iter().map(|c| c.parse().unwrap()).collect::<Vec<_>>());
         let forth = cards(&["e-6", "e-7", "s-6", "s-7"]);
         let (acorns, bells) = (1 << Suit::Acorns as u8, 1 << Suit::Bells as u8);
+        assert_eq!(blank_signs(forth, CardSet::EMPTY, CardSet::EMPTY), acorns | bells);
         assert_eq!(blank_signs(forth, cards(&["s-A"]), CardSet::EMPTY), acorns);
         assert_eq!(blank_signs(forth, CardSet::EMPTY, cards(&["e-9"])), bells);
-        assert_eq!(blank_signs(forth, CardSet::EMPTY, CardSet::EMPTY), acorns | bells);
-        let high = cards(&["r-A", "r-Z", "r-K", "g-A"]);
-        assert_eq!(blank_signs(high, CardSet::EMPTY, CardSet::EMPTY), 0);
+        let padding = cards(&["e-6", "r-A", "r-Z", "r-K"]);
+        assert_eq!(blank_signs(padding, CardSet::EMPTY, CardSet::EMPTY), 0);
+    }
+
+    /// The receiver leads low toward the giver's ace it returned (it knows the ace is there) and
+    /// not without that knowledge (Astra's review 2026-10-13: a readable entry route).
+    #[test]
+    fn a_known_partner_ace_is_reached_with_a_low_lead() {
+        let cards = |c: &[&str]| CardSet::from_cards(&c.iter().map(|c| c.parse().unwrap()).collect::<Vec<_>>());
+        let lead = |held: CardSet| {
+            let hands = [
+                cards(&["s-A", "e-7", "g-6"]),
+                cards(&["s-6", "e-8", "g-9"]),
+                cards(&["s-7", "e-A", "g-Z"]),
+                cards(&["s-8", "e-9", "g-U"]),
+            ];
+            let mut state = FastState::new(hands, 0);
+            for c in ["s-A", "s-6", "s-7", "s-8"] {
+                state.play(c.parse::<engine::Card>().unwrap().index());
+            }
+            let known = Known {
+                may: [CardSet::ALL - hands[0]; 4],
+                read: [0; 4],
+                held: [CardSet::EMPTY, CardSet::EMPTY, held, CardSet::EMPTY],
+            };
+            engine::Card::from_index(lead0(&state, &known)).to_string()
+        };
+        assert_eq!(lead(cards(&["e-A"])), "e-7");
+        assert_eq!(lead(CardSet::EMPTY), "g-6");
     }
 
     /// Game 1346 T3 as Astra's test (2026-10-13): after Green is trump, seat 0 leads r-6, seat 1
@@ -1009,6 +1069,7 @@ mod tests {
             let known = Known {
                 may: state.hands(),
                 read: [0; 4],
+                held: [CardSet::EMPTY; 4],
             };
             engine::Card::from_index(respond(&state, &known)).to_string()
         };

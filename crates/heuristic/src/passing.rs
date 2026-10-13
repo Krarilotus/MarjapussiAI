@@ -192,9 +192,10 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
 }
 
 /// P-route: the store's pass forth stands unless another candidate is clearly better by route
-/// (`outlook::pass_values`). The candidates are the store's best pass per set of suits it makes
-/// blank, so the coherent blanking passes are compared (Astra's review 2026-10-13, S12/S13; the
-/// owner's game 3), with the store's choice as the baseline.
+/// (`outlook::pass_values`). The candidates cover the passes' purposes (Astra's reviews
+/// 2026-10-13, S12/S13; the owner's game 3), with the store's choice as the baseline: the
+/// store's best pass per set of suits it makes blank, every whole suit of four, per ace the best
+/// pass delivering it, and per pair of mine the best pass keeping it.
 fn route_forth(ctx: &Ctx, hand: CardSet, options: &[(GameAction, CardSet, f64)], store: Decision) -> Decision {
     let ActionType::Pass(cards) = &store.action.action_type else {
         return store;
@@ -209,16 +210,33 @@ fn route_forth(ctx: &Ctx, hand: CardSet, options: &[(GameAction, CardSet, f64)],
             })
             .fold(0u8, |bits, s| bits | 1 << s as u8)
     };
-    let mut best: Vec<(u8, CardSet, f64)> = vec![(blanked(chosen), chosen, f64::INFINITY)];
-    for &(_, x, v) in options {
-        let b = blanked(x);
-        match best.iter_mut().find(|o| o.0 == b) {
-            Some(o) if v > o.2 && o.1 != chosen => *o = (b, x, v),
-            Some(_) => {}
-            None => best.push((b, x, v)),
+    let best_where = |keep: &dyn Fn(CardSet) -> bool| {
+        options
+            .iter()
+            .filter(|o| keep(o.1))
+            .max_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|o| o.1)
+    };
+    let mut patterns: Vec<u8> = options.iter().map(|o| blanked(o.1)).collect();
+    patterns.sort_unstable();
+    patterns.dedup();
+    let blanks = patterns.into_iter().filter_map(|b| best_where(&|x| blanked(x) == b));
+    let whole_suits = SUITS
+        .map(|s| hand & CardSet::suit(s))
+        .into_iter()
+        .filter(|x| x.len() == 4);
+    let aces = (hand & CardSet::ACES)
+        .iter()
+        .filter_map(|a| best_where(&|x| x.contains(a)));
+    let pairs_kept = hand
+        .pair_suits()
+        .filter_map(|s| best_where(&|x| (x & CardSet::halves(s)).is_empty()));
+    let mut candidates = vec![chosen];
+    for x in blanks.chain(whole_suits).chain(aces).chain(pairs_kept) {
+        if !candidates.contains(&x) && options.iter().any(|o| o.1 == x) {
+            candidates.push(x);
         }
     }
-    let candidates: Vec<CardSet> = best.iter().map(|o| o.1).collect();
     let Some(values) = crate::outlook::pass_values(ctx, &candidates) else {
         return store;
     };
