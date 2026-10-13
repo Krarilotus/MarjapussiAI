@@ -25,6 +25,9 @@ COMPATIBLE_CORES = (
     "4bff913bead8f33bcdce27751cfa0cb6e2296e71",
     # Additive public outcome envelope; review: 2026-10-11-public-envelope-core-anchor.md.
     "043c3ff60887782bd98c1b0b9510dfe1522e5be7",
+    # Additive `knowledge::control_run` (2026-10-13): a new pure hand fact and its export; the
+    # historical policies don't call it and no existing knowledge code changed.
+    "5ec49bafffd30f830a17824d2c63dfc600f7f237",
 )
 SHARED = ("engine", "observation", "knowledge", "agent")
 FROZEN = ("heuristic", "beliefs", "solver")
