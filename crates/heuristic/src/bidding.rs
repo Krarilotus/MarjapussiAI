@@ -431,14 +431,15 @@ fn own_the_game(
             return Some(decision(bid, RuleId::BControl, std::mem::take(why)));
         }
     }
-    // The partner's last bid came right over a bid of mine that told a pair I still hold.
+    // An offer: my partner's last bid, at 140 or more and right over my bid, read as the ace
+    // message, after I told the Red pair, which I still hold.
     let last_two: Vec<_> = history.iter().filter(|h| h.1.is_some()).rev().take(2).collect();
     let offered = holder == Some(mate)
         && last_two.len() == 2
         && last_two[1].0 == me
-        && mine
-            .iter()
-            .any(|b| b.nominal.is_some_and(|m| PAIR_MESSAGES & m.bit() != 0));
+        && last_two[0].2 >= PAIR_LINE
+        && mate_bids.last().is_some_and(|b| b.nominal == Some(Message::Ace))
+        && mine.iter().any(|b| b.nominal == Some(Message::RedPair));
     if offered && hand.pair_suits().next().is_some() {
         why.push(fact("keep", 1));
         return Some(decision(bid, RuleId::BOffer, std::mem::take(why)));
