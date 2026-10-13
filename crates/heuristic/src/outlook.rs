@@ -149,18 +149,14 @@ fn suits_of(cards: CardSet) -> u8 {
     cards.iter().fold(0, |bits, c| bits | 1 << suit_of(c) as u8)
 }
 
-/// The suits the giver's partner reads it blank in: those of which its pass forth contains at
-/// least two Luschen (the owner's R1: "the first passer passed >= 2 low cards of s -> P(blank in
-/// s) high"; his live test 2026-10-12: "not a single blank sign, not a single lusche in there";
-/// a lone Lusche may be padding from a kept suit, R4), except where the exact transfer facts or
-/// its play say otherwise: a suit returned to it, a suit it played (Astra's review 2026-10-13).
+/// The suits the giver's partner reads it blank in: those of a Lusche its pass forth contains
+/// (the owner 2026-10-13: "It should just be high probabilty of blank when already one lusche in
+/// the passed cards"; a Lusche from a kept suit breaks the convention, the store's
+/// `lusche_from_kept_suit`), except where the exact transfer facts or its play say otherwise: a
+/// suit returned to it, a suit it played (Astra's review 2026-10-13). A fallible reading: the
+/// actors act on it until the giver follows the suit.
 fn blank_signs(forth: CardSet, back: CardSet, played: CardSet) -> u8 {
-    let low = forth & beliefs::conventions::LUSCHE;
-    let signed = SUITS
-        .into_iter()
-        .filter(|&s| (low & CardSet::suit(s)).len() >= 2)
-        .fold(0, |bits, s| bits | 1 << s as u8);
-    signed & !suits_of(back) & !suits_of(played)
+    suits_of(forth & beliefs::conventions::LUSCHE) & !suits_of(back) & !suits_of(played)
 }
 
 impl Known {
@@ -1003,9 +999,8 @@ mod tests {
         assert_eq!(plan.unwrap().next, 1);
     }
 
-    /// Two Luschen of a suit passed forth read as a blank sign, a lone padding Lusche doesn't; a
-    /// card of that suit returned to the giver, or one it played, overrides the reading (the
-    /// owner's R1; Astra's review 2026-10-13).
+    /// A Lusche passed forth reads as a blank sign; a card of that suit returned to the giver, or
+    /// one it played, overrides the reading (the owner 2026-10-13; Astra's review 2026-10-13).
     #[test]
     fn exact_transfers_override_a_blank_sign() {
         let cards = |c: &[&str]| CardSet::from_cards(&c.iter().map(|c| c.parse().unwrap()).collect::<Vec<_>>());
@@ -1014,8 +1009,10 @@ mod tests {
         assert_eq!(blank_signs(forth, CardSet::EMPTY, CardSet::EMPTY), acorns | bells);
         assert_eq!(blank_signs(forth, cards(&["s-A"]), CardSet::EMPTY), acorns);
         assert_eq!(blank_signs(forth, CardSet::EMPTY, cards(&["e-9"])), bells);
-        let padding = cards(&["e-6", "r-A", "r-Z", "r-K"]);
-        assert_eq!(blank_signs(padding, CardSet::EMPTY, CardSet::EMPTY), 0);
+        let one = cards(&["e-6", "r-A", "r-Z", "r-K"]);
+        assert_eq!(blank_signs(one, CardSet::EMPTY, CardSet::EMPTY), acorns);
+        let high = cards(&["r-A", "r-Z", "r-K", "g-A"]);
+        assert_eq!(blank_signs(high, CardSet::EMPTY, CardSet::EMPTY), 0);
     }
 
     /// The receiver leads low toward the giver's ace it returned (it knows the ace is there) and
