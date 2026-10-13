@@ -397,7 +397,8 @@ fn lead0(state: &FastState, known: &Known) -> u8 {
     // As far as the knowledge goes: proven void in the side suit (or, for my partner, read blank
     // from its pass forth) and possibly holding trump.
     let void = |p: u8, s: Suit| {
-        !known.may_hold_suit(own, p, s) || (p % 4 == partner(seat) && known.read[partner(seat) as usize] >> s as u8 & 1 == 1)
+        !known.may_hold_suit(own, p, s)
+            || (p % 4 == partner(seat) && known.read[partner(seat) as usize] >> s as u8 & 1 == 1)
     };
     let ruffs = |p: u8, s: Suit| trump.is_some_and(|t| t != s && void(p, s) && known.may_hold_suit(own, p, t));
     // The owner's order: standing side-suit cards before standing trumps.
@@ -976,11 +977,12 @@ mod tests {
     fn exact_transfers_override_a_blank_sign() {
         let cards = |c: &[&str]| CardSet::from_cards(&c.iter().map(|c| c.parse().unwrap()).collect::<Vec<_>>());
         let forth = cards(&["e-6", "e-7", "s-6", "s-7"]);
-        let both = 1 << Suit::Acorns as u8 | 1 << Suit::Bells as u8;
-        assert_eq!(blank_signs(forth, CardSet::EMPTY, CardSet::EMPTY), both);
-        assert_eq!(blank_signs(forth, cards(&["s-A"]), CardSet::EMPTY), 1 << Suit::Acorns as u8);
-        assert_eq!(blank_signs(forth, CardSet::EMPTY, cards(&["e-9"])), 1 << Suit::Bells as u8);
-        assert_eq!(blank_signs(cards(&["r-A", "r-Z", "r-K", "g-A"]), CardSet::EMPTY, CardSet::EMPTY), 0);
+        let (acorns, bells) = (1 << Suit::Acorns as u8, 1 << Suit::Bells as u8);
+        assert_eq!(blank_signs(forth, cards(&["s-A"]), CardSet::EMPTY), acorns);
+        assert_eq!(blank_signs(forth, CardSet::EMPTY, cards(&["e-9"])), bells);
+        assert_eq!(blank_signs(forth, CardSet::EMPTY, CardSet::EMPTY), acorns | bells);
+        let high = cards(&["r-A", "r-Z", "r-K", "g-A"]);
+        assert_eq!(blank_signs(high, CardSet::EMPTY, CardSet::EMPTY), 0);
     }
 
     /// Game 1346 T3 as Astra's test (2026-10-13): after Green is trump, seat 0 leads r-6, seat 1
