@@ -115,7 +115,7 @@ fn best_pass<const N: usize>(hand: CardSet, weights: &[f64; N], features: impl F
 /// (`Partner::read` with `likelihood[seat]`, the seat's class likelihood as its partner reads
 /// it) and knowing its own pair messages (`known[seat]`). Returns the hands after the exchange.
 pub fn level0_exchange(
-    mut hands: [CardSet; 4],
+    hands: [CardSet; 4],
     declarer: u8,
     partner_half_conf: f32,
     likelihood: &[Option<Box<[f32; beliefs::conventions::N_CLASSES]>>; 4],
@@ -127,10 +127,24 @@ pub fn level0_exchange(
     let forth = best_pass(giver, &PASSING_WEIGHTS.forth, |x| {
         forth_features(giver, &reads_declarer, known[p], x)
     });
+    level0_back(hands, declarer, forth, partner_half_conf, likelihood[p].as_deref())
+}
+
+/// The exchange after the declarer's partner passed `forth`: the declarer passes back by the
+/// passing store, reading its partner from `giver_likelihood` (its class likelihood as the
+/// declarer reads it) and the received cards. Returns the hands after the exchange.
+pub fn level0_back(
+    mut hands: [CardSet; 4],
+    declarer: u8,
+    forth: CardSet,
+    partner_half_conf: f32,
+    giver_likelihood: Option<&[f32; beliefs::conventions::N_CLASSES]>,
+) -> [CardSet; 4] {
+    let (d, p) = (declarer as usize, partner(declarer) as usize);
     hands[p] -= forth;
     hands[d] |= forth;
     let taker = hands[d];
-    let estimate = Partner::read_after_pass(taker - forth, forth, likelihood[p].as_deref());
+    let estimate = Partner::read_after_pass(taker - forth, forth, giver_likelihood);
     let trump = back_plan(taker, estimate.half, partner_half_conf);
     let back = best_pass(taker, &PASSING_WEIGHTS.back, |y| {
         back_features(taker, &estimate, trump, y)
@@ -156,15 +170,18 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     let partner = Partner::of(ctx.mind);
     if hand.len() as usize == HAND_SIZE {
         let known = known_pairs(&ctx.mind.record().seats[ctx.me as usize].bids);
-        choose(
+        let (store, options) = choose(
             ctx,
             legal,
             &PASSING_WEIGHTS.forth,
             &FORTH_FEATURES,
             RuleId::PForth,
             |x| forth_features(hand, &partner, known, x),
-        )
-        .0
+        );
+        if !ctx.params.pass_route {
+            return store;
+        }
+        route_forth(ctx, hand, &options, store)
     } else {
         let trump = back_plan(hand, partner.half, ctx.params.partner_half_conf);
         choose(ctx, legal, &PASSING_WEIGHTS.back, &BACK_FEATURES, RuleId::PBack, |y| {
@@ -172,6 +189,59 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
         })
         .0
     }
+}
+
+/// P-route: the store's pass forth stands unless another candidate is clearly better by route
+/// (`outlook::pass_values`). The candidates are the store's best pass per set of suits it makes
+/// blank, so the coherent blanking passes are compared (Astra's review 2026-10-13, S12/S13; the
+/// owner's game 3), with the store's choice as the baseline.
+fn route_forth(ctx: &Ctx, hand: CardSet, options: &[(GameAction, CardSet, f64)], store: Decision) -> Decision {
+    let ActionType::Pass(cards) = &store.action.action_type else {
+        return store;
+    };
+    let chosen = CardSet::from_cards(cards);
+    let blanked = |x: CardSet| {
+        SUITS
+            .into_iter()
+            .filter(|&s| {
+                let held = hand & CardSet::suit(s);
+                !held.is_empty() && held.is_subset(x)
+            })
+            .fold(0u8, |bits, s| bits | 1 << s as u8)
+    };
+    let mut best: Vec<(u8, CardSet, f64)> = vec![(blanked(chosen), chosen, f64::INFINITY)];
+    for &(_, x, v) in options {
+        let b = blanked(x);
+        match best.iter_mut().find(|o| o.0 == b) {
+            Some(o) if v > o.2 && o.1 != chosen => *o = (b, x, v),
+            Some(_) => {}
+            None => best.push((b, x, v)),
+        }
+    }
+    let candidates: Vec<CardSet> = best.iter().map(|o| o.1).collect();
+    let Some(values) = crate::outlook::pass_values(ctx, &candidates) else {
+        return store;
+    };
+    let top = values.best();
+    let Some(base) = values.index(chosen) else {
+        return store;
+    };
+    if top == base || !values.clearly_better(top, base) {
+        return store;
+    }
+    let x = values.options[top];
+    let Some(action) = options.iter().find(|o| o.1 == x).map(|o| o.0) else {
+        return store;
+    };
+    decision(
+        &action,
+        RuleId::PRoute,
+        vec![
+            fact("expected_score_difference", values.mean(top)),
+            fact("over_store", values.mean(top) - values.mean(base)),
+            fact("blank_signs", blanked(x)),
+        ],
+    )
 }
 
 /// Keep scores for selection, and calculate an explanation only for the chosen option.

@@ -87,6 +87,11 @@ params! {
     /// game vs without); choosing the highest target picks the hands whose playout estimate is
     /// too high (human games: estimates of 240+ overshoot by 5 to 22 points).
     route_raise: bool = false,
+    /// P-route: the pass forth by route over the believed worlds (`passing::route_forth`). Off
+    /// (Astra's review 2026-10-13, followed): the forecast lacks the team's private transfer
+    /// facts in play and a receiver-readable route to the giver's kept entries, so its margins
+    /// (+178 over the owner's HP-5 pass) are not yet a fair comparison.
+    pass_route: bool = false,
 
     /// HO-1: leads without a planned rule by the plan layer's chain (`outlook`).
     outlook_leads: bool = true,
