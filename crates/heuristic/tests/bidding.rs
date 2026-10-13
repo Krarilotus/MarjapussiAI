@@ -287,3 +287,66 @@ fn seed_42_s1_takes_the_game_at_140() {
     let without = 1.0 / (1.0 + ((1.0 - p) / p).ln().exp() * fact("standing_potential").unwrap().exp());
     assert!(without < 0.5, "{without}");
 }
+
+fn cards(c: &[&str]) -> engine::CardSet {
+    engine::CardSet::from_cards(&c.iter().map(|c| c.parse().unwrap()).collect::<Vec<_>>())
+}
+
+/// `control_run` (Astra's review 2026-10-13): deal 573's Schell A Z K O 9 7 (four on top, three
+/// outside), deal 576's Rot A Z O 9 8 7 6 (two on top, two outside); without the ace, or with a
+/// gap the outside cards can use, no run.
+#[test]
+fn a_control_run_needs_the_ace_and_a_top_sequence_covering_the_outside_cards() {
+    use engine::Suit;
+    let run = |c: &[&str], s: Suit| knowledge::control_run(cards(c), s);
+    assert!(run(&["s-A", "s-Z", "s-K", "s-O", "s-9", "s-7"], Suit::Bells));
+    assert!(run(&["r-A", "r-Z", "r-O", "r-9", "r-8", "r-7", "r-6"], Suit::Red));
+    assert!(!run(&["s-U", "s-Z", "s-K", "s-O", "s-9", "s-7"], Suit::Bells));
+    assert!(!run(&["s-A", "s-K", "s-O", "s-9", "s-7"], Suit::Bells));
+}
+
+/// The owner's deal 573: S2 told its Schell pair (150), the opponents went 155 after its partner
+/// passed at its first call; with the run it bids 160 once (B-control).
+#[test]
+fn deal_573_takes_one_step_with_a_control_run() {
+    let auction = [(0, None), (1, Some(135)), (2, Some(150)), (3, None), (1, Some(155))];
+    let mut s = Scene::new(2, &["e-K", "e-U", "s-A", "s-Z", "s-K", "s-O", "s-9", "s-7", "r-8"]);
+    s.auction(&auction);
+    assert_eq!(tell(&s), (Some(160), RuleId::BControl));
+    // Without the Schell ace there is no run to own.
+    let mut s = Scene::new(2, &["e-K", "e-U", "s-U", "s-Z", "s-K", "s-O", "s-9", "s-7", "r-8"]);
+    s.auction(&auction);
+    assert_eq!(tell(&s).0, None);
+    // Once: after its 160 the opponents' 165 is defended.
+    let mut s = Scene::new(2, &["e-K", "e-U", "s-A", "s-Z", "s-K", "s-O", "s-9", "s-7", "r-8"]);
+    let mut longer = auction.to_vec();
+    longer.extend([(2, Some(160)), (1, Some(165))]);
+    s.auction(&longer);
+    assert_eq!(tell(&s).0, None);
+}
+
+/// The partner's first pass at 140 or more is censored, not weak (the owner 2026-10-13): no
+/// B-control on it.
+#[test]
+fn a_first_pass_over_140_does_not_make_the_partner_weak() {
+    let hand = ["e-K", "e-U", "s-A", "s-Z", "s-K", "s-O", "s-9", "s-7", "r-8"];
+    let mut s = Scene::new(0, &hand);
+    s.auction(&[(0, Some(130)), (1, Some(145)), (2, None), (3, None)]);
+    assert_eq!(tell(&s).0, None);
+    let mut s = Scene::new(0, &hand);
+    s.auction(&[(0, Some(130)), (1, Some(135)), (2, None), (3, Some(145))]);
+    assert_eq!(tell(&s), (Some(150), RuleId::BControl));
+}
+
+/// The owner's deal 848: S1 showed the Red pair (145) without an ace; S3 hasn't bid and holds
+/// aces: it offers 150 (B-offer). Without an ace, no offer.
+#[test]
+fn deal_848_offers_an_ace_to_the_partners_red_pair() {
+    let auction = [(0, Some(120)), (1, Some(145)), (2, None)];
+    let mut s = Scene::new(3, &["g-Z", "g-U", "g-7", "e-A", "e-U", "e-6", "s-Z", "r-A", "r-Z"]);
+    s.auction(&auction);
+    assert_eq!(tell(&s), (Some(150), RuleId::BOffer));
+    let mut s = Scene::new(3, &["g-Z", "g-U", "g-7", "e-K", "e-U", "e-6", "s-Z", "r-9", "r-Z"]);
+    s.auction(&auction);
+    assert_eq!(tell(&s).0, None);
+}

@@ -184,6 +184,18 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
         route_forth(ctx, hand, &options, store)
     } else {
         let trump = back_plan(hand, partner.half, ctx.params.partner_half_conf);
+        // A plan suit that runs from the top stays whole: the run is the route that owning the
+        // game gives me (`knowledge::control_run`; Astra's review 2026-10-13 of deal 573).
+        let run = trump.filter(|&t| knowledge::control_run(hand, t));
+        let keeps_run: Vec<GameAction> = legal
+            .iter()
+            .filter(|a| match (&a.action_type, run) {
+                (ActionType::Pass(cards), Some(t)) => (CardSet::from_cards(cards) & CardSet::suit(t)).is_empty(),
+                _ => true,
+            })
+            .copied()
+            .collect();
+        let legal = if keeps_run.is_empty() { legal } else { &keeps_run[..] };
         choose(ctx, legal, &PASSING_WEIGHTS.back, &BACK_FEATURES, RuleId::PBack, |y| {
             back_features(hand, &partner, trump, y)
         })

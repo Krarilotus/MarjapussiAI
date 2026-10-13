@@ -88,7 +88,10 @@ pub struct BidContext {
     pub team_any: bool,
     /// Messages the speaker has sent (bit set of `Message::bit`).
     pub sent: u8,
-    /// The partner's first action was a pass.
+    /// The partner's first action was a pass while telling was still cheap (below 140). A first
+    /// pass at 140 or more is censored, not weak (the owner 2026-10-13: "Partner signal is not as
+    /// weak when first pass occurs over unsafe territory so we can't know, the information has
+    /// been cut there").
     pub partner_passed_first: bool,
     /// The other team has shown `BigPair` or `RedPair`.
     pub other_big: bool,
@@ -360,7 +363,7 @@ impl Auction {
             self.sent[s] |= m.bit();
             self.informed[s] |= bid.is_some_and(|b| b < PAIR_LINE);
         }
-        self.first_action[s].get_or_insert(bid.is_none());
+        self.first_action[s].get_or_insert(bid.is_none() && self.value < PAIR_LINE);
         if let Some(b) = bid {
             self.value = b;
             self.has_bid[s] = true;

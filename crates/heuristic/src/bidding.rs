@@ -375,6 +375,79 @@ fn find(legal: &[GameAction], bid: Option<i32>) -> Option<&GameAction> {
     })
 }
 
+/// B-control and B-offer, the ownership bids at 140 or more (the owner's deals 848 and 573 with
+/// Astra's review 2026-10-13): one step, once per auction (a bid of mine made at 140 or more is
+/// my ownership challenge).
+/// - **B-control:** a complete pair of mine runs from the top (`knowledge::control_run`): as the
+///   declarer I lead its ace, announce and keep the lead through the suit, which defending can't
+///   give me. Against an opponent's bid when my partner passed while telling was cheap (the owner:
+///   "its really dangeorously if partner has gone weg first turn"); or to keep the game after my
+///   partner offered over my pair message.
+/// - **B-offer:** my partner holds the game with the Red pair shown and no ace shown in my team; I
+///   haven't bid and hold an ace (the owner: "if you haven't said anything and have an ace and
+///   partner signals red pair definitively without ace then you might as well give the 5 most of
+///   the time"). It reads as the ace message.
+fn own_the_game(
+    ctx: &Ctx,
+    legal: &[GameAction],
+    class: HandClass,
+    v: i32,
+    holder: Option<u8>,
+    why: &mut Vec<Fact>,
+) -> Option<Decision> {
+    let me = ctx.me;
+    let mate = engine::partner(me);
+    let record = ctx.mind.record();
+    // Each action with the value before it.
+    let mut before = 115;
+    let mut history = Vec::new();
+    for &(seat, bid) in &record.auction {
+        history.push((seat, bid, before));
+        if let Some(b) = bid {
+            before = b;
+        }
+    }
+    let challenged = history
+        .iter()
+        .any(|&(seat, bid, value)| seat == me && bid.is_some() && value >= PAIR_LINE);
+    if challenged || holder == Some(me) {
+        return None;
+    }
+    let bid = find(legal, Some(v + 5))?;
+    let hand = ctx.k.certain(me);
+    let run = hand.pair_suits().find(|&s| knowledge::control_run(hand, s));
+    let bids = |seat: u8| record.seats[seat as usize].bids.clone();
+    let mate_bids = bids(mate);
+    let mine = bids(me);
+    let partner_passed_cheap = history
+        .iter()
+        .find(|&&(seat, _, _)| seat == mate)
+        .is_some_and(|&(_, bid, value)| bid.is_none() && value < PAIR_LINE);
+    if let Some(s) = run {
+        let against_opponent = holder.is_some_and(|h| h % 2 != me % 2) && partner_passed_cheap;
+        // The partner's last bid came right over a bid of mine that told a pair.
+        let last_two: Vec<_> = history.iter().filter(|h| h.1.is_some()).rev().take(2).collect();
+        let offered = holder == Some(mate)
+            && last_two.len() == 2
+            && last_two[1].0 == me
+            && mine
+                .iter()
+                .any(|b| b.nominal.is_some_and(|m| PAIR_MESSAGES & m.bit() != 0));
+        if against_opponent || offered {
+            why.push(fact("control_run", s as u8));
+            why.push(fact("keep", offered as u8));
+            return Some(decision(bid, RuleId::BControl, std::mem::take(why)));
+        }
+    }
+    let red_pair_shown = mate_bids.iter().any(|b| b.nominal == Some(Message::RedPair));
+    let team_ace = mate_bids.iter().chain(&mine).any(|b| b.nominal == Some(Message::Ace));
+    if holder == Some(mate) && red_pair_shown && !team_ace && mine.is_empty() && class.ace {
+        why.push(fact("aces", (hand & CardSet::ACES).len()));
+        return Some(decision(bid, RuleId::BOffer, std::mem::take(why)));
+    }
+    None
+}
+
 /// KB `schwarz_defend`: how high I bid to keep the opponents from playing us schwarz, or None
 /// for a hand that needs no protective bid. In one place so the owner's rule can be refined.
 fn schwarz_defend(ctx: &Ctx) -> Option<i32> {
@@ -516,6 +589,11 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
             if let Some(a) = find(legal, Some(PAIR_LINE)) {
                 return decision(a, RuleId::BGate, why);
             }
+        }
+    }
+    if v >= PAIR_LINE {
+        if let Some(d) = own_the_game(ctx, legal, class, v, holder, &mut why) {
+            return d;
         }
     }
     // B-take (KB `take_vs_defend`; owner: "often better to take than be played"): at 140 or

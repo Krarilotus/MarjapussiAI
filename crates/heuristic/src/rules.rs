@@ -60,6 +60,8 @@ rules! {
     BQuiet "B-quiet" Bidding 5 1 "[O]" "nothing to tell: pass";
     HB8 "HB-8" Bidding 7 3 "[D]" "nothing left to tell: +5 to take the game (off until KB batch 2)";
     BTake "B-take" Bidding 6 1 "[O] [A]" "at 140 or more against an opponent: bid on when P(take) >= 0.5 (human analysis) and contract_estimate gives P(make) >= 0.5";
+    BControl "B-control" Bidding 13 1 "[O] [A]" "at 140 or more, once: +5 to own the game with a pair whose suit runs from the top (control_run), against the opponents when my partner passed while telling was cheap, or to keep it after my partner's offer (the owner's deal 573, Astra's review 2026-10-13)";
+    BOffer "B-offer" Bidding 14 1 "[O] [A]" "at 140 or more, once: +5 over my partner holding the game with the Red pair shown and no ace in my team, when I haven't bid and hold an ace (the owner's deal 848)";
     HB140c "HB-140c" Bidding 10 3 "[O]" "bid exactly 140 to claim or defend without a known pair (off until KB batch 2)";
     HBB1 "HB-B1" Bidding 11 3 "[O]" "barrier bids 180/200/220 against schwarz";
     HS1 "HS-1" Bidding 12 3 "[O]" "series objective: risk from the series score";

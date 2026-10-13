@@ -42,6 +42,18 @@ pub fn own_standing_of(hand: CardSet) -> CardSet {
         .fold(CardSet::EMPTY, |a, c| a | CardSet::single(c))
 }
 
+/// `control_run`: `hand` holds the suit's ace and its unbroken top sequence is at least as long
+/// as the suit's cards outside `hand`, so every card of the suit in `hand` wins when led from the
+/// top while the others must follow (the suit is trump, or no trump is called), and the leader
+/// keeps the lead throughout (Astra's review 2026-10-13 of the owner's deal 573: Schell
+/// A Z K O 9 7, three outside, four on top).
+pub fn control_run(hand: CardSet, suit: Suit) -> bool {
+    let held = hand & CardSet::suit(suit);
+    let order: Vec<u8> = CardSet::suit(suit).iter().collect();
+    let top = order.iter().rev().take_while(|&&c| held.contains(c)).count() as u32;
+    top > 0 && top >= CardSet::suit(suit).len() - held.len()
+}
+
 /// `stopper`: the lowest card that can stop a suit has 3 higher cards (the ober); the unter
 /// (4 higher) and lower never stop it ([O] 2026-10-07).
 pub const STOPPER_MAX_HIGHER: u32 = 3;
