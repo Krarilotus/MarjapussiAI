@@ -69,7 +69,10 @@ fn live_halves(hand: CardSet, called: u8) -> CardSet {
 }
 
 /// Level-0 response of the seat to move in `state` (its legal cards under the engine's rules).
-fn respond(state: &FastState) -> u8 {
+/// Taking the trick from the opponents, it prefers a winner the opponents still to play can't
+/// beat as far as it knows (Astra on game 1346: the partner ruffs with the ace, not with a nine
+/// the last opponent may overruff); else the cheapest winner.
+fn respond(state: &FastState, known: &Known) -> u8 {
     let seat = state.to_move();
     let legal = state.legal_cards();
     if legal.len() == 1 {
@@ -108,14 +111,22 @@ fn respond(state: &FastState) -> u8 {
         .filter(|&c| engine::takes(c, winning_card, state.trump()))
         .fold(CardSet::EMPTY, |s, c| s | CardSet::single(c));
     if !winners.is_empty() {
+        let own = state.hand(seat);
+        let later = (trick.len() as u8 + 1..4)
+            .map(|i| (leader + i) % 4)
+            .filter(|&o| o % 2 != seat % 2)
+            .fold(CardSet::EMPTY, |set, o| set | known.may(own, o));
+        // The cards that beat `c`: higher in its suit, and any trump over a side card.
+        let secure = |c: u8| {
+            let over = match state.trump() {
+                Some(t) if t != suit_of(c) => crate::hand::higher(c) | CardSet::suit(t),
+                _ => crate::hand::higher(c),
+            };
+            (later & over).is_empty()
+        };
         return winners
             .iter()
-            .min_by_key(|&c| {
-                (
-                    beats_key(c) as i32 + if keep.contains(c) { 100 } else { 0 },
-                    CARD_POINTS[c as usize],
-                )
-            })
+            .min_by_key(|&c| (keep.contains(c), !secure(c), beats_key(c), CARD_POINTS[c as usize]))
             .expect("nonempty");
     }
     cheapest(legal)
@@ -353,10 +364,11 @@ fn lead0(state: &FastState, known: &Known) -> u8 {
     let ruffs = |p: u8, s: Suit| {
         trump.is_some_and(|t| t != s && !known.may_hold_suit(own, p, s) && known.may_hold_suit(own, p, t))
     };
+    // The owner's order: standing side-suit cards before standing trumps.
     if let Some(c) = legal
         .iter()
         .filter(|&c| top_of(all, suit_of(c)) == Some(c) && ![1u8, 3].iter().any(|&o| ruffs(seat + o, suit_of(c))))
-        .max_by_key(|&c| (CARD_POINTS[c as usize], Some(suit_of(c)) != trump))
+        .max_by_key(|&c| (Some(suit_of(c)) != trump, CARD_POINTS[c as usize]))
     {
         return c;
     }
@@ -368,7 +380,7 @@ fn lead0(state: &FastState, known: &Known) -> u8 {
     {
         return c;
     }
-    respond(state)
+    respond(state, known)
 }
 
 /// Plays the game to its end at level 0 (see the module doc, steps 2 and 3).
@@ -382,7 +394,7 @@ fn playout(state: &mut FastState, known: &mut Known, mut plan: Option<Plan>) {
             }
             lead0(state, known)
         } else {
-            respond(state)
+            respond(state, known)
         };
         known.play(state, c);
         state.play(c);
@@ -724,6 +736,7 @@ pub(crate) fn trick_outcomes(ctx: &Ctx) -> Option<TrickOutcomes> {
     let public = ctx.k.public_state(ctx.me, PlayPhase::Cards);
     let us = ctx.me % 2;
     let mine = ctx.k.certain(ctx.me);
+    let known = Known::new(ctx);
     ctx.with_worlds(|worlds: &[World]| {
         let total: f64 = worlds.iter().map(|w| w.weight).sum();
         if worlds.is_empty() || total <= 0.0 {
@@ -742,9 +755,12 @@ pub(crate) fn trick_outcomes(ctx: &Ctx) -> Option<TrickOutcomes> {
                 }
                 let before = state.card_points(0) + state.card_points(1);
                 let tricks = state.tricks_done();
+                let mut k = known.in_world(ctx, &w.hands);
+                k.play(&state, c);
                 state.play(c);
                 while state.tricks_done() == tricks && !state.is_over() {
-                    let r = respond(&state);
+                    let r = respond(&state, &k);
+                    k.play(&state, r);
                     state.play(r);
                 }
                 let p = w.weight / total;
@@ -773,28 +789,72 @@ pub(crate) fn trick_outcomes(ctx: &Ctx) -> Option<TrickOutcomes> {
     })
 }
 
-/// The value (our points minus theirs from now on) of leading each card in `candidates`, per
-/// believed world. `None` when there are no worlds.
+/// The value of leading each card in `candidates`, per believed world: the same route
+/// evaluation as HO-2, with our team's best activation plan (Astra: one continuation policy for
+/// both comparisons). `None` when there are no worlds.
 pub(crate) fn lead_values(ctx: &Ctx, candidates: CardSet) -> Option<WorldValues<u8>> {
-    let _timing = beliefs::profile::scope("outlook");
-    let public = ctx.k.public_state(ctx.me, PlayPhase::Cards);
-    let us = ctx.me % 2;
-    let known = Known::new(ctx);
-    let game = contract(ctx);
-    let options: Vec<u8> = candidates.iter().collect();
-    ctx.with_worlds(|worlds: &[World]| {
-        WorldValues::over(ctx, worlds, options, |w, &c| {
-            let mut state = FastState::from_public(public, w.hands).ok()?;
-            if !state.legal_cards().contains(c) {
-                return None;
-            }
-
-            let mut k = known.in_world(ctx, &w.hands);
-            k.play(&state, c);
-            state.play(c);
-            playout(&mut state, &mut k, None);
-            Some(score(&state, game, us))
+    let moves: Vec<Move> = candidates.iter().map(Move::Card).collect();
+    let (values, _) = route_values(ctx, PlayPhase::Cards, &moves)?;
+    let options = values
+        .options
+        .iter()
+        .map(|m| match m {
+            Some(Move::Card(c)) => *c,
+            _ => unreachable!("a lead option is a card"),
         })
+        .collect();
+    Some(WorldValues {
+        options,
+        values: values.values,
+        p: values.p,
+    })
+}
+
+/// Per card of `candidates` I lead now: the believed probability that an opponent holding both
+/// halves of the led suit's uncalled pair must play one of them in this trick (its legal cards
+/// are only halves; a guard it may play instead keeps the pair), the trick played by the
+/// level-0 responses (Astra's review 2026-10-13, §3).
+pub(crate) fn forced_half(ctx: &Ctx, candidates: CardSet) -> Vec<(u8, f64)> {
+    let public = ctx.k.public_state(ctx.me, PlayPhase::Cards);
+    let known = Known::new(ctx);
+    let opponent = |s: u8| s % 2 != ctx.me % 2;
+    ctx.with_worlds(|worlds: &[World]| {
+        let total: f64 = worlds.iter().map(|w| w.weight).sum();
+        if total <= 0.0 {
+            return Vec::new();
+        }
+        candidates
+            .iter()
+            .map(|c| {
+                let s = suit_of(c);
+                let halves = CardSet::halves(s);
+                let mut p = 0.0;
+                for w in worlds {
+                    let Ok(mut state) = FastState::from_public(public, w.hands) else {
+                        continue;
+                    };
+                    if !state.legal_cards().contains(c) || state.called() >> s as u8 & 1 == 1 {
+                        continue;
+                    }
+                    let mut k = known.in_world(ctx, &w.hands);
+                    k.play(&state, c);
+                    state.play(c);
+                    let mut forced = false;
+                    while !state.trick().is_empty() && !state.is_over() {
+                        let seat = state.to_move();
+                        let legal = state.legal_cards();
+                        forced |= opponent(seat) && state.hand(seat) & halves == halves && (legal - halves).is_empty();
+                        let r = respond(&state, &k);
+                        k.play(&state, r);
+                        state.play(r);
+                    }
+                    if forced {
+                        p += w.weight / total;
+                    }
+                }
+                (c, p)
+            })
+            .collect()
     })
 }
 
@@ -822,5 +882,33 @@ mod tests {
         assert_eq!(plan.unwrap().next, 0);
         assert_eq!(Plan::take(&mut plan, &state, true), Some(Step::Ask));
         assert_eq!(plan.unwrap().next, 1);
+    }
+
+    /// Game 1346 T3 as Astra's test (2026-10-13): after Green is trump, seat 0 leads r-6, seat 1
+    /// takes with r-K; the partner ruffs with the ace while the last opponent may hold g-Z, and
+    /// with the nine once it can't.
+    #[test]
+    fn a_ruff_is_secured_against_the_last_opponent() {
+        let cards = |c: &[&str]| CardSet::from_cards(&c.iter().map(|c| c.parse().unwrap()).collect::<Vec<_>>());
+        let ruff = |last: &str| {
+            let hands = [
+                cards(&["s-A", "g-K", "g-O", "r-6"]),
+                cards(&["s-6", "r-K", "e-6", "e-7"]),
+                cards(&["s-7", "g-9", "g-A", "e-8"]),
+                cards(&["s-8", last, "e-9", "e-Z"]),
+            ];
+            let mut state = FastState::new(hands, 0);
+            for c in ["s-A", "s-6", "s-7", "s-8"] {
+                state.play(c.parse::<engine::Card>().unwrap().index());
+            }
+            state.announce(Suit::Green);
+            for c in ["r-6", "r-K"] {
+                state.play(c.parse::<engine::Card>().unwrap().index());
+            }
+            let known = Known { may: state.hands() };
+            engine::Card::from_index(respond(&state, &known)).to_string()
+        };
+        assert_eq!(ruff("g-Z"), "g-A");
+        assert_eq!(ruff("g-6"), "g-9");
     }
 }

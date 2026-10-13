@@ -7,7 +7,7 @@ use engine::CARD_POINTS;
 use engine::{partner, CardSet, SUITS};
 use engine::{Card, Suit, Value};
 
-use crate::hand::{higher, top};
+use crate::hand::higher;
 use crate::rules::RuleId;
 use crate::valuation::Valuation;
 use crate::{fact, Ctx, Fact};
@@ -129,28 +129,25 @@ fn last_trick(ctx: &Ctx, legal: CardSet) -> Option<Lead> {
     Some((other, RuleId::HL6, vec![fact("kept", topt)]))
 }
 
-/// HL-5: an opponent likely holds an uncalled pair in a side suit where I hold the ace or the
-/// ten: lead it. *Why:* the opponent must follow suit, and with few cards there it gives up K
-/// or O; the pair can no longer be announced and its points are in our trick.
+/// HL-5: lead the side-suit card on which an opponent likely must give up a half of its
+/// uncalled pair (the owner: destroy their pair with the non-trump play). *Why:* the pair can no
+/// longer be announced. Whether a half must fall depends on the guards it may play instead and
+/// on the obligation to overtake (Astra's review 2026-10-13, §3), so the believed worlds play the
+/// trick out (`outlook::forced_half`); the most likely card, the higher at equal likelihood.
 fn destroy_pair(ctx: &Ctx, legal: CardSet, val: &Valuation) -> Option<Lead> {
     if !ctx.params.lead_destroy_pair {
         return None;
     }
     let trump = ctx.k.trump();
-    let (p, c) = SUITS
+    let side = SUITS
         .into_iter()
         .filter(|&s| Some(s) != trump && !ctx.k.is_called(s))
-        .filter_map(|s| {
-            let p = opponents(ctx.me)
-                .iter()
-                .map(|&o| ctx.mind.features(o).pair[s as usize])
-                .fold(0.0, f32::max);
-            let big = (legal & CardSet::suit(s) & (CardSet::ACES | CardSet::TENS)) - val.halves;
-            top(big).map(|c| (p, c))
-        })
-        .filter(|&(p, _)| p >= ctx.params.destroy_pair_conf)
-        .max_by(|a, b| a.0.total_cmp(&b.0))?;
-    Some((c, RuleId::HL5, vec![fact("p_opponent_pair", p)]))
+        .fold(CardSet::EMPTY, |set, s| set | CardSet::suit(s));
+    let (c, p) = crate::outlook::forced_half(ctx, (legal & side) - val.halves)
+        .into_iter()
+        .filter(|&(_, p)| p >= f64::from(ctx.params.destroy_pair_conf))
+        .max_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))?;
+    Some((c, RuleId::HL5, vec![fact("p_forced_half", p)]))
 }
 
 /// HL-3: lead into partner's known void only when partner can win the entry.
