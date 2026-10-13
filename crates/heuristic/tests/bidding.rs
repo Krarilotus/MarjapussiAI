@@ -350,3 +350,12 @@ fn deal_848_offers_an_ace_to_the_partners_red_pair() {
     s.auction(&auction);
     assert_eq!(tell(&s).0, None);
 }
+
+/// The keep (the owner on deal 848): after S3's offer over its Red pair, S1 keeps the game with
+/// +5 while it holds the pair, so it receives the offered ace.
+#[test]
+fn deal_848_the_pair_holder_keeps_after_the_offer() {
+    let mut s = Scene::new(1, &["e-Z", "e-K", "e-8", "s-9", "r-K", "r-O", "r-9", "r-8", "r-6"]);
+    s.auction(&[(0, Some(120)), (1, Some(145)), (2, None), (3, Some(150)), (0, None)]);
+    assert_eq!(tell(&s), (Some(155), RuleId::BOffer));
+}

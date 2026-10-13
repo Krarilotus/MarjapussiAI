@@ -381,12 +381,14 @@ fn find(legal: &[GameAction], bid: Option<i32>) -> Option<&GameAction> {
 /// - **B-control:** a complete pair of mine runs from the top (`knowledge::control_run`): as the
 ///   declarer I lead its ace, announce and keep the lead through the suit, which defending can't
 ///   give me. Against an opponent's bid when my partner passed while telling was cheap (the owner:
-///   "its really dangeorously if partner has gone weg first turn"); or to keep the game after my
-///   partner offered over my pair message.
+///   "its really dangeorously if partner has gone weg first turn").
 /// - **B-offer:** my partner holds the game with the Red pair shown and no ace shown in my team; I
 ///   haven't bid and hold an ace (the owner: "if you haven't said anything and have an ace and
 ///   partner signals red pair definitively without ace then you might as well give the 5 most of
-///   the time"). It reads as the ace message.
+///   the time"). It reads as the ace message. The keep: after my partner's offer over my pair
+///   message, I keep the game with +5 while I hold that pair, so the pair's hand receives the
+///   offered ace in the pass (the owner: the pair holder "could still signal the take of the
+///   game if he wants it after the offer from the partner by overbidding by 5").
 fn own_the_game(
     ctx: &Ctx,
     legal: &[GameAction],
@@ -424,20 +426,22 @@ fn own_the_game(
         .find(|&&(seat, _, _)| seat == mate)
         .is_some_and(|&(_, bid, value)| bid.is_none() && value < PAIR_LINE);
     if let Some(s) = run {
-        let against_opponent = holder.is_some_and(|h| h % 2 != me % 2) && partner_passed_cheap;
-        // The partner's last bid came right over a bid of mine that told a pair.
-        let last_two: Vec<_> = history.iter().filter(|h| h.1.is_some()).rev().take(2).collect();
-        let offered = holder == Some(mate)
-            && last_two.len() == 2
-            && last_two[1].0 == me
-            && mine
-                .iter()
-                .any(|b| b.nominal.is_some_and(|m| PAIR_MESSAGES & m.bit() != 0));
-        if against_opponent || offered {
+        if holder.is_some_and(|h| h % 2 != me % 2) && partner_passed_cheap {
             why.push(fact("control_run", s as u8));
-            why.push(fact("keep", offered as u8));
             return Some(decision(bid, RuleId::BControl, std::mem::take(why)));
         }
+    }
+    // The partner's last bid came right over a bid of mine that told a pair I still hold.
+    let last_two: Vec<_> = history.iter().filter(|h| h.1.is_some()).rev().take(2).collect();
+    let offered = holder == Some(mate)
+        && last_two.len() == 2
+        && last_two[1].0 == me
+        && mine
+            .iter()
+            .any(|b| b.nominal.is_some_and(|m| PAIR_MESSAGES & m.bit() != 0));
+    if offered && hand.pair_suits().next().is_some() {
+        why.push(fact("keep", 1));
+        return Some(decision(bid, RuleId::BOffer, std::mem::take(why)));
     }
     let red_pair_shown = mate_bids.iter().any(|b| b.nominal == Some(Message::RedPair));
     let team_ace = mate_bids.iter().chain(&mine).any(|b| b.nominal == Some(Message::Ace));
