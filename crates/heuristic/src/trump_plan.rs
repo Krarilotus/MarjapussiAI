@@ -336,7 +336,8 @@ pub(crate) fn timing(
     // A positive partner activation remains an explicit HO-2 alternative.
     let defer_yours = planned
         .as_ref()
-        .filter(|d| d.action.action_type == ActionType::Question(QuestionType::Yours))
+        .filter(|d| ctx.params.lead_cash_standing
+            && d.action.action_type == ActionType::Question(QuestionType::Yours))
         .and(lead_card)
         .filter(|&card| {
             let others = (0..4)
@@ -352,8 +353,8 @@ pub(crate) fn timing(
                 vec![fact("retains_own_lead", 1), fact("partner_pair_spare", 1)],
             )
         });
-    let chosen = defer_yours
-        .or(cash)
+    let chosen = cash
+        .or(defer_yours)
         .or_else(|| connected_entry(ctx, legal, cards - val.plan_cards, reach, planned.as_ref()))
         .or(planned);
     if !ctx.params.outlook_activation {

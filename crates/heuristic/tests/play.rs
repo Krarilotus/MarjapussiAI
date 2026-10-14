@@ -405,7 +405,10 @@ fn a_partner_entry_does_not_replace_a_question_when_own_announcing_rights_are_sp
     // still ask for its pair. Winning a trick does not restore that right.
     s.ev(SeatEvent::AskPair { seat: 2 });
     s.ev(SeatEvent::NoPair { seat: 0 });
-    let d = s.act(&ask_legal(&s, &[], true));
+    // Isolate asking versus transferring the lead. Safe own cashes may delay
+    // either action while retaining the same question opportunity.
+    let params = heuristic::Params { lead_cash_standing: false, ..Default::default() };
+    let d = s.act_with(params, &ask_legal(&s, &[], true));
     assert_eq!(d.action.action_type, ActionType::Question(QuestionType::Yours), "{d:?}");
 }
 
