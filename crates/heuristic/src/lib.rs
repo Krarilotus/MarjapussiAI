@@ -77,14 +77,20 @@ impl std::fmt::Display for HeuristicError {
 
 impl std::error::Error for HeuristicError {}
 
-/// The owner's time budgets (2026-10-12): planning (passing, raising) under 5 s, bidding under
-/// 1 s, card play under 100 ms, so the agent feels believable. Bounded evaluations stop at four
+/// The owner's time budgets (2026-10-14): return passing and raising under 5 s,
+/// bidding and first pass under 1 s, card play under 100 ms. Bounded evaluations stop at four
 /// fifths of the budget; the last fifth is left for the work after them.
-fn budget(params: &Params, legal: &[GameAction]) -> std::time::Duration {
+fn budget(params: &Params, knowledge: &Knowledge, legal: &[GameAction]) -> std::time::Duration {
     let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));
-    let ms = if has(|t| matches!(t, ActionType::Pass(_)))
-        || has(|t| matches!(t, ActionType::CardPlayed(_))) && has(|t| matches!(t, ActionType::NewBid(_)))
-    {
+    let ms = if has(|t| matches!(t, ActionType::Pass(_))) {
+        // Every seat observes that the first pass happened, even when its cards
+        // are hidden. With a legal Pass, no previous passer means passing forth.
+        if knowledge.first_passer().is_none() {
+            params.bidding_budget_ms
+        } else {
+            params.planning_budget_ms
+        }
+    } else if has(|t| matches!(t, ActionType::CardPlayed(_))) && has(|t| matches!(t, ActionType::NewBid(_))) {
         params.planning_budget_ms
     } else if has(|t| matches!(t, ActionType::NewBid(_))) {
         params.bidding_budget_ms
@@ -292,7 +298,7 @@ impl HeuristicAgent {
             params: &self.params,
             solver: &self.solver,
             seed,
-            deadline: Some(started + budget(&self.params, &legal)),
+            deadline: Some(started + budget(&self.params, mind.knowledge(), &legal)),
             routes: RefCell::new(None),
             concepts: RefCell::new(concepts::Reads::default()),
         };
@@ -320,3 +326,7 @@ impl HeuristicAgent {
         play::decide(&ctx, &legal)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/internal/budget.rs"]
+mod budget_tests;
