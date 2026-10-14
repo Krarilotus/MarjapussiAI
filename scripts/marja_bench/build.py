@@ -16,7 +16,8 @@ CACHE_LOCK = ".build.lock"
 
 OLD = "1632af833199e5253271d493af8531badfac81c0"
 COMPATIBLE_CORE = "b3abdaf1f5e47111904db442ce36db7dc4ae9e0b"
-HISTORICAL = {"old": OLD, "previous": COMPATIBLE_CORE}
+V1_BASELINE = "af55bedcebe982644b937573ee739dada254b9fd"
+HISTORICAL = {"old": OLD, "previous": COMPATIBLE_CORE, "v1base": V1_BASELINE}
 # Source-reviewed additive knowledge helpers; existing core algorithms unchanged.
 # Keep this exact anchor so any subsequent core change requires another review.
 COMPATIBLE_CORES = (
@@ -35,6 +36,7 @@ POLICIES = {
     "new": "Current HP1, full beliefs and continuation planning (alias: hp1)",
     "old": f"Exact previous heuristic and beliefs, {OLD[:12]}",
     "previous": f"Verified live HP1 with frozen beliefs and solver, {COMPATIBLE_CORE[:12]}",
+    "v1base": f"Frozen v1 handoff before the control/reuse fixes, {V1_BASELINE[:12]}",
     "hp1-fast": "Current HP1 with continuation, return and endgame search disabled",
     "hp1-facts": "Current HP1 using hard facts without convention signals",
     "random": "Uniform random legal actions",
