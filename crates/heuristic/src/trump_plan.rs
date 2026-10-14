@@ -332,7 +332,28 @@ pub(crate) fn timing(
                 ],
             )
         });
-    let chosen = cash
+    // Deferral belongs to the actual cash action, never just to a hand shape.
+    // A positive partner activation remains an explicit HO-2 alternative.
+    let defer_yours = planned
+        .as_ref()
+        .filter(|d| d.action.action_type == ActionType::Question(QuestionType::Yours))
+        .and(lead_card)
+        .filter(|&card| {
+            let others = (0..4)
+                .filter(|&seat| seat != ctx.me)
+                .fold(CardSet::EMPTY, |set, seat| set | ctx.k.may_hold(seat));
+            crate::leads::cash_before_question(ctx.k.certain(ctx.me), ctx.k.trump(), others, card)
+        })
+        .and_then(|card| find(legal, ActionType::CardPlayed(engine::Card::from_index(card))))
+        .map(|a| {
+            decision(
+                a,
+                RuleId::HC4,
+                vec![fact("retains_own_lead", 1), fact("partner_pair_spare", 1)],
+            )
+        });
+    let chosen = defer_yours
+        .or(cash)
         .or_else(|| connected_entry(ctx, legal, cards - val.plan_cards, reach, planned.as_ref()))
         .or(planned);
     if !ctx.params.outlook_activation {

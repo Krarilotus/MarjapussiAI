@@ -50,10 +50,42 @@ pub(crate) fn before_standing(ctx: &Ctx, legal: CardSet) -> Option<Lead> {
 }
 
 pub(crate) fn after_standing(ctx: &Ctx, legal: CardSet, val: &Valuation) -> Option<Lead> {
-    schnippeln_line(ctx, legal, val)
+    draw_trumps(ctx, legal)
+        .or_else(|| schnippeln_line(ctx, legal, val))
         .or_else(|| destroy_pair(ctx, legal, val))
         .or_else(|| partner_ruffs(ctx, legal, val))
-        .or_else(|| draw_trumps(ctx, legal))
+}
+
+/// A current trump control with a reserve. All inputs belong to the actor's view;
+/// possible higher cards include the partner's, since forced overtaking transfers
+/// the lead too. This resource is a prior, not a veto on other scored routes.
+pub(crate) fn control_trump(hand: CardSet, trump: Option<Suit>, others: CardSet) -> Option<u8> {
+    let mine = hand & CardSet::suit(trump?);
+    if mine.len() < 2 {
+        return None;
+    }
+    mine.iter().find(|&c| (higher(c) & (mine | others)).is_empty())
+}
+
+/// A specific cash before Yours: retain the lead and leave partner at least one
+/// spare beyond its pair. This is not a guard on own announcements or AskHalf.
+pub(crate) fn cash_before_question(hand: CardSet, trump: Option<Suit>, others: CardSet, cash: u8) -> bool {
+    if hand.len() < 3 || !hand.contains(cash) || !(higher(cash) & others).is_empty() {
+        return false;
+    }
+    let suit = engine::suit_of(cash);
+    let mine = hand & CardSet::suit(suit);
+    if let Some(trump) = trump {
+        return suit == trump && mine.len() >= 2;
+    }
+    // Holding a half excludes partner's full pair in the led suit; its other
+    // potential pairs have a spare discard. A future half question is separate.
+    let outside = others & CardSet::suit(suit);
+    let standing = mine.iter().filter(|&c| (higher(c) & outside).is_empty()).count() as u32;
+    !CardSet::HALVES.contains(cash)
+        && !(mine & CardSet::HALVES).is_empty()
+        && mine.len() >= 2
+        && standing >= outside.len()
 }
 
 /// HL-1 (P9, schnippeln): trick 1, no ace to lead, and the partner **certainly** holds the ace
@@ -194,6 +226,50 @@ fn draw_trumps(ctx: &Ctx, legal: CardSet) -> Option<Lead> {
     if mine.len() < 2 || theirs.is_empty() {
         return None;
     }
-    let c = mine.iter().find(|&c| opp_trump_over(ctx, c).is_empty())?;
-    Some((c, RuleId::HL4, vec![fact("their_trumps", theirs.len())]))
+    let c = control_trump(legal, Some(t), theirs | ctx.k.may_hold(partner(ctx.me)))?;
+    Some((
+        c,
+        RuleId::HL4,
+        vec![
+            fact("their_trumps", theirs.len()),
+            fact("retained_trumps", mine.len() - 1),
+        ],
+    ))
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+
+    fn cards(names: &[&str]) -> CardSet {
+        CardSet::from_cards(&names.iter().map(|s| s.parse().unwrap()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn drawing_control_requires_a_reserve_and_no_forced_transfer() {
+        let trump = Some(Suit::Bells);
+        assert_eq!(
+            control_trump(cards(&["s-A", "s-8"]), trump, cards(&["s-Z"])),
+            Some("s-A".parse::<Card>().unwrap().index())
+        );
+        assert_eq!(control_trump(cards(&["s-A", "e-8"]), trump, cards(&["s-Z"])), None);
+        // The possible ace can belong to partner too: mandatory overtaking would
+        // spend the transfer before the actor could continue drawing.
+        assert_eq!(control_trump(cards(&["s-Z", "s-8"]), trump, cards(&["s-A"])), None);
+    }
+
+    #[test]
+    fn a_pairless_run_can_precede_activation_but_an_unsafe_long_suit_cannot() {
+        let hand = cards(&["e-A", "e-Z", "e-O", "e-9", "e-8", "e-7", "e-6", "s-A", "s-8"]);
+        let cash = "e-A".parse::<Card>().unwrap().index();
+        assert!(cash_before_question(hand, None, CardSet::ALL - hand, cash));
+        assert!(!cash_before_question(hand, Some(Suit::Red), CardSet::ALL - hand, cash));
+        let unsafe_hand = hand - cards(&["e-A"]);
+        assert!(!cash_before_question(
+            unsafe_hand,
+            None,
+            CardSet::ALL - unsafe_hand,
+            cash
+        ));
+    }
 }

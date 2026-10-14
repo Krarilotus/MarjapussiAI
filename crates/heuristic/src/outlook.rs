@@ -229,9 +229,8 @@ fn order(hand: CardSet, s: Suit) -> (u32, i32) {
     ((hand & CardSet::suit(s)).len(), engine::trump_points(s, false))
 }
 
-/// One step of a team's activation plan (the owner's games 938 and 1187; Astra's authored
-/// routes): at the team's next trick start its leader announces its own pair, asks its
-/// partner, or activates nothing. Which pair or question follows from the leader's knowledge.
+/// One step at the selecting actor's next activation opportunity. Its partner
+/// does not receive this private plan; each seat acts from its own information.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Step {
     Own,
@@ -239,32 +238,31 @@ enum Step {
     Wait,
 }
 
-/// How many of the team's next trick starts a plan fixes; the default `activation` follows.
+/// How many of the actor's next trick starts a plan fixes; default activation follows.
 const PLAN_STEPS: usize = 2;
 
-/// A team's activation plan for its next trick starts. The team commits to one plan in every
-/// world (it is communicated through the moves, the owner on game 1187).
+/// A private activation plan for one actor, fixed across the believed worlds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Plan {
-    team: u8,
+    actor: u8,
     steps: [Step; PLAN_STEPS],
     next: usize,
 }
 
 impl Plan {
-    /// Every plan for `team`.
-    fn all(team: u8) -> impl Iterator<Item = Plan> {
+    /// Every plan for `actor`.
+    fn all(actor: u8) -> impl Iterator<Item = Plan> {
         let steps = [Step::Own, Step::Ask, Step::Wait];
         steps.into_iter().flat_map(move |a| {
             steps.into_iter().map(move |b| Plan {
-                team,
+                actor,
                 steps: [a, b],
                 next: 0,
             })
         })
     }
 
-    /// The step for the trick start in `state`, if the plan's team leads, steps are left and the
+    /// The step for the trick start in `state`, if the plan's actor leads, steps are left and the
     /// leader has an `eligible` activation (Astra: a step belongs to an actual activation
     /// opportunity; the empty trick after an announcement or answer is not one).
     fn take(plan: &mut Option<Plan>, state: &FastState, eligible: bool) -> Option<Step> {
@@ -273,7 +271,7 @@ impl Plan {
         }
         let p = plan
             .as_mut()
-            .filter(|p| p.team == state.leader() % 2 && p.next < PLAN_STEPS)?;
+            .filter(|p| p.actor == state.leader() && p.next < PLAN_STEPS)?;
         p.next += 1;
         Some(p.steps[p.next - 1])
     }
@@ -311,7 +309,22 @@ fn activation(state: &FastState, known: &Known, step: Option<Step>) -> Option<Mo
         Some(Step::Wait) => None,
         Some(Step::Own) => announce(state),
         Some(Step::Ask) => ask(state, known),
-        None => announce(state).or_else(|| ask(state, known)),
+        None => announce(state).or_else(|| {
+            let question = ask(state, known)?;
+            if question != Move::Question(QuestionType::Yours) {
+                return Some(question);
+            }
+            let actor = state.leader();
+            let own = state.hand(actor);
+            let others = (0..4)
+                .filter(|&seat| seat != actor)
+                .fold(CardSet::EMPTY, |cards, seat| cards | known.may(own, seat));
+            if crate::leads::cash_before_question(own, state.trump(), others, lead0(state, known)) {
+                None
+            } else {
+                Some(question)
+            }
+        }),
     }
 }
 
@@ -403,6 +416,8 @@ fn score(state: &FastState, contract: Contract, us: u8) -> i32 {
 /// The level-0 lead (see the module doc, step 3).
 fn lead0(state: &FastState, known: &Known) -> u8 {
     let seat = state.leader();
+    // The union is public: the deck minus publicly played cards. No ownership
+    // from another seat's sampled hand is used to identify a standing rank.
     let all = state.in_hands();
     let trump = state.trump();
     let legal = state.legal_cards();
@@ -451,7 +466,8 @@ fn lead0(state: &FastState, known: &Known) -> u8 {
 fn playout(state: &mut FastState, known: &mut Known, mut plan: Option<Plan>) {
     while !state.is_over() {
         let c = if state.trick().is_empty() {
-            let eligible = activation(state, known, None).is_some();
+            let eligible =
+                state.phase() == PlayPhase::Start && (announce(state).is_some() || ask(state, known).is_some());
             let step = Plan::take(&mut plan, state, eligible);
             if let Some(m) = activation(state, known, step) {
                 apply(state, known, m);
@@ -563,7 +579,7 @@ impl<K: Copy + PartialEq> WorldValues<K> {
 }
 
 /// The value of each of my moves now (an announcement, a question, an answer or a concrete
-/// card), each with our team's best activation plan for its next trick starts (`Plan`), the
+/// card), each with my best activation plan for my next trick starts (`Plan`), the
 /// same plan in every world. Per believed world; the partner answers my question from its own
 /// cards; after an answer of mine, the asker leads. Also returns the plan chosen per option.
 fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<(WorldValues<Option<Move>>, Vec<Plan>)> {
@@ -576,7 +592,7 @@ fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<(WorldVal
         .iter()
         .copied()
         .map(Some)
-        .flat_map(|m| Plan::all(us).map(move |p| (m, p)))
+        .flat_map(|m| Plan::all(ctx.me).map(move |p| (m, p)))
         .collect();
     let values = ctx.with_worlds(|worlds: &[World]| {
         WorldValues::over(ctx, worlds, options, |w, &(option, plan)| {
@@ -627,13 +643,14 @@ pub(crate) fn route_choice(
         vec![
             fact("expected_score_difference", values.mean(best)),
             fact("over_plan", values.mean(best) - values.mean(plan)),
-            fact("team_plan", plans[best].code()),
+            fact("actor_plan", plans[best].code()),
+            fact("plan_actor", ctx.me),
         ],
     ))
 }
 
 /// The game's end per believed world from the current position (before a card of the trick is
-/// played), under our team's best activation plan: the joint distribution of both teams'
+/// played), under my best activation plan: the joint distribution of both teams'
 /// points and tricks (Astra: a route-derived distribution, not a sum of bonuses; it keeps a
 /// failed entry, an unactivated pair and a lost last trick together, and the tricks for schwarz).
 pub(crate) struct Outcomes {
@@ -672,8 +689,8 @@ impl Outcomes {
     }
 }
 
-/// `Outcomes` from the position before my lead (the raise): every team plan is played out in
-/// every world, and the plan with the best expected points difference is the team's.
+/// `Outcomes` before my lead: every actor-local plan is played out in every world;
+/// the same plan with the best expected engine score difference is selected.
 pub(crate) fn final_outcomes(ctx: &Ctx) -> Option<Outcomes> {
     let _timing = beliefs::profile::scope("outlook.outcomes");
     let public = ctx.k.public_state(ctx.me, PlayPhase::Cards);
@@ -686,7 +703,7 @@ pub(crate) fn final_outcomes(ctx: &Ctx) -> Option<Outcomes> {
         playout(&mut s, &mut k, Some(plan));
         Some(s)
     };
-    let plans: Vec<Plan> = Plan::all(us).collect();
+    let plans: Vec<Plan> = Plan::all(ctx.me).collect();
     ctx.with_worlds(|worlds: &[World]| {
         // Per world, every plan's end; worlds past the deadline (after `MIN_WORLDS`) are left out.
         let mut rows: Vec<(f64, Vec<FastState>)> = Vec::new();
@@ -774,7 +791,7 @@ pub(crate) fn take_or_defend(ctx: &Ctx, ours: i32, their_declarer: u8, theirs: i
 /// The pass forth by route (Astra's review 2026-10-13, S12/S13; the owner's game 3): per
 /// candidate of mine and believed world, the declarer receives it, passes back at level 0
 /// reading it (`passing::level0_back`), and the game is played out from its first lead with our
-/// team's best activation plan; the declarer reads the candidate's blank signs (`blank_signs`).
+/// own best activation plan; the declarer reads the candidate's blank signs (`blank_signs`).
 /// A pass's legibility is valued by what the receiver does with it, not by counting blanks.
 pub(crate) fn pass_values(ctx: &Ctx, candidates: &[CardSet]) -> Option<WorldValues<CardSet>> {
     let _timing = beliefs::profile::scope("outlook.pass");
@@ -790,7 +807,7 @@ pub(crate) fn pass_values(ctx: &Ctx, candidates: &[CardSet]) -> Option<WorldValu
     known.may[declarer as usize] = team;
     let options: Vec<(CardSet, Plan)> = candidates
         .iter()
-        .flat_map(|&x| Plan::all(us).map(move |p| (x, p)))
+        .flat_map(|&x| Plan::all(me).map(move |p| (x, p)))
         .collect();
     // The plans of one candidate follow each other: its exchange is computed once per world.
     let mut last: Option<(*const World, CardSet, [CardSet; 4])> = None;
@@ -816,6 +833,45 @@ pub(crate) fn pass_values(ctx: &Ctx, candidates: &[CardSet]) -> Option<WorldValu
         })
     })?;
     Some(values.best_per(|&(x, _)| x).0)
+}
+
+/// Compare concrete returns from the declarer's visible thirteen cards. The
+/// sampled partner remainder only resolves its own later play; it never selects
+/// the root return or receives the root's private activation plan.
+pub(crate) fn return_values(ctx: &Ctx, candidates: &[CardSet]) -> Option<WorldValues<CardSet>> {
+    let _timing = beliefs::profile::scope("outlook.return");
+    let (me, mate) = (ctx.me, partner(ctx.me));
+    let knowledge::Passed::Seen(forth) = ctx.k.received(me) else {
+        return None;
+    };
+    let game = contract(ctx);
+    let mut known = Known::new(ctx);
+    let team = known.may[me as usize] | known.may[mate as usize];
+    known.may[me as usize] = team;
+    known.may[mate as usize] = team;
+    let options: Vec<_> = candidates
+        .iter()
+        .flat_map(|&cards| Plan::all(me).map(move |plan| (cards, plan)))
+        .collect();
+    let values = ctx.with_worlds(|worlds: &[World]| {
+        WorldValues::over(ctx, worlds, options, |w, &(cards, plan)| {
+            if cards.len() != 4 || !cards.is_subset(w.hands[me as usize]) {
+                return None;
+            }
+            let mut hands = w.hands;
+            hands[me as usize] -= cards;
+            hands[mate as usize] |= cards;
+            if hands.iter().any(|h| h.len() != engine::HAND_SIZE as u32) {
+                return None;
+            }
+            let mut state = FastState::new(hands, me);
+            let mut k = known.in_world(ctx, &hands);
+            k.exchanged(mate, forth, cards, [CardSet::EMPTY; 2]);
+            playout(&mut state, &mut k, Some(plan));
+            Some(score(&state, game, me % 2))
+        })
+    })?;
+    Some(values.best_per(|&(cards, _)| cards).0)
 }
 
 /// Both teams' final points when `hands` are played out from the first trick with `leader` on
@@ -905,7 +961,7 @@ pub(crate) fn trick_outcomes(ctx: &Ctx) -> Option<TrickOutcomes> {
 }
 
 /// The value of leading each card in `candidates`, per believed world: the same route
-/// evaluation as HO-2, with our team's best activation plan (Astra: one continuation policy for
+/// evaluation as HO-2, with my best activation plan (one continuation policy for
 /// both comparisons). `None` when there are no worlds.
 pub(crate) fn lead_values(ctx: &Ctx, candidates: CardSet) -> Option<WorldValues<u8>> {
     let moves: Vec<Move> = candidates.iter().map(Move::Card).collect();
@@ -977,6 +1033,230 @@ pub(crate) fn forced_half(ctx: &Ctx, candidates: CardSet) -> Vec<(u8, f64)> {
 mod tests {
     use super::*;
 
+    fn cards(names: &[&str]) -> CardSet {
+        CardSet::from_cards(&names.iter().map(|s| s.parse().unwrap()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn a_private_plan_does_not_direct_the_partner() {
+        let state = FastState::new([cards(&["r-K"]), cards(&["g-A"]), cards(&["r-O"]), cards(&["g-Z"])], 2);
+        let mut plan = Some(Plan {
+            actor: 0,
+            steps: [Step::Ask, Step::Own],
+            next: 0,
+        });
+        assert_eq!(Plan::take(&mut plan, &state, true), None);
+        assert_eq!(plan.unwrap().next, 0);
+    }
+
+    #[test]
+    fn a_running_own_pair_is_announced_before_default_cash_can_consume_a_half() {
+        let mut state = FastState::new(
+            [
+                cards(&["s-A", "s-Z", "s-K", "s-O", "s-9"]),
+                cards(&["s-6", "s-U", "g-6", "g-7", "g-8"]),
+                cards(&["s-7", "e-6", "e-7", "e-8", "e-9"]),
+                cards(&["s-8", "r-6", "r-7", "r-8", "r-9"]),
+            ],
+            0,
+        );
+        let mut known = Known {
+            may: [state.in_hands(); 4],
+            read: [0; 4],
+            held: [CardSet::EMPTY; 4],
+        };
+        for name in ["s-A", "s-6", "s-7", "s-8"] {
+            let c = name.parse::<engine::Card>().unwrap().index();
+            known.play(&state, c);
+            state.play(c);
+        }
+        assert_eq!(activation(&state, &known, None), Some(Move::Announce(Suit::Bells)));
+        // Also protect the later default opportunity after an explicit cash of
+        // the non-half Ten. The next standing cash would break the own pair.
+        for name in ["s-Z", "s-U", "e-6", "r-6"] {
+            let c = name.parse::<engine::Card>().unwrap().index();
+            known.play(&state, c);
+            state.play(c);
+        }
+        assert!(CardSet::halves(Suit::Bells).contains(lead0(&state, &known)));
+        let m = activation(&state, &known, None).unwrap();
+        assert_eq!(m, Move::Announce(Suit::Bells));
+        apply(&mut state, &mut known, m);
+        assert_eq!(state.points(0), 11 + 12 + engine::trump_points(Suit::Bells, false));
+    }
+
+    #[test]
+    fn a_safe_nonhalf_run_cash_can_still_precede_a_speculative_question() {
+        let mut state = FastState::new(
+            [
+                cards(&["s-A", "s-Z", "s-K", "s-7"]),
+                cards(&["s-O", "g-6", "g-7", "g-8"]),
+                cards(&["s-9", "e-K", "e-O", "g-9"]),
+                cards(&["s-U", "r-6", "r-7", "r-8"]),
+            ],
+            0,
+        );
+        let mut known = Known {
+            may: [state.in_hands(); 4],
+            read: [0; 4],
+            held: [CardSet::EMPTY; 4],
+        };
+        for name in ["s-A", "s-O", "s-9", "s-U"] {
+            let c = name.parse::<engine::Card>().unwrap().index();
+            known.play(&state, c);
+            state.play(c);
+        }
+        assert_eq!(activation(&state, &known, None), None);
+        assert_eq!(lead0(&state, &known), "s-Z".parse::<engine::Card>().unwrap().index());
+        assert_eq!(
+            activation(&state, &known, Some(Step::Ask)),
+            Some(Move::Question(QuestionType::Yours))
+        );
+    }
+
+    fn control_opening(enemy: [&str; 4]) -> (FastState, Known) {
+        let mut state = FastState::new(
+            [
+                cards(&["s-A", "r-A", "r-K", "r-O"]),
+                cards(&["s-6", "r-6", enemy[0], enemy[1]]),
+                cards(&["s-7", "e-8", "g-K", "g-O"]),
+                cards(&["s-8", "r-7", enemy[2], enemy[3]]),
+            ],
+            0,
+        );
+        let mut known = Known {
+            may: [state.in_hands(); 4],
+            read: [0; 4],
+            held: [CardSet::EMPTY; 4],
+        };
+        for name in ["s-A", "s-6", "s-7", "s-8"] {
+            let c = name.parse::<engine::Card>().unwrap().index();
+            known.play(&state, c);
+            state.play(c);
+        }
+        state.announce(Suit::Red);
+        for name in ["r-A", "r-6", "e-8", "r-7"] {
+            let c = name.parse::<engine::Card>().unwrap().index();
+            known.play(&state, c);
+            state.play(c);
+        }
+        (state, known)
+    }
+
+    #[test]
+    fn current_control_does_not_suppress_the_default_half_question() {
+        let mut state = FastState::new(
+            [
+                cards(&["s-A", "g-K", "g-O", "g-A", "r-O"]),
+                cards(&["s-6", "g-6", "e-6", "e-7", "e-8"]),
+                cards(&["s-7", "g-7", "r-K", "r-6", "r-7"]),
+                cards(&["s-8", "g-8", "e-9", "e-Z", "e-A"]),
+            ],
+            0,
+        );
+        let mut known = Known {
+            may: [state.in_hands(); 4],
+            read: [0; 4],
+            held: [CardSet::EMPTY; 4],
+        };
+        for name in ["s-A", "s-6", "s-7", "s-8"] {
+            let c = name.parse::<engine::Card>().unwrap().index();
+            known.play(&state, c);
+            state.play(c);
+        }
+        state.announce(Suit::Green);
+        for name in ["g-A", "g-6", "g-7", "g-8"] {
+            let c = name.parse::<engine::Card>().unwrap().index();
+            known.play(&state, c);
+            state.play(c);
+        }
+        assert_eq!(
+            activation(&state, &known, None),
+            Some(Move::Question(QuestionType::YourHalf(Suit::Red)))
+        );
+    }
+
+    /// At two cards partner has no spare beyond its possible pair. Even though
+    /// the actual Green answer is harmful here, resource-based deferral is not
+    /// justified; the engine-scored alternatives must resolve that tradeoff.
+    #[test]
+    fn preserve_current_control_before_a_truthful_but_harmful_pair_answer() {
+        let (mut state, mut known) = control_opening(["g-A", "g-6", "g-Z", "g-7"]);
+        assert_eq!(
+            activation(&state, &known, None),
+            Some(Move::Question(QuestionType::Yours))
+        );
+        assert_eq!(
+            activation(&state, &known, Some(Step::Ask)),
+            Some(Move::Question(QuestionType::Yours))
+        );
+        let (mut cash, mut cash_known) = (state, known);
+        playout(
+            &mut cash,
+            &mut cash_known,
+            Some(Plan {
+                actor: 0,
+                steps: [Step::Wait; PLAN_STEPS],
+                next: 0,
+            }),
+        );
+        apply(&mut state, &mut known, Move::Question(QuestionType::Yours));
+        assert_eq!(state.trump(), Some(Suit::Green));
+        playout(&mut state, &mut known, None);
+        assert!(score(&cash, Some((0, 120)), 0) > score(&state, Some((0, 120)), 0));
+    }
+
+    #[test]
+    fn valuable_partner_activation_remains_a_scored_alternative_to_control() {
+        let (mut state, mut known) = control_opening(["e-A", "e-6", "e-Z", "e-7"]);
+        // Safe current trump is a resource, not proof that waiting is best:
+        // partner can ruff our lead under Green and the extra pair makes 180.
+        let question = activation(&state, &known, None).unwrap();
+        assert_eq!(question, Move::Question(QuestionType::Yours));
+        let (mut cash, mut cash_known) = (state, known);
+        playout(
+            &mut cash,
+            &mut cash_known,
+            Some(Plan {
+                actor: 0,
+                steps: [Step::Wait; PLAN_STEPS],
+                next: 0,
+            }),
+        );
+        apply(&mut state, &mut known, question);
+        playout(&mut state, &mut known, None);
+        assert!(score(&state, Some((0, 180)), 0) > score(&cash, Some((0, 180)), 0));
+    }
+
+    #[test]
+    fn actors_choose_the_same_lead_after_hidden_opponent_cards_are_swapped() {
+        let hands = [
+            cards(&["s-A", "e-9", "g-6"]),
+            cards(&["s-6", "e-A", "g-9"]),
+            cards(&["s-7", "e-K", "g-Z"]),
+            cards(&["s-8", "e-Z", "g-U"]),
+        ];
+        let mut state = FastState::new(hands, 0);
+        let mut known = Known {
+            may: [state.in_hands(); 4],
+            read: [0; 4],
+            held: [CardSet::EMPTY; 4],
+        };
+        for name in ["s-A", "s-6", "s-7", "s-8"] {
+            let c = name.parse::<engine::Card>().unwrap().index();
+            known.play(&state, c);
+            state.play(c);
+        }
+        let mut swapped = hands;
+        swapped.swap(1, 3);
+        let mut other = FastState::new(swapped, 0);
+        for name in ["s-A", "s-8", "s-7", "s-6"] {
+            other.play(name.parse::<engine::Card>().unwrap().index());
+        }
+        assert_eq!(lead0(&state, &known), lead0(&other, &known));
+        assert_eq!(activation(&state, &known, None), activation(&other, &known, None));
+    }
+
     /// A plan step belongs to an activation opportunity (Astra's review, B): without one, the
     /// step is not used up, so the alternatives keep the same horizon.
     #[test]
@@ -989,7 +1269,7 @@ mod tests {
         ];
         let state = FastState::new(hands, 0);
         let mut plan = Some(Plan {
-            team: 0,
+            actor: 0,
             steps: [Step::Ask, Step::Own],
             next: 0,
         });

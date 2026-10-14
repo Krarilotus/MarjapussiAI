@@ -146,12 +146,31 @@ pub fn level0_back(
     let taker = hands[d];
     let estimate = Partner::read_after_pass(taker - forth, forth, giver_likelihood);
     let trump = back_plan(taker, estimate.half, partner_half_conf);
-    let back = best_pass(taker, &PASSING_WEIGHTS.back, |y| {
+    // The same paired-run prior as the real return policy. Without a pair, the
+    // level-0 actor keeps its longest top-controlled run; the real return compares
+    // that candidate with the unfiltered store choice by terminal engine score.
+    let run = paired_return_run(taker, trump).or_else(|| {
+        trump
+            .is_none()
+            .then(|| {
+                SUITS
+                    .into_iter()
+                    .filter(|&s| knowledge::control_run(taker, s))
+                    .max_by_key(|&s| (taker & CardSet::suit(s)).len())
+            })
+            .flatten()
+    });
+    let available = run.map_or(taker, |s| taker - CardSet::suit(s));
+    let back = best_pass(available, &PASSING_WEIGHTS.back, |y| {
         back_features(taker, &estimate, trump, y)
     });
     hands[d] -= back;
     hands[p] |= back;
     hands
+}
+
+fn paired_return_run(hand: CardSet, trump: Option<Suit>) -> Option<Suit> {
+    trump.filter(|&s| knowledge::control_run(hand, s))
 }
 
 /// Suits covered by my own nominal pair messages. This is the existing convention's
@@ -186,7 +205,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
         let trump = back_plan(hand, partner.half, ctx.params.partner_half_conf);
         // A plan suit that runs from the top stays whole: the run is the route that owning the
         // game gives me (`knowledge::control_run`; Astra's review 2026-10-13 of deal 573).
-        let run = trump.filter(|&t| knowledge::control_run(hand, t));
+        let run = paired_return_run(hand, trump);
         let keeps_run: Vec<GameAction> = legal
             .iter()
             .filter(|a| match (&a.action_type, run) {
@@ -196,11 +215,75 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
             .copied()
             .collect();
         let legal = if keeps_run.is_empty() { legal } else { &keeps_run[..] };
-        choose(ctx, legal, &PASSING_WEIGHTS.back, &BACK_FEATURES, RuleId::PBack, |y| {
+        let (store, options) = choose(ctx, legal, &PASSING_WEIGHTS.back, &BACK_FEATURES, RuleId::PBack, |y| {
             back_features(hand, &partner, trump, y)
-        })
-        .0
+        });
+        if !ctx.params.return_run_route {
+            return store;
+        }
+        route_back(ctx, hand, &options, store)
     }
+}
+
+/// A top-controlled long suit need not contain a pair. Preserve it as an explicit
+/// candidate, not a blanket filter: current winners, future trump changes and
+/// the return recipient's entries are valued together by the engine-scored route.
+fn route_back(ctx: &Ctx, hand: CardSet, options: &[(GameAction, CardSet, f64)], store: Decision) -> Decision {
+    let ActionType::Pass(cards) = &store.action.action_type else {
+        return store;
+    };
+    let chosen = CardSet::from_cards(cards);
+    let candidates = return_candidates(hand, options, chosen);
+    if candidates.len() < 2 {
+        return store;
+    }
+    let Some(values) = crate::outlook::return_values(ctx, &candidates) else {
+        return store;
+    };
+    let best = values.best();
+    let Some(base) = values.index(chosen) else {
+        return store;
+    };
+    if best == base || !values.clearly_better(best, base) {
+        return store;
+    }
+    let selected = values.options[best];
+    let Some(action) = options.iter().find(|o| o.1 == selected).map(|o| o.0) else {
+        return store;
+    };
+    decision(
+        &action,
+        RuleId::PRoute,
+        vec![
+            fact("expected_score_difference", values.mean(best)),
+            fact("over_store", values.mean(best) - values.mean(base)),
+            fact(
+                "kept_run_cards",
+                SUITS
+                    .into_iter()
+                    .filter(|&s| knowledge::control_run(hand, s) && (selected & CardSet::suit(s)).is_empty())
+                    .map(|s| (hand & CardSet::suit(s)).len())
+                    .max()
+                    .unwrap_or(0),
+            ),
+        ],
+    )
+}
+
+fn return_candidates(hand: CardSet, options: &[(GameAction, CardSet, f64)], chosen: CardSet) -> Vec<CardSet> {
+    let mut candidates = vec![chosen];
+    for suit in SUITS.into_iter().filter(|&s| knowledge::control_run(hand, s)) {
+        if let Some(option) = options
+            .iter()
+            .filter(|o| (o.1 & CardSet::suit(suit)).is_empty())
+            .max_by(|a, b| a.2.total_cmp(&b.2))
+        {
+            if !candidates.contains(&option.1) {
+                candidates.push(option.1);
+            }
+        }
+    }
+    candidates
 }
 
 /// P-route: the store's pass forth stands unless another candidate is clearly better by route
@@ -315,4 +398,123 @@ fn explain<const N: usize>(weights: &[f64; N], names: &[&'static str; N], select
             .map(|(&name, (&weight, value))| fact(name, weight * value)),
     );
     why
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+
+    fn cards(names: &[&str]) -> CardSet {
+        CardSet::from_cards(&names.iter().map(|s| s.parse().unwrap()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn return_run_comparison_is_enabled_independently_of_pass_forth() {
+        let params = crate::Params::default();
+        assert!(params.return_run_route);
+        assert!(!params.pass_route);
+        let disabled = crate::Params::from_toml("return_run_route = false").unwrap();
+        assert!(!disabled.return_run_route);
+        assert!(!disabled.pass_route);
+    }
+
+    #[test]
+    fn default_return_evaluates_the_pairless_run_from_a_thirteen_card_seat_view() {
+        use observation::SeatEvent;
+        use std::cell::RefCell;
+        let params = crate::Params {
+            outlook_worlds: 8,
+            beliefs: beliefs::BeliefParams::base_only(),
+            ..crate::Params::default()
+        };
+        let own = cards(&["e-A", "e-Z", "e-9", "e-8", "e-7", "g-O", "g-8", "g-6", "s-6"]);
+        let forth = cards(&["e-O", "e-6", "g-A", "g-Z"]);
+        let mut mind = Mind::new(0, own, [crate::SeatKind::Unknown; 4], params.beliefs.clone());
+        for event in [
+            SeatEvent::Bid { seat: 0, value: 120 },
+            SeatEvent::StopBidding { seat: 1 },
+            SeatEvent::StopBidding { seat: 2 },
+            SeatEvent::StopBidding { seat: 3 },
+            SeatEvent::Pass {
+                from: 2,
+                to: 0,
+                cards: Some(forth),
+            },
+        ] {
+            mind.apply(&event).unwrap();
+        }
+        let legal = RefCell::new(Vec::new());
+        best_pass(own | forth, &PASSING_WEIGHTS.back, |set| {
+            let list: Vec<_> = set.iter().map(engine::Card::from_index).collect();
+            legal.borrow_mut().push(GameAction {
+                player: engine::PlaceAtTable(0),
+                action_type: ActionType::Pass(list.try_into().unwrap()),
+            });
+            [0.0; 17]
+        });
+        let legal = legal.into_inner();
+        let ctx = Ctx {
+            me: 0,
+            k: mind.knowledge(),
+            mind: &mind,
+            params: &params,
+            solver: &RefCell::new(None),
+            seed: 7,
+            deadline: None,
+            routes: RefCell::new(None),
+            concepts: RefCell::new(crate::concepts::Reads::default()),
+        };
+        let selected = decide(&ctx, &legal);
+        assert!(
+            ctx.routes.borrow().is_some(),
+            "default return must actually evaluate its route"
+        );
+        assert!(legal.contains(&selected.action));
+        assert!(
+            !params.pass_route,
+            "the unrelated pass-forth comparison remains disabled"
+        );
+    }
+
+    #[test]
+    fn a_pairless_run_is_a_return_candidate_without_removing_the_store_choice() {
+        let hand = cards(&[
+            "e-A", "e-Z", "e-O", "e-9", "e-8", "e-7", "e-6", "s-A", "s-Z", "g-6", "g-7", "r-6", "r-7",
+        ]);
+        let store = cards(&["e-6", "e-7", "e-8", "g-6"]);
+        let keep = cards(&["g-6", "g-7", "r-6", "r-7"]);
+        let option = |set: CardSet, score| {
+            let list: Vec<_> = set.iter().map(engine::Card::from_index).collect();
+            (
+                GameAction {
+                    player: engine::PlaceAtTable(0),
+                    action_type: ActionType::Pass(list.try_into().unwrap()),
+                },
+                set,
+                score,
+            )
+        };
+        let options = [option(store, 10.0), option(keep, 0.0)];
+        assert_eq!(return_candidates(hand, &options, store), vec![store, keep]);
+        // Length alone does not justify a run-preserving alternative.
+        assert_eq!(return_candidates(hand - cards(&["e-A"]), &options, store), vec![store]);
+    }
+
+    #[test]
+    fn level0_return_keeps_pairless_control_without_reading_partner_hidden_cards() {
+        let own = cards(&["e-A", "e-Z", "e-O", "e-9", "e-8", "e-7", "e-6", "s-A", "s-Z"]);
+        let forth = cards(&["g-6", "g-7", "r-6", "r-7"]);
+        let rest: Vec<_> = (CardSet::ALL - own - forth).iter().collect();
+        let set = |slice: &[u8]| slice.iter().fold(CardSet::EMPTY, |s, &c| s | CardSet::single(c));
+        let hands = [own, set(&rest[..9]), forth | set(&rest[18..]), set(&rest[9..18])];
+        let kept = level0_back(hands, 0, forth, 1.0, None);
+        assert_eq!((kept[0] & CardSet::suit(Suit::Acorns)).len(), 7);
+        assert!(kept.iter().all(|h| h.len() == 9));
+        let mut swapped = hands;
+        let from_partner = (swapped[2] - forth).iter().next().unwrap();
+        let from_enemy = swapped[1].iter().next().unwrap();
+        swapped[2] = (swapped[2] - CardSet::single(from_partner)) | CardSet::single(from_enemy);
+        swapped[1] = (swapped[1] - CardSet::single(from_enemy)) | CardSet::single(from_partner);
+        assert_eq!(level0_back(swapped, 0, forth, 1.0, None)[0], kept[0]);
+    }
 }
