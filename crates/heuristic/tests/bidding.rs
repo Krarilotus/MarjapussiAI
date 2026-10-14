@@ -359,3 +359,38 @@ fn deal_848_the_pair_holder_keeps_after_the_offer() {
     s.auction(&[(0, Some(120)), (1, Some(145)), (2, None), (3, Some(150)), (0, None)]);
     assert_eq!(tell(&s), (Some(155), RuleId::BOffer));
 }
+
+#[test]
+fn information_above_140_does_not_spend_the_ownership_challenge() {
+    // A recorded truthful Red message from 140 to 160 is information even
+    // though the ordinary current encoder closes its telling channel at 140.
+    let mut s = Scene::new(1, &hand(&["r-K", "r-O"]));
+    s.auction(&[(0, Some(140)), (1, Some(160)), (2, None), (3, Some(165)), (0, None)]);
+    let d = s.act(&s.bid_legal());
+    assert_eq!((bid_of(&d), d.rule), (Some(170), RuleId::BOffer));
+    assert!(d.why.iter().any(|f| f.key == "own_challenged" && f.value == 0.0));
+    s.auction(&[(1, Some(170)), (3, Some(175))]);
+    let d = s.act(&s.bid_legal());
+    assert_eq!(bid_of(&d), None);
+    assert!(d.why.iter().any(|f| f.key == "own_challenged" && f.value == 1.0));
+}
+
+#[test]
+fn keep_survives_intervention_but_requires_the_offered_red_pair() {
+    let auction = [(0, Some(120)), (1, Some(145)), (2, None), (3, Some(150)), (0, Some(155))];
+    let mut s = Scene::new(1, &hand(&["r-K", "r-O"]));
+    s.auction(&auction);
+    assert_eq!(tell(&s), (Some(160), RuleId::BOffer));
+    // A bluffing Red message followed by the same offer cannot justify keeping
+    // an unrelated Bells pair under the Red-pair prerequisite.
+    let mut other_pair = Scene::new(1, &hand(&["s-K", "s-O"]));
+    other_pair.auction(&auction);
+    assert_eq!(tell(&other_pair).0, None);
+}
+
+#[test]
+fn an_offering_hand_with_its_own_pair_still_sends_only_plus_five() {
+    let mut s = Scene::new(3, &hand(&["e-A", "g-K", "g-O"]));
+    s.auction(&[(0, Some(120)), (1, Some(145)), (2, None)]);
+    assert_eq!(tell(&s), (Some(150), RuleId::BOffer));
+}

@@ -102,6 +102,14 @@ pub struct BidContext {
     /// KB `opponents_exchanging`: an opponent made an information step (a message, below 140)
     /// and the information channel is still open.
     pub opponents_exchanging: bool,
+    /// Current holder, before this action (public, not inferred intent).
+    pub holder: Option<Seat>,
+    /// A first bid can offer an untold Ace directly over the partner's Red-pair bid.
+    /// This is an available interpretation, not proof of an external actor's intent.
+    pub ace_offer: bool,
+    /// A possible partner offer over this speaker's Red-pair bid. Retained
+    /// through an opponent intervention until this speaker's next action.
+    pub offer_reply: bool,
 }
 
 impl BidContext {
@@ -122,7 +130,7 @@ impl BidContext {
         let in_window = params.tell_window == 0 || self.n_before < params.tell_window;
         let ace_viable = !(params.ace_at_140_needs_pair && self.value >= PAIR_LINE && !self.team_pair_shown);
         if !self.team_ace {
-            if in_window && ace_viable {
+            if (in_window && ace_viable) || self.ace_offer {
                 live |= Message::Ace.bit();
             }
         } else if !sent(Message::TwoHalves) && in_window {
@@ -154,7 +162,9 @@ pub fn info_to_tell(class: HandClass, ctx: &BidContext, params: &Params) -> impl
         && !class.has_pair(Suit::Red)
         && !class.has_pair(Suit::Bells)
         && !class.has_pair(Suit::Acorns);
-    let order = if only_green_pair {
+    // B-offer uses the existing Ace message even with an own pair. Keep its
+    // ordering shared by sending, own-information reconstruction and reading.
+    let order = if only_green_pair || ctx.ace_offer {
         [
             Message::Ace,
             Message::RedPair,
@@ -237,6 +247,13 @@ pub const BARRIERS: [i32; 4] = [PAIR_LINE, 180, 200, 220];
 /// `message` at `follow_target`; the reading also allows literal steps, blocks and bluffs.
 /// `bid` is `None` for a pass; `trust` is the observer's trust θ in this speaker (§3.4).
 pub fn bid_likelihood(bid: Option<i32>, class: HandClass, ctx: &BidContext, trust: f32, params: &Params) -> f32 {
+    // A high +5 outside the supported Ace offer can be a keep, control bid or
+    // information. No calibrated intent mixture is available: leave its holding
+    // evidence neutral rather than asserting TwoHalves or another pair. The
+    // earlier message still contributes exactly once through its own table.
+    if ownership_step(bid, ctx) {
+        return generic_step(bid, ctx, params);
+    }
     let m = message(class, ctx, params);
     let c = confidence(m, ctx, params);
     let (follow, literal) = match m {
@@ -245,7 +262,7 @@ pub fn bid_likelihood(bid: Option<i32>, class: HandClass, ctx: &BidContext, trus
     };
     // HB-140b from the speaker's side: without a pair of its own it may not cross 140.
     let p_follow = match follow {
-        Some(t) if t > PAIR_LINE && !class.any_pair() => {
+        Some(t) if t > PAIR_LINE && !class.any_pair() && !ctx.ace_offer => {
             params.cross_without_own_pair * (bid == follow) as u8 as f32
                 + (1.0 - params.cross_without_own_pair) * bid.is_none() as u8 as f32
         }
@@ -259,7 +276,7 @@ pub fn bid_likelihood(bid: Option<i32>, class: HandClass, ctx: &BidContext, trus
     };
     let base = generic_step(bid, ctx, params);
     // HR-4: unexplained bids above 140 come mostly from seats with a pair.
-    let generic = if bid.is_some_and(|b| b > PAIR_LINE) && !class.any_pair() {
+    let generic = if bid.is_some_and(|b| b > PAIR_LINE) && !class.any_pair() && !ctx.ace_offer {
         base * params.generic_cross_no_pair
     } else {
         base
@@ -288,15 +305,24 @@ pub fn bid_likelihood(bid: Option<i32>, class: HandClass, ctx: &BidContext, trus
     (1.0 - block - claim) * read + block * barrier as u8 as f32 / n_barriers + claim
 }
 
-/// The public reading of an action, used only to track the context: the live message whose
-/// shifted target (else whose literal target) equals the bid.
+/// The public reading used to track context: a live message matching the shifted
+/// (else literal) target, except an ambiguous high +5 outside the Ace-offer context.
 pub fn nominal(bid: Option<i32>, ctx: &BidContext, params: &Params) -> Option<Message> {
+    if ownership_step(bid, ctx) {
+        return None;
+    }
     let bid = bid?;
     let live = ctx.live(params);
     let candidates = || MESSAGES.into_iter().filter(move |&m| live & m.bit() != 0);
     candidates()
         .find(|&m| follow_target(m, ctx, params) == bid)
         .or_else(|| candidates().find(|&m| ctx.value + m.step() == bid))
+}
+
+/// Publicly ambiguous ownership/information step. This must not be used as an
+/// exact ownership counter for another seat (or for our own known information).
+fn ownership_step(bid: Option<i32>, ctx: &BidContext) -> bool {
+    ctx.value >= PAIR_LINE && bid == Some(ctx.value + 5) && !ctx.ace_offer
 }
 
 /// One observed bidding action with its public context.
@@ -318,6 +344,9 @@ struct Auction {
     first_action: [Option<bool>; 4],
     /// The seat made an information step (a message, below 140).
     informed: [bool; 4],
+    holder: Option<Seat>,
+    /// Pending reply per recipient; public offer interpretation only.
+    offer_reply: [bool; 4],
     n: u32,
 }
 
@@ -329,6 +358,8 @@ impl Auction {
             has_bid: [false; 4],
             first_action: [None; 4],
             informed: [false; 4],
+            holder: None,
+            offer_reply: [false; 4],
             n: 0,
         }
     }
@@ -352,6 +383,13 @@ impl Auction {
             team_pair_shown: team_sent & PAIR_MESSAGES != 0,
             n_before: self.n,
             opponents_exchanging: exchanging && self.value < PAIR_LINE,
+            holder: self.holder,
+            ace_offer: self.value >= PAIR_LINE
+                && self.holder == Some(partner(seat))
+                && !self.has_bid[s]
+                && team_sent & Message::Ace.bit() == 0
+                && self.sent[mate] & Message::RedPair.bit() != 0,
+            offer_reply: self.offer_reply[s],
         }
     }
 
@@ -359,6 +397,10 @@ impl Auction {
         let ctx = self.context(seat);
         let nominal = nominal(bid, &ctx, params);
         let s = seat as usize;
+        self.offer_reply[s] = false;
+        if ctx.ace_offer && nominal == Some(Message::Ace) {
+            self.offer_reply[partner(seat) as usize] = true;
+        }
         if let Some(m) = nominal {
             self.sent[s] |= m.bit();
             self.informed[s] |= bid.is_some_and(|b| b < PAIR_LINE);
@@ -367,6 +409,7 @@ impl Auction {
         if let Some(b) = bid {
             self.value = b;
             self.has_bid[s] = true;
+            self.holder = Some(seat);
         }
         self.n += 1;
         BidObs { bid, ctx, nominal }
@@ -525,5 +568,75 @@ mod tests {
             ..ctx(135, true)
         };
         assert_eq!(follow_target(Message::BigPair, &c, &p), 155);
+    }
+
+    #[test]
+    fn offer_reads_the_ace_without_requiring_an_own_pair_or_tell_window() {
+        let p = Params {
+            tell_window: 1,
+            ..Params::default()
+        };
+        let auction = [(0, Some(120)), (1, Some(145)), (2, None)];
+        let c = next_context(&auction, 3, &p);
+        assert!(c.ace_offer);
+        assert_eq!(nominal(Some(150), &c, &p), Some(Message::Ace));
+        let ace = HandClass {
+            ace: true,
+            halves: [0; 4],
+        };
+        let mut paired = ace;
+        paired.halves[Suit::Acorns as usize] = 2;
+        let no_ace = HandClass { ace: false, ..ace };
+        assert_eq!(message(paired, &c, &p), Some(Message::Ace));
+        let likelihood = |class| bid_likelihood(Some(150), class, &c, 0.9, &p);
+        assert_eq!(likelihood(ace), likelihood(paired));
+        assert!(likelihood(ace) > likelihood(no_ace));
+        assert!(likelihood(no_ace) > 0.0); // external actors can deviate
+    }
+
+    #[test]
+    fn keep_adds_no_halves_or_second_pair_evidence() {
+        // Keep inside the telling window too: otherwise the old default window
+        // can hide the erroneous TwoHalves interpretation of this exact reply.
+        let p = Params {
+            tell_window: 0,
+            ..Params::default()
+        };
+        let auction = [
+            (0, Some(120)),
+            (1, Some(145)),
+            (2, None),
+            (3, Some(150)),
+            (0, None),
+            (1, Some(155)),
+        ];
+        let read = walk_auction(&auction, &p);
+        assert_eq!(read[3].nominal, Some(Message::Ace));
+        assert!(read[5].ctx.offer_reply);
+        assert_eq!(read[5].nominal, None);
+        let table = bid_table(&read[5], 0.9, &p);
+        assert!(table.iter().all(|&x| x == table[0] && x > 0.0));
+        let c = next_context(&auction, 1, &p);
+        assert!(!c.offer_reply);
+        assert_eq!(c.sent, Message::RedPair.bit());
+        let prior = [9.0 / 36.0; 36];
+        let before = class_posterior(&prior, &read[1..2], 0.9, &p);
+        let after = class_posterior(&prior, &[read[1], read[5]], 0.9, &p);
+        assert!(before.iter().zip(after).all(|(&a, b)| (a - b).abs() < 1e-6));
+    }
+
+    #[test]
+    fn intervention_preserves_offer_but_does_not_create_one() {
+        let p = Params::default();
+        let auction = [(0, Some(120)), (1, Some(145)), (2, None), (3, Some(150)), (0, Some(155))];
+        let c = next_context(&auction, 1, &p);
+        assert!(c.offer_reply);
+        assert_eq!(c.holder, Some(0));
+        assert_eq!(nominal(Some(160), &c, &p), None);
+        let blocked = [(0, Some(120)), (1, Some(145)), (2, Some(150))];
+        assert!(!next_context(&blocked, 3, &p).ace_offer);
+        assert!(!next_context(&blocked, 1, &p).offer_reply);
+        // Ordinary low +5 information remains available outside negotiation.
+        assert_eq!(nominal(Some(125), &ctx(120, true), &p), Some(Message::TwoHalves));
     }
 }

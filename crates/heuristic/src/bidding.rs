@@ -28,7 +28,8 @@
 //! estimate in batch 2; until then they are off.
 
 use beliefs::conventions::{
-    follow_target, info_to_tell, next_context, pair_value, BidContext, HandClass, Message, PAIR_LINE, PAIR_MESSAGES,
+    follow_target, info_to_tell, next_context, pair_value, BidContext, BidObs, HandClass, Message, PAIR_LINE,
+    PAIR_MESSAGES,
 };
 use engine::{ActionType, CardSet, GameAction, Suit, SUITS};
 
@@ -376,8 +377,8 @@ fn find(legal: &[GameAction], bid: Option<i32>) -> Option<&GameAction> {
 }
 
 /// B-control and B-offer, the ownership bids at 140 or more (the owner's deals 848 and 573 with
-/// Astra's review 2026-10-13): one step, once per auction (a bid of mine made at 140 or more is
-/// my ownership challenge).
+/// Astra's review 2026-10-13): one ownership step per auction. Truthful untold information
+/// does not spend that allowance; own control/keep steps do, even if a raw +5 also fits a message.
 /// - **B-control:** a complete pair of mine runs from the top (`knowledge::control_run`): as the
 ///   declarer I lead its ace, announce and keep the lead through the suit, which defending can't
 ///   give me. Against an opponent's bid when my partner passed while telling was cheap (the owner:
@@ -393,64 +394,74 @@ fn own_the_game(
     ctx: &Ctx,
     legal: &[GameAction],
     class: HandClass,
-    v: i32,
-    holder: Option<u8>,
+    bctx: &BidContext,
     why: &mut Vec<Fact>,
 ) -> Option<Decision> {
     let me = ctx.me;
-    let mate = engine::partner(me);
     let record = ctx.mind.record();
-    // Each action with the value before it.
-    let mut before = 115;
-    let mut history = Vec::new();
-    for &(seat, bid) in &record.auction {
-        history.push((seat, bid, before));
-        if let Some(b) = bid {
-            before = b;
-        }
-    }
-    let challenged = history
-        .iter()
-        .any(|&(seat, bid, value)| seat == me && bid.is_some() && value >= PAIR_LINE);
-    if challenged || holder == Some(me) {
-        return None;
-    }
-    let bid = find(legal, Some(v + 5))?;
     let hand = ctx.k.certain(me);
     let run = hand.pair_suits().find(|&s| knowledge::control_run(hand, s));
-    let bids = |seat: u8| record.seats[seat as usize].bids.clone();
-    let mate_bids = bids(mate);
-    let mine = bids(me);
-    let partner_passed_cheap = history
-        .iter()
-        .find(|&&(seat, _, _)| seat == mate)
-        .is_some_and(|&(_, bid, value)| bid.is_none() && value < PAIR_LINE);
+    let mine = &record.seats[me as usize].bids;
+    let challenged = own_challenged(mine, class, run.is_some(), ctx.params.conv());
+    why.push(fact("own_challenged", challenged as u8));
+    if challenged || bctx.holder == Some(me) {
+        return None;
+    }
+    let bid = find(legal, Some(bctx.value + 5))?;
     if let Some(s) = run {
-        if holder.is_some_and(|h| h % 2 != me % 2) && partner_passed_cheap {
+        if bctx.holder.is_some_and(|h| h % 2 != me % 2) && bctx.partner_passed_first {
             why.push(fact("control_run", s as u8));
             return Some(decision(bid, RuleId::BControl, std::mem::take(why)));
         }
     }
-    // An offer: my partner's last bid, at 140 or more and right over my bid, read as the ace
-    // message, after I told the Red pair, which I still hold.
-    let last_two: Vec<_> = history.iter().filter(|h| h.1.is_some()).rev().take(2).collect();
-    let offered = holder == Some(mate)
-        && last_two.len() == 2
-        && last_two[1].0 == me
-        && last_two[0].2 >= PAIR_LINE
-        && mate_bids.last().is_some_and(|b| b.nominal == Some(Message::Ace))
-        && mine.iter().any(|b| b.nominal == Some(Message::RedPair));
-    if offered && hand.pair_suits().next().is_some() {
+    // The shared context retains the offer through an intervening opponent bid.
+    // Keep only the Red pair actually offered to, not an unrelated pair after a bluff.
+    if bctx.offer_reply && class.has_pair(Suit::Red) {
         why.push(fact("keep", 1));
         return Some(decision(bid, RuleId::BOffer, std::mem::take(why)));
     }
-    let red_pair_shown = mate_bids.iter().any(|b| b.nominal == Some(Message::RedPair));
-    let team_ace = mate_bids.iter().chain(&mine).any(|b| b.nominal == Some(Message::Ace));
-    if holder == Some(mate) && red_pair_shown && !team_ace && mine.is_empty() && class.ace {
+    if bctx.ace_offer && class.ace {
         why.push(fact("aces", (hand & CardSet::ACES).len()));
         return Some(decision(bid, RuleId::BOffer, std::mem::take(why)));
     }
     None
+}
+
+/// Bounded reconstruction from our unchanged auction hand and our own calls only.
+/// Public increments never establish another actor's ownership intent. Recognise
+/// the current policy's control/keep before testing truthful, live message content;
+/// otherwise a control bid coinciding with an untold Ace could be reused indefinitely.
+fn own_challenged(
+    bids: &[BidObs],
+    class: HandClass,
+    control_run: bool,
+    params: &beliefs::conventions::Params,
+) -> bool {
+    let mut told = 0;
+    for obs in bids {
+        let Some(bid) = obs.bid else {
+            continue;
+        };
+        let mut ctx = obs.ctx;
+        ctx.sent |= told;
+        ctx.team_ace |= told & Message::Ace.bit() != 0;
+        let high_step = ctx.value >= PAIR_LINE && bid == ctx.value + 5;
+        let control = high_step
+            && control_run
+            && ctx.partner_passed_first
+            && ctx.holder.is_some_and(|h| h % 2 != ctx.speaker % 2);
+        let keep = high_step && ctx.offer_reply && class.has_pair(Suit::Red);
+        if control || keep {
+            return true;
+        }
+        let information = info_to_tell(class, &ctx, params).find(|&m| follow_target(m, &ctx, params) == bid);
+        if let Some(m) = information {
+            told |= m.bit();
+        } else if ctx.value >= PAIR_LINE {
+            return true;
+        }
+    }
+    false
 }
 
 /// KB `schwarz_defend`: how high I bid to keep the opponents from playing us schwarz, or None
@@ -597,7 +608,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
         }
     }
     if v >= PAIR_LINE {
-        if let Some(d) = own_the_game(ctx, legal, class, v, holder, &mut why) {
+        if let Some(d) = own_the_game(ctx, legal, class, &bctx, &mut why) {
             return d;
         }
     }
@@ -611,4 +622,64 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     // B-quiet (B-over140 when it held a message back).
     let rule = if skipped { RuleId::BOver140 } else { RuleId::BQuiet };
     decision(find(legal, None).unwrap_or(&legal[0]), rule, why)
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use beliefs::conventions::{walk_auction, Params};
+
+    #[test]
+    fn own_information_is_truthful_and_consumed_once_even_when_publicly_ambiguous() {
+        let params = Params {
+            tell_window: 0,
+            ..Params::default()
+        };
+        let read = walk_auction(
+            &[
+                (0, Some(130)),
+                (1, Some(145)),
+                (2, Some(150)),
+                (3, None),
+                (0, Some(155)),
+                (1, Some(160)),
+                (2, Some(165)),
+            ],
+            &params,
+        );
+        let ace = HandClass {
+            ace: true,
+            halves: [0; 4],
+        };
+        assert_eq!(read[2].nominal, None); // other actors cannot know the purpose
+        assert!(!own_challenged(&[read[2]], ace, false, &params));
+        assert!(own_challenged(&[read[2], read[6]], ace, false, &params));
+        assert!(own_challenged(&[read[2]], HandClass { ace: false, ..ace }, false, &params));
+    }
+
+    #[test]
+    fn own_control_is_not_reclassified_as_an_untold_ace() {
+        let params = Params {
+            tell_window: 0,
+            ..Params::default()
+        };
+        let read = walk_auction(
+            &[
+                (0, None),
+                (1, Some(135)),
+                (2, Some(150)),
+                (3, None),
+                (1, Some(155)),
+                (2, Some(160)),
+            ],
+            &params,
+        );
+        let mut class = HandClass {
+            ace: true,
+            halves: [0; 4],
+        };
+        class.halves[Suit::Bells as usize] = 2;
+        assert!(own_challenged(&[read[2], read[5]], class, true, &params));
+        assert!(!own_challenged(&[read[2], read[5]], class, false, &params));
+    }
 }
