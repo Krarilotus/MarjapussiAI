@@ -145,6 +145,8 @@ fn respond(state: &FastState, known: &Known) -> u8 {
 #[derive(Clone, Copy)]
 struct Known {
     may: [CardSet; 4],
+    /// Public whole-pair exclusions cannot be represented by independent cards.
+    pair_possible: [u8; 4],
     read: [u8; 4],
     held: [CardSet; 4],
 }
@@ -167,8 +169,10 @@ fn blank_signs(forth: CardSet, back: CardSet, played: CardSet) -> u8 {
 impl Known {
     /// The table's knowledge, and the pass forth my team exchanged if I saw it.
     fn new(ctx: &Ctx) -> Known {
+        let public = ctx.mind.public();
         let mut known = Known {
-            may: std::array::from_fn(|s| ctx.mind.public().may_hold(s as u8)),
+            may: std::array::from_fn(|s| public.may_hold(s as u8)),
+            pair_possible: std::array::from_fn(|s| public.pairs(s as u8).possible),
             read: [0; 4],
             held: [CardSet::EMPTY; 4],
         };
@@ -183,7 +187,68 @@ impl Known {
                 known.exchanged(first, forth, back, played);
             }
         }
+        // Reconstructing a historical pass must not resurrect a blank reading
+        // contradicted by later public ownership or positive half constraints.
+        // Use only the public knowledge, never the observer's private cards.
+        for seat in 0..4 {
+            for suit in SUITS {
+                let bit = 1 << suit as u8;
+                if known.read[seat] & bit != 0 && public.count_bounds(seat as u8, suit).0 > 0 {
+                    known.read[seat] &= !bit;
+                }
+            }
+        }
         known
+    }
+
+    /// Only a hypothetical transfer invalidates existing pair exclusions for
+    /// its two participants. Historical exchange facts do not erase later answers.
+    fn exchanging(&mut self, seat: u8) {
+        let (a, b) = (seat as usize, partner(seat) as usize);
+        let team = self.may[a] | self.may[b];
+        for seat in [a, b] {
+            self.may[seat] = team;
+            self.pair_possible[seat] = team.pair_suits().fold(0, |bits, s| bits | 1 << s as u8);
+        }
+    }
+
+    fn narrow_pairs(&mut self, called: u8) {
+        for seat in 0..4 {
+            let possible = self.may[seat].pair_suits().fold(0, |bits, s| bits | 1 << s as u8);
+            self.pair_possible[seat] &= possible & !called;
+        }
+    }
+
+    /// Primitive public facts only: no sampled hand or private asker allocation.
+    /// Called-suit changes come from the engine. A positive half answer does not
+    /// reveal which half belongs to which seat, so we do not assign either card.
+    fn observe_activation(&mut self, seat: u8, action: Move, called_before: u8, called_after: u8) {
+        match action {
+            Move::Announce(s) | Move::Answer(AnswerType::YesPair(s)) => {
+                let halves = CardSet::halves(s);
+                self.read[seat as usize] &= !(1 << s as u8);
+                for other in 0..4 {
+                    if other == seat as usize {
+                        self.may[other] |= halves;
+                    } else {
+                        self.may[other] -= halves;
+                    }
+                }
+            }
+            Move::Answer(AnswerType::NoPair) => self.pair_possible[seat as usize] &= called_before,
+            Move::Answer(AnswerType::NoHalf(s)) => self.may[seat as usize] -= CardSet::halves(s),
+            Move::Answer(AnswerType::YesHalf(s)) => {
+                let bit = 1 << s as u8;
+                self.read[seat as usize] &= !bit;
+                // A question alone proves nothing about the asker's cards.
+                // Only the engine's newly called pair proves it has a half.
+                if called_after & !called_before & bit != 0 {
+                    self.read[partner(seat) as usize] &= !bit;
+                }
+            }
+            _ => {}
+        }
+        self.narrow_pairs(called_after);
     }
 
     /// My team's exchange: `giver` passed `forth`, its partner returned `back`; `played` are the
@@ -204,6 +269,7 @@ impl Known {
         self.may.iter_mut().for_each(|m| *m -= CardSet::single(card));
         self.read[seat] &= !(1 << suit_of(card) as u8);
         self.held[seat] -= CardSet::single(card);
+        self.narrow_pairs(state.called());
     }
 
     /// The view the actors use in one world: the table's knowledge, or with
@@ -321,9 +387,11 @@ fn ask(state: &FastState, known: &Known) -> Option<Move> {
     let mine = state.hand(leader);
     let open = |s: Suit| state.called() >> s as u8 & 1 == 0;
     let legal = |q: QuestionType| state.moves().any(|m| m == Move::Question(q));
-    let may_pair = SUITS
-        .into_iter()
-        .any(|s| open(s) && (known.may(mine, mate as u8) & CardSet::halves(s)) == CardSet::halves(s));
+    let may_pair = SUITS.into_iter().any(|s| {
+        open(s)
+            && known.pair_possible[mate] & (1 << s as u8) != 0
+            && (known.may(mine, mate as u8) & CardSet::halves(s)) == CardSet::halves(s)
+    });
     if may_pair && legal(QuestionType::Yours) {
         return Some(Move::Question(QuestionType::Yours));
     }
@@ -359,19 +427,21 @@ fn answer0(state: &FastState) -> Move {
     })
 }
 
-/// Applies `m` and, after a question, the asked seat's answer.
+/// Apply one engine move and observe its public activation facts exactly once.
+fn apply_observed(state: &mut FastState, known: &mut Known, action: Move) {
+    let seat = state.to_move();
+    let called = state.called();
+    state.apply(action);
+    known.observe_activation(seat, action, called, state.called());
+}
+
+/// Applies `m` and, after a question, the asked seat's answer. A direct answer
+/// from route_values follows the same public observation path as an automatic one.
 fn apply(state: &mut FastState, known: &mut Known, m: Move) {
-    let asker = state.leader();
-    state.apply(m);
-    if let PlayPhase::Answer(q) = state.phase() {
-        let a = answer0(state);
-        state.apply(a);
-        // A "no half" proves the answerer lacks the half the asker doesn't hold. A "no pair" is a
-        // joint fact (no complete uncalled pair) that the per-seat possible cards can't hold.
-        if let (QuestionType::YourHalf(s), Move::Answer(AnswerType::NoHalf(_))) = (q, a) {
-            let missing = CardSet::halves(s) - state.hand(asker);
-            known.may[partner(asker) as usize] -= missing;
-        }
+    apply_observed(state, known, m);
+    if matches!(state.phase(), PlayPhase::Answer(_)) {
+        let answer = answer0(state);
+        apply_observed(state, known, answer);
     }
 }
 
@@ -756,10 +826,7 @@ pub(crate) fn take_or_defend(ctx: &Ctx, ours: i32, their_declarer: u8, theirs: i
     // The exchange moves cards between partners: either may now hold the other's possible cards.
     let known = |declarer: u8| {
         let mut k = Known::new(ctx);
-        let (d, p) = (declarer as usize, partner(declarer) as usize);
-        let team = k.may[d] | k.may[p];
-        k.may[d] = team;
-        k.may[p] = team;
+        k.exchanging(declarer);
         k
     };
     let (mine, theirs_known) = (known(ctx.me), known(their_declarer));
@@ -806,9 +873,7 @@ pub(crate) fn pass_values(ctx: &Ctx, candidates: &[CardSet]) -> Option<WorldValu
     let reads_me = ctx.mind.class_likelihood(me, declarer);
     // The exchange moves cards between partners: either may now hold the other's possible cards.
     let mut known = Known::new(ctx);
-    let team = known.may[me as usize] | known.may[declarer as usize];
-    known.may[me as usize] = team;
-    known.may[declarer as usize] = team;
+    known.exchanging(me);
     let options: Vec<(CardSet, Plan)> = candidates
         .iter()
         .flat_map(|&x| Plan::all(me).map(move |p| (x, p)))
@@ -850,9 +915,7 @@ pub(crate) fn return_values(ctx: &Ctx, candidates: &[CardSet]) -> Option<WorldVa
     };
     let game = contract(ctx);
     let mut known = Known::new(ctx);
-    let team = known.may[me as usize] | known.may[mate as usize];
-    known.may[me as usize] = team;
-    known.may[mate as usize] = team;
+    known.exchanging(me);
     let options: Vec<_> = candidates
         .iter()
         .flat_map(|&cards| Plan::all(me).map(move |plan| (cards, plan)))
@@ -884,6 +947,7 @@ pub(crate) fn open_playout(hands: [CardSet; 4], leader: u8) -> [i32; 2] {
     let mut s = FastState::new(hands, leader);
     let mut k = Known {
         may: hands,
+        pair_possible: [0b1111; 4],
         read: [0; 4],
         held: [CardSet::EMPTY; 4],
     };
@@ -1038,6 +1102,10 @@ pub(crate) fn forced_half(ctx: &Ctx, candidates: CardSet) -> Vec<(u8, f64)> {
 mod continuation_cache_tests;
 
 #[cfg(test)]
+#[path = "../tests/internal/rollout_public_facts.rs"]
+mod public_facts_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1070,6 +1138,7 @@ mod tests {
         );
         let mut known = Known {
             may: [state.in_hands(); 4],
+            pair_possible: [0b1111; 4],
             read: [0; 4],
             held: [CardSet::EMPTY; 4],
         };
@@ -1106,6 +1175,7 @@ mod tests {
         );
         let mut known = Known {
             may: [state.in_hands(); 4],
+            pair_possible: [0b1111; 4],
             read: [0; 4],
             held: [CardSet::EMPTY; 4],
         };
@@ -1134,6 +1204,7 @@ mod tests {
         );
         let mut known = Known {
             may: [state.in_hands(); 4],
+            pair_possible: [0b1111; 4],
             read: [0; 4],
             held: [CardSet::EMPTY; 4],
         };
@@ -1164,6 +1235,7 @@ mod tests {
         );
         let mut known = Known {
             may: [state.in_hands(); 4],
+            pair_possible: [0b1111; 4],
             read: [0; 4],
             held: [CardSet::EMPTY; 4],
         };
@@ -1247,6 +1319,7 @@ mod tests {
         let mut state = FastState::new(hands, 0);
         let mut known = Known {
             may: [state.in_hands(); 4],
+            pair_possible: [0b1111; 4],
             read: [0; 4],
             held: [CardSet::EMPTY; 4],
         };
@@ -1321,6 +1394,7 @@ mod tests {
             }
             let known = Known {
                 may: [CardSet::ALL - hands[0]; 4],
+                pair_possible: [0b1111; 4],
                 read: [0; 4],
                 held: [CardSet::EMPTY, CardSet::EMPTY, held, CardSet::EMPTY],
             };
@@ -1353,6 +1427,7 @@ mod tests {
             }
             let known = Known {
                 may: state.hands(),
+                pair_possible: [0b1111; 4],
                 read: [0; 4],
                 held: [CardSet::EMPTY; 4],
             };

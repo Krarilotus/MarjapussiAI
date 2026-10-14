@@ -143,7 +143,10 @@ fn ho1_card_result_is_reused_by_ho2_start_without_weakening_phase_or_plan_identi
         start.play(card);
         cards.play(card);
         assert_eq!(start, cards);
-        assert_eq!((a.may, a.read, a.held), (b.may, b.read, b.held));
+        assert_eq!(
+            (a.may, a.pair_possible, a.read, a.held),
+            (b.may, b.pair_possible, b.read, b.held)
+        );
         let query = ContinuationQuery {
             world: world.hands,
             phase: PlayPhase::Start,
@@ -163,6 +166,50 @@ fn ho1_card_result_is_reused_by_ho2_start_without_weakening_phase_or_plan_identi
     let fresh = context(&params, &mind, &solver);
     assert_eq!(fresh.concepts.borrow().continuation_counts(), (0, 0));
     same_values(&lead, &lead_values(&fresh, CardSet::single(card)).unwrap());
+}
+
+#[test]
+fn changed_public_pair_fact_uses_fresh_context_and_matches_uncached_continuations() {
+    let (params, mind) = fixture();
+    let (_, mut changed_mind) = fixture();
+    changed_mind.apply(&SeatEvent::NoPair { seat: 2 }).unwrap();
+    let solver = RefCell::new(None);
+    let old = context(&params, &mind, &solver);
+    let fresh = context(&params, &changed_mind, &solver);
+    let before = Known::new(&old);
+    let after = Known::new(&fresh);
+    assert_eq!(before.may, after.may, "NoPair is a correlated fact, not a card exclusion");
+    assert_ne!(before.pair_possible[2], after.pair_possible[2]);
+    assert_eq!(after.pair_possible[2], 0);
+
+    let action = Move::Card("r-Z".parse::<engine::Card>().unwrap().index());
+    let query = fresh.with_worlds(|worlds| ContinuationQuery {
+        world: worlds[0].hands,
+        phase: PlayPhase::Cards,
+        action,
+        plan: Plan::all(fresh.me).next().unwrap(),
+    });
+    assert!(continuation_score(&old, query, before).is_some());
+    assert!(old.concepts.borrow().continuation_score(&query).is_some());
+    assert_eq!(fresh.concepts.borrow().continuation_counts(), (0, 0));
+    assert!(fresh.concepts.borrow().continuation_score(&query).is_none());
+
+    // The exact same query key belongs to different immutable fact contexts.
+    // Recompute from the new facts and compare all cells with the existing oracle.
+    let oracle = uncached(&fresh, PlayPhase::Cards, &[action]);
+    let (cold, cold_plans) = route_values(&fresh, PlayPhase::Cards, &[action]).unwrap();
+    let actual = fresh.concepts.borrow().continuation_score(&query).unwrap();
+    assert_eq!((actual.value() as f64).to_bits(), oracle.values[0][0].to_bits());
+    let (expected, picked) = oracle.best_per(|&(m, _)| Some(m));
+    assert_eq!(cold_plans, picked.into_iter().map(|(_, p)| p).collect::<Vec<_>>());
+    same_values(&expected, &cold);
+    let counts = fresh.concepts.borrow().continuation_counts();
+    let (warm, warm_plans) = route_values(&fresh, PlayPhase::Cards, &[action]).unwrap();
+    assert_eq!(fresh.concepts.borrow().continuation_counts().0, counts.0);
+    assert!(fresh.concepts.borrow().continuation_counts().1 > counts.1);
+    assert_eq!(cold_plans, warm_plans);
+    same_values(&cold, &warm);
+    assert_eq!(Known::new(&old).pair_possible, before.pair_possible);
 }
 
 #[test]
