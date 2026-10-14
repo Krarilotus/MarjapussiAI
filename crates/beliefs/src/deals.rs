@@ -88,18 +88,27 @@ impl Mind {
 
     /// Reuse one weight model per (own epochs, public fact epoch), preserving the
     /// lazy fact DP across signal-only refreshes while both fact epochs match.
+    /// Hidden-exchange sums survive refreshes only when their ordered passers,
+    /// dealt-class likelihoods and kernel are unchanged.
     /// The model's RefCell is separate from the query/derived caches; callbacks
     /// do not hold a borrow of those caches. Drop this Ref before applying events
     /// or any operation that would replace this epoch's model.
     pub fn deal_model(&self) -> Ref<'_, DealModel> {
         let key = (self.epochs(), self.public.fact_epoch());
         if self.model.borrow().as_ref().map(|(e, p, _)| (*e, *p)) != Some(key) {
-            let weights = self.deal_weights();
-            let model = DealModel {
-                facts: self.fact_space(),
-                weights,
-            };
-            *self.model.borrow_mut() = Some((key.0, key.1, model));
+            let mut weights = self.deal_weights();
+            let mut slot = self.model.borrow_mut();
+            if let Some((_, _, previous)) = slot.as_mut() {
+                weights.reuse_exchange(&mut previous.weights);
+            }
+            *slot = Some((
+                key.0,
+                key.1,
+                DealModel {
+                    facts: self.fact_space(),
+                    weights,
+                },
+            ));
         }
         Ref::map(self.model.borrow(), |model| &model.as_ref().expect("computed above").2)
     }
@@ -172,6 +181,23 @@ impl Belief for DealWeights {
 }
 
 impl DealWeights {
+    /// Transfer memoized dealt-split sums, never the previous model's facts or
+    /// weights. A term reads only held feature counts, both passer likelihoods
+    /// and the ordered kernel. Current/played cards still select its held-count
+    /// key in `weight`; rights, factors and other seats' signals do not enter it.
+    /// The caller confines this reuse to consecutive models of the same Mind.
+    fn reuse_exchange(&mut self, previous: &mut Self) {
+        let Some(pair) = self.hidden_exchange else { return };
+        if previous.hidden_exchange == Some(pair)
+            && previous.kernel == self.kernel
+            && pair
+                .iter()
+                .all(|&seat| previous.likelihoods[seat] == self.likelihoods[seat])
+        {
+            self.exchange = std::mem::take(&mut previous.exchange);
+        }
+    }
+
     /// Acceptance density for the named conditional legal-history completion.
     /// This is NOT the inverse of the marginalized feature kernel: it conditions
     /// concrete dealt owners/transfer paths on legal nine-card starting hands.
@@ -273,3 +299,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/internal/history_density.rs"]
 mod history_tests;
+
+#[cfg(test)]
+#[path = "../tests/internal/exchange_reuse.rs"]
+mod exchange_reuse_tests;

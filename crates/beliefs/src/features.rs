@@ -315,6 +315,11 @@ pub(crate) struct ExchangeTerms {
 }
 
 impl ExchangeTerms {
+    #[cfg(test)]
+    pub(crate) fn cached_terms(&self) -> usize {
+        self.terms.len()
+    }
+
     /// Use the feature-DP likelihood for a concrete current deal. Played cards
     /// still belong to the holder's post-exchange hand for this calculation.
     pub(crate) fn likelihood(
@@ -372,6 +377,7 @@ impl ExchangeTerms {
         k: Kernel,
         mut mass: Option<(&mut [f64; N_CLASSES], &mut [f64; N_CLASSES])>,
     ) -> f64 {
+        let _timing = crate::profile::scope("belief.exchange_sum");
         let (held_m, held_v) = decode_key(key);
         // P(dealt to the first passer) of each count, per role.
         let dealt_m = |role: usize, nm: u8, nv: u8| {
