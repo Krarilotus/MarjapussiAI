@@ -275,6 +275,87 @@ class ReportTest(unittest.TestCase):
         expected_se = math.sqrt((100 + 100 + 400 + 400) / 3 / 4)
         self.assertAlmostEqual(first["ci95"][1], 1.96 * expected_se)
 
+    def test_forecast_completion_distinguishes_missing_zero_and_partial_coverage(self):
+        for flags, counts, rendered in (
+                ([None], (0, 0, 0, 1), "unknown"),
+                ([1], (1, 0, 1, 0), "0"),
+                ([0], (0, 1, 1, 0), "1"),
+                ([1, None], (1, 0, 1, 1), "0"),
+                ([1, 0, None, 2], (1, 1, 2, 2), "1")):
+            with self.subTest(flags=flags):
+                row = game(0)
+                base = row["decisions"][0]
+                row["decisions"] = [dict(base, facts=[] if flag is None else
+                                         [{"key": "forecast_complete", "value": flag}]) for flag in flags]
+                manifest = {"policies": ["a", "b", "c", "d"], "games": 1, "workers": 1}
+                report = summarize([row], manifest)
+                self.assertEqual(report, summarize([compact_game(row)], manifest))
+                slot = report["slots"][0]
+                complete, incomplete, known, unknown = counts
+                # Legacy aggregate fields remain numeric, including missing coverage.
+                self.assertEqual((slot["complete_forecasts"], slot["incomplete_forecasts"]),
+                                 (complete, incomplete))
+                self.assertEqual(slot["forecast_completion"],
+                                 {"known_decisions": known, "unknown_decisions": unknown})
+                timing = markdown(report).split("## Decision time", 1)[1].split("\n\nTimes measure", 1)[0]
+                self.assertIn(f"| {rendered} | {known} known / {unknown} unknown |", timing)
+
+    def test_he1_completion_survives_compaction_separately_from_forecast_flags(self):
+        row = game(0)
+        base = row["decisions"][0]
+        row["decisions"] = [
+            dict(base, rule="HE-1", facts=[{"key": "complete", "value": 1}]),
+            dict(base, rule="HE-1", facts=[{"key": "complete", "value": 0},
+                                         {"key": "forecast_complete", "value": 1}]),
+            dict(base, rule="HE-1", facts=[]),
+            dict(base, rule="HE-1", facts=[{"key": "complete", "value": 2}]),
+            dict(base, facts=[{"key": "complete", "value": 0}]),
+        ]
+        original = copy.deepcopy(row)
+        compact = compact_game(row)
+        self.assertEqual(row, original)
+        self.assertEqual(compact_game(compact), compact)
+        self.assertEqual(compact["decisions"][0]["facts"], [{"key": "complete", "value": 1}])
+        self.assertEqual(compact["decisions"][-1]["facts"], [])
+        manifest = {"policies": ["a", "b", "c", "d"], "games": 1, "workers": 1}
+        report = summarize([row], manifest)
+        self.assertEqual(report, summarize([compact], manifest))
+        slot = report["slots"][0]
+        self.assertEqual(slot["he1_completion"], {"complete": 1, "incomplete": 1, "unknown": 2})
+        self.assertEqual((slot["complete_forecasts"], slot["incomplete_forecasts"]), (1, 0))
+        self.assertEqual(slot["forecast_completion"], {"known_decisions": 1, "unknown_decisions": 4})
+        text = markdown(report)
+        self.assertIn("| 0: a | 4 | 1 | 1 | 2 |", text)
+        self.assertIn("not forecast_complete or value-ranking completion", text)
+
+        # Adding completion facts must not affect scores, timing, review selection,
+        # or any existing metric outside the two legacy forecast counters.
+        without_flags = copy.deepcopy(row)
+        for decision in without_flags["decisions"]:
+            decision["facts"] = []
+        uninstrumented = summarize([without_flags], manifest)
+        for result in (report, uninstrumented):
+            for item in result["slots"]:
+                for field in ("complete_forecasts", "incomplete_forecasts", "forecast_completion", "he1_completion"):
+                    item.pop(field)
+        self.assertEqual(report, uninstrumented)
+
+    def test_he1_missing_completion_is_unknown_but_completed_has_zero_interruptions(self):
+        for flags, counts, rendered in (
+                ([], {"complete": 0, "incomplete": 0, "unknown": 1}, "unknown | unknown | 1"),
+                ([{"key": "complete", "value": 1}],
+                 {"complete": 1, "incomplete": 0, "unknown": 0}, "1 | 0 | 0")):
+            with self.subTest(flags=flags):
+                row = game(0)
+                row["decisions"] = [dict(row["decisions"][0], rule="HE-1", facts=flags)]
+                report = summarize([compact_game(row)],
+                                   {"policies": ["a", "b", "c", "d"], "games": 1, "workers": 1})
+                slot = report["slots"][0]
+                self.assertEqual(slot["he1_completion"], counts)
+                self.assertEqual(slot["forecast_completion"], {"known_decisions": 0, "unknown_decisions": 1})
+                self.assertEqual((slot["complete_forecasts"], slot["incomplete_forecasts"]), (0, 0))
+                self.assertIn(f"| 0: a | 1 | {rendered} |", markdown(report))
+
     def test_reuse_survives_compaction_and_includes_interrupted_comparisons(self):
         rows = [game(i) for i in range(4)]
         for row in rows:

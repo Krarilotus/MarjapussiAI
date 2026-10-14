@@ -106,7 +106,8 @@ def compact_decision(decision):
             "capture_ms": decision.get("capture_ms"),
             "assessment_serialization_ms": decision.get("assessment_serialization_ms"),
             "facts": [f for f in decision["facts"] if f["key"] in
-                      ("forecast_complete", "forecast_decisions", "forecast_reused_decisions")]}
+                      ("forecast_complete", "forecast_decisions", "forecast_reused_decisions")
+                      or decision["rule"] == "HE-1" and f["key"] == "complete"]}
 
 
 def compact_game(game):
@@ -305,12 +306,17 @@ def summarize(games, manifest):
         decisions = [d for g in games for d in g["decisions"] if g["lineup"][d["seat"]] == slot]
         phases, rules = defaultdict(list), defaultdict(list)
         complete = incomplete = evaluated = reused = recorded = 0
+        he1_complete = he1_incomplete = he1_decisions = 0
         for d in decisions:
             phases[d["phase"]].append(d["ms"])
             rules[d["rule"]].append(d["ms"])
             facts = {f["key"]: f["value"] for f in d["facts"]}
             complete += facts.get("forecast_complete") == 1
             incomplete += facts.get("forecast_complete") == 0
+            if d["rule"] == "HE-1":
+                he1_decisions += 1
+                he1_complete += facts.get("complete") == 1
+                he1_incomplete += facts.get("complete") == 0
             if "forecast_decisions" in facts:
                 recorded += 1
                 evaluated += facts["forecast_decisions"]
@@ -323,6 +329,10 @@ def summarize(games, manifest):
                       "phases": {p: latency(v) for p, v in phases.items()},
                       "rules": {p: latency(v) for p, v in rules.items()},
                       "complete_forecasts": complete, "incomplete_forecasts": incomplete,
+                      "forecast_completion": {"known_decisions": complete + incomplete,
+                                              "unknown_decisions": len(decisions) - complete - incomplete},
+                      "he1_completion": {"complete": he1_complete, "incomplete": he1_incomplete,
+                                         "unknown": he1_decisions - he1_complete - he1_incomplete},
                       "assessments": {
                           "instrumented_decisions": sum(d.get("assessment_recorded") is True for d in decisions),
                           "value_assessments_present": sum(value_assessment_presence(d) is True for d in decisions),
@@ -397,13 +407,29 @@ def markdown(report):
     for label, key, fmt in [("Decision count (both teammates)", "count", str),
                             ("Average decision ms", "mean_ms", number), ("Decision p95 ms", "p95_ms", number)]:
         lines.append(f"| {label} | {fmt(a['decision_time'][key])} | {fmt(b['decision_time'][key])} |")
-    lines += ["", "## Decision time", "", "| Slot / policy | Decisions | Average ms | Median ms | p95 ms | Maximum ms | Incomplete forecasts |",
-              "|---|---:|---:|---:|---:|---:|---:|"]
+    lines += ["", "## Decision time", "", "| Slot / policy | Decisions | Average ms | Median ms | p95 ms | Maximum ms | Incomplete forecasts | Forecast completion coverage |",
+              "|---|---:|---:|---:|---:|---:|---:|---|"]
     for slot in report["slots"]:
         t = slot["all_decisions"]
-        lines.append(f"| {slot['slot']}: {slot['policy']} | {t['count']} | {number(t['mean_ms'])} | {number(t['median_ms'])} | {number(t['p95_ms'])} | {number(t['max_ms'])} | {slot['incomplete_forecasts']} |")
+        coverage = slot["forecast_completion"]
+        incomplete = str(slot["incomplete_forecasts"]) if coverage["known_decisions"] else "unknown"
+        lines.append(f"| {slot['slot']}: {slot['policy']} | {t['count']} | {number(t['mean_ms'])} | {number(t['median_ms'])} | {number(t['p95_ms'])} | {number(t['max_ms'])} | {incomplete} | "
+                     f"{coverage['known_decisions']} known / {coverage['unknown_decisions']} unknown |")
     lines += ["", "Times measure Agent::act wall time, including forced actions; setup and posthoc diagnostics are excluded. "
               "Nonforced and per-phase timings are in summary.json. Parallel CPU contention can affect deadline-limited decisions.", "",
+              "Forecast counts use only explicit forecast_complete = 0/1 facts. Coverage counts decisions, including forced actions; "
+              "unknown does not imply a forecast was attempted. With partial coverage, counts describe only recorded flags. "
+              "Zero known flags means unknown completion, not zero interruptions.", "",
+              "| Slot / policy | HE-1 decisions | HE-1 complete | HE-1 incomplete | HE-1 completion unknown |",
+              "|---|---:|---:|---:|---:|"]
+    for slot in report["slots"]:
+        he1 = slot["he1_completion"]
+        known = he1["complete"] + he1["incomplete"]
+        complete = str(he1["complete"]) if known else "unknown"
+        incomplete = str(he1["incomplete"]) if known else "unknown"
+        lines.append(f"| {slot['slot']}: {slot['policy']} | {known + he1['unknown']} | {complete} | {incomplete} | {he1['unknown']} |")
+    lines += ["", "HE-1 completion uses that rule's separate complete = 0/1 fact; it is not forecast_complete or value-ranking completion. "
+              "Missing or unrecognized flags stay unknown. These counts cover only decisions selecting HE-1, not all solver attempts.", "",
               "| Slot / policy | Forecasts recording reuse | Evaluated decisions | Reused decisions | Reuse share |",
               "|---|---:|---:|---:|---:|"]
     for slot in report["slots"]:
