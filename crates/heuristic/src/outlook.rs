@@ -41,6 +41,11 @@ use engine::{
 };
 use knowledge::World;
 
+use crate::concepts::{
+    ActivationStep as Step, ContinuationPlan as Plan, ContinuationQuery, TerminalScoreDifference,
+    CONTINUATION_STEPS as PLAN_STEPS,
+};
+
 use crate::rules::RuleId;
 use crate::{decision, fact, Ctx, Decision};
 use engine::GameAction;
@@ -229,26 +234,6 @@ fn order(hand: CardSet, s: Suit) -> (u32, i32) {
     ((hand & CardSet::suit(s)).len(), engine::trump_points(s, false))
 }
 
-/// One step at the selecting actor's next activation opportunity. Its partner
-/// does not receive this private plan; each seat acts from its own information.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Step {
-    Own,
-    Ask,
-    Wait,
-}
-
-/// How many of the actor's next trick starts a plan fixes; default activation follows.
-const PLAN_STEPS: usize = 2;
-
-/// A private activation plan for one actor, fixed across the believed worlds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Plan {
-    actor: u8,
-    steps: [Step; PLAN_STEPS],
-    next: usize,
-}
-
 impl Plan {
     /// Every plan for `actor`.
     fn all(actor: u8) -> impl Iterator<Item = Plan> {
@@ -403,14 +388,9 @@ fn contract(ctx: &Ctx) -> Contract {
 /// schwarz), from `engine::game_scores`, the one owner of the scoring; without a contract, the
 /// engine's all-pass scoring (each team's rounded points).
 fn score(state: &FastState, contract: Contract, us: u8) -> i32 {
-    let outcome = engine::GameOutcome {
-        playing_team: contract.map(|c| c.0),
-        game_value: contract.map_or(0, |c| c.1),
-        team_points: [state.points(0), state.points(1)],
-        team_tricks: [state.tricks_won(0), state.tricks_won(1)],
-    };
-    let s = engine::game_scores(&outcome, engine::SCHWARZ_FACTOR_FIFTHS);
-    s[us as usize] - s[1 - us as usize]
+    TerminalScoreDifference::from_terminal(state, contract, us)
+        .expect("completed continuation")
+        .value()
 }
 
 /// The level-0 lead (see the module doc, step 3).
@@ -578,44 +558,68 @@ impl<K: Copy + PartialEq> WorldValues<K> {
     }
 }
 
+/// Named continuation query shared by HO-1 and HO-2. The enclosing WorldValues
+/// admission keeps the existing deadline and minimum-world behavior; no new
+/// per-cell cutoff changes a partially evaluated row or the admitted sample.
+fn continuation_score(ctx: &Ctx, mut query: ContinuationQuery, known: Known) -> Option<TerminalScoreDifference> {
+    let public = ctx.k.public_state(ctx.me, query.phase);
+    let mut state = FastState::from_public(public, query.world).ok()?;
+    if !state.moves().any(|m| m == query.action) {
+        return None;
+    }
+    // Validate the ORIGINAL phase first. For a legal Card, Start and Cards have
+    // identical legal_cards and to_move; FastState::play sets Cards and consumes
+    // the same card without changing rights. Known::play does not read phase.
+    // Thus both yield the same state AND actor knowledge before this same plan.
+    // Questions/answers/announcements keep their original phase in the key.
+    if matches!(query.action, Move::Card(_)) && query.phase == PlayPhase::Start {
+        query.phase = PlayPhase::Cards;
+    }
+    if let Some(score) = ctx.concepts.borrow().continuation_score(&query) {
+        return Some(score);
+    }
+    let mut known = known.in_world(ctx, &query.world);
+    match query.action {
+        Move::Card(c) => {
+            known.play(&state, c);
+            state.play(c);
+        }
+        action => apply(&mut state, &mut known, action),
+    }
+    playout(&mut state, &mut known, Some(query.plan));
+    let score = TerminalScoreDifference::from_terminal(&state, contract(ctx), ctx.me % 2)?;
+    ctx.concepts.borrow_mut().completed_continuation(query, score);
+    Some(score)
+}
+
 /// The value of each of my moves now (an announcement, a question, an answer or a concrete
 /// card), each with my best activation plan for my next trick starts (`Plan`), the
 /// same plan in every world. Per believed world; the partner answers my question from its own
 /// cards; after an answer of mine, the asker leads. Also returns the plan chosen per option.
 fn route_values(ctx: &Ctx, phase: PlayPhase, moves: &[Move]) -> Option<(WorldValues<Option<Move>>, Vec<Plan>)> {
     let _timing = beliefs::profile::scope("outlook.route");
-    let public = ctx.k.public_state(ctx.me, phase);
-    let us = ctx.me % 2;
     let known = Known::new(ctx);
-    let game = contract(ctx);
-    let options: Vec<(Option<Move>, Plan)> = moves
+    let options: Vec<(Move, Plan)> = moves
         .iter()
         .copied()
-        .map(Some)
         .flat_map(|m| Plan::all(ctx.me).map(move |p| (m, p)))
         .collect();
     let values = ctx.with_worlds(|worlds: &[World]| {
-        WorldValues::over(ctx, worlds, options, |w, &(option, plan)| {
-            let state = FastState::from_public(public, w.hands).ok()?;
-            let (mut s, mut k) = (state, known.in_world(ctx, &w.hands));
-            match option {
-                Some(Move::Card(c)) if s.legal_cards().contains(c) => {
-                    k.play(&s, c);
-                    s.play(c);
-                }
-                Some(m) if s.moves().any(|x| x == m) => apply(&mut s, &mut k, m),
-                Some(_) => return None,
-                None => {
-                    let c = lead0(&s, &k);
-                    k.play(&s, c);
-                    s.play(c);
-                }
-            }
-            playout(&mut s, &mut k, Some(plan));
-            Some(score(&s, game, us))
+        WorldValues::over(ctx, worlds, options, |w, &(action, plan)| {
+            continuation_score(
+                ctx,
+                ContinuationQuery {
+                    world: w.hands,
+                    phase,
+                    action,
+                    plan,
+                },
+                known,
+            )
+            .map(TerminalScoreDifference::value)
         })
     })?;
-    let (values, picked) = values.best_per(|&(m, _)| m);
+    let (values, picked) = values.best_per(|&(m, _)| Some(m));
     Some((values, picked.into_iter().map(|(_, p)| p).collect()))
 }
 
@@ -1028,6 +1032,10 @@ pub(crate) fn forced_half(ctx: &Ctx, candidates: CardSet) -> Vec<(u8, f64)> {
             .collect()
     })
 }
+
+#[cfg(test)]
+#[path = "../tests/internal/continuation_cache.rs"]
+mod continuation_cache_tests;
 
 #[cfg(test)]
 mod tests {
