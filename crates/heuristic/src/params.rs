@@ -133,19 +133,23 @@ params! {
     /// HL-4: lead the top trump to draw the opponents' trumps.
     lead_draw_trump: bool = false,
 
-    // Endgame (F10 = D-c): the exact solver over believable worlds
+    // Endgame (F10 = D-c): the exact solver over believable worlds. Measured 2026-10-31
+    // (hill-climb log): from seven tricks with a one-million-node budget, at least 16 worlds and
+    // racing at two standard errors, +9.6 points/game and +78 points/series against four tricks
+    // unbounded; one million nodes keep a card decision under the 100 ms limit.
     /// With at most this many tricks left (0: off).
-    endgame_tricks: u32 = 4,
+    endgame_tricks: u32 = 7,
     /// Worlds solved per decision (all consistent deals if there are fewer).
     endgame_worlds: u32 = 64,
     /// The endgame search's logical work limit per decision, in solver nodes (0: none). The
     /// worlds completed within it decide; the wall-clock deadline is only the live safety stop.
-    endgame_nodes: u64 = 0,
-    /// The fewest completed worlds the endgame decides on; with fewer, the play rules decide.
-    endgame_min_worlds: u32 = 1,
+    endgame_nodes: u64 = 1_000_000,
+    /// The fewest completed worlds the endgame decides on, unless all consistent deals were
+    /// solved; with fewer, the play rules decide.
+    endgame_min_worlds: u32 = 16,
     /// Racing in the endgame (`solver::Racing`, batches of `RACE_BATCH` worlds): moves trailing
     /// the leader by more than this many paired standard errors are dropped (0: off).
-    endgame_race_z: f32 = 0.0,
+    endgame_race_z: f32 = 2.0,
 
     // Card play (§6.0, §7): the valuation (C25)
     /// P8/P10a: the partner "may hold a pair" (worth a "Yours", and a right to keep) from this.

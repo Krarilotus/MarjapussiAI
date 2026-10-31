@@ -141,9 +141,11 @@ impl Scene {
 
     pub fn act(&self, legal: &[GameAction]) -> Decision {
         // These isolated rule fixtures exercise the fallback policy. Full lawful
-        // continuations and their hidden-card guards are in contract_planning.
+        // continuations and their hidden-card guards are in contract_planning. The exact
+        // endgame keeps the four-trick scope the rule fixtures were written for.
         self.act_with(
             Params {
+                endgame_tricks: RULE_FIXTURE_ENDGAME_TRICKS,
                 ..Params::default()
             },
             legal,
@@ -154,6 +156,9 @@ impl Scene {
         HeuristicAgent::new(params).decide(&self.view(), legal)
     }
 }
+
+/// The exact endgame's scope in the rule fixtures (`Scene::act`): the rules decide before it.
+pub const RULE_FIXTURE_ENDGAME_TRICKS: u32 = 4;
 
 pub fn bid_of(d: &Decision) -> Option<i32> {
     match d.action.action_type {
