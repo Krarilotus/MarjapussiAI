@@ -141,7 +141,80 @@ another is clearly better. The exchange step's limit is 5 s; these used at most 
 | + 8 and the forth route on | 1 / 2 | +3.65 / +4.87 | +26.23 / +35.90 | 88 |
 | + 32 and the forth route on | 1 / 2 | +5.29 / +5.99 | +36.34 / +41.73 | 144 |
 | + 32, forth route, + the store's 16 best passes forth | 1 / 2 | +5.36 / +6.11 | +37.72 / +43.83 | 167 |
-| + 64 and the forth route on | 1 | +5.97 | +40.65 | 257 |
+| + 64 and the forth route on | 1 / 2 | +5.97 / +7.02 | +40.65 / +49.39 | 268 |
+| + 128 and the forth route on | 1 / 2 | +6.28 / +7.20 | +42.86 / +49.93 | 489 |
+| every legal return (715) and the forth route on | 1 | +6.21 | +42.95 | 3,178 |
+| + 64, forth route, 128 exchange worlds (`exchange_worlds`) | 1 / 2 | +9.08 / +10.68 | +59.96 / +75.17 | 547 |
+| + 64, forth route, 256 exchange worlds | 1 / 2 | +10.00 / +13.37 | +62.70 / +95.96 | 1,250 |
+| **+ 64, forth route, 512 exchange worlds (adopted, `bb2f36c`)** | 1 / 2 | **+13.98 / +19.36** | **+96.99 / +139.62** | 2,109 |
+| + 64, forth route, 768 exchange worlds | 1 | +13.59 | +100.11 | 4,386 |
+| + 32, forth route, 1,024 exchange worlds | 1 | +14.06 | +100.32 | 10,252 |
+| + 64, 512 exchange worlds, forth route off | 1 | +10.99 | +75.94 | n/a |
+
+Candidates plateau near 64-128; the believed worlds behind the comparison pay up to 512, so
+an exchange step (5 s) samples its own pool (`DecisionClass::worlds`). From 512 worlds the
+rows are measured at `b8d4d8e`, which adds the review fixes (alone +0.42 / +0.71 points/game);
+768 worlds or fewer candidates on more worlds gain nothing more and leave no headroom under
+the 5 s limit (maxima from a loaded machine; n/a: the run overlapped release builds). The
+forth route adds 3 points/game over 512 worlds.
+
+Per-game attribution (`scripts/marja_bench/changes.py`: the adopted routes against the
+review fixes alone, same opponent, deals and seats; only the declaring team exchanges):
+
+| Change in the game | Seed 1: games, points/game | Seed 2: games, points/game |
+|---|---|---|
+| contract made, which the store's exchange failed | 186, +16.12 | 204, +18.24 |
+| same result, more or fewer points | 753, +2.35 | 705, +3.42 |
+| another final value (raise) | 507, +2.49 | 524, +2.98 |
+| **contract failed, which the store's exchange made (regressions)** | **97, −7.33** | **80, −5.99** |
+| total | 1,544 changed, +13.56 | 1,515 changed, +18.65 |
+
+A changed game moves the series totals its series' later games start from, which the
+series-aware raise reads: 171 / 173 games changed only their value without an exchange
+difference (−0.34 / +0.28 points/game), and the 1 / 2 changed contracts of the opponents
+have the same cause. Every other change is in a game the team declares.
+
+The regressions are the price of overruling the store: the rollouts' level-0 play misjudges
+some routes, and failing a contract instead of making it swings the margin by twice its
+value. Of the other changed games 36% score lower too (528 of 1,447; 519 of 1,435), yet
+every class but the failures nets positive on both seeds.
+
+## Review (Opus, `0e441f7`)
+
+Three must-fix findings (series end rules re-derived outside `engine::scoring`, HZ-1's
+contract scores hand-coded, under-reported clock cuts in the endgame) and ten should-fix
+findings (among them the endgame table outliving decisions, a lazily built 60 ms table, a
+duplicated paired test, missing generator script, harness variant paths) are fixed in
+`2a03437`; the solver speedups were independently confirmed exact (golden hash reproduced on
+`afe2ebb`).
+
+## The routes' guard (opponent `c3`; prototypes, not merged)
+
+The review asked whether the 2-SE guard, applied after choosing the best of about 65
+candidates on the same worlds, overrules on luck (winner's curse).
+
+| Guard | Seeds | Points/game | Points/series |
+|---|---|---|---|
+| z = 1 (`exchange_route_z`, `1382947`) | 1 | +0.55 [−2.63, +3.72] | +3.54 [−20.18, +27.25] |
+| z = 3 | 1 | −2.61 [−5.09, −0.12] | −20.84 [−40.36, −1.33] |
+| choose on 512 worlds, confirm on 512 others (`exchange_confirm`, `dfc4fbf`) | 1 / 2 | −2.19 / −4.65 | −16.58 / −28.45 |
+
+Every stricter test loses: the overrules it withholds gain more than the lucky ones cost.
+The 2-SE guard stays; z = 1 is not measurably better.
+
+## Review (Opus, `0e441f7..3100f48`)
+
+No correctness defect in the exchange code. Fixed in `47712f9` (decision hash of 60 games
+unchanged): the whole-game determinism test ran with deadlines and 512 exchange worlds, so
+the clock could decide it; both routes' guard and decision have one owner
+(`passing::overrule`); `changes.py` separates series carry-over and checks that runs are
+paired; tests for the exchange class's worlds, candidate de-duplication and the default
+player on the owner's pass examples; stale parameter and passing docs. Measured: the 2-SE
+guard after choosing the best of about 65 candidates (winner's curse; above). Open: the
+dormant `forth_store_candidates` (removed unless it pays).
+Answered: P-route stays one rule for both exchange steps (its phase is table metadata;
+splitting it would rename recorded rules); `planning_budget_ms` keeps its name (a
+configuration key).
 
 ## Series objective (HS-1) and raising
 

@@ -24,7 +24,10 @@ V1_MAIN = "4a1c51c671db5c5d89b23ec0dc1526449c2b0dcb"
 BASE = "afe2ebb9e79eba9661c6cfdae101570578d42475"
 # Checkpoint 2 (2026-10-31): budgeted seven-trick endgame, faster solver, series raise.
 C2 = "1b24987b40ec70605cd8b962a9f3537020d9fe59"
-HISTORICAL = {"old": OLD, "previous": COMPATIBLE_CORE, "v1base": V1_BASELINE, "v1": V1_MAIN, "base": BASE, "c2": C2}
+# Checkpoint 3 (2026-10-31): auction thresholds, exchange routes over 512 worlds, review fixes.
+C3 = "bb2f36cbbfb6e2280b93f96d6dddd3e094ccc461"
+HISTORICAL = {"old": OLD, "previous": COMPATIBLE_CORE, "v1base": V1_BASELINE, "v1": V1_MAIN, "base": BASE, "c2": C2,
+              "c3": C3}
 # Source-reviewed additive knowledge helpers; existing core algorithms unchanged.
 # Keep this exact anchor so any subsequent core change requires another review.
 COMPATIBLE_CORES = (
@@ -56,6 +59,7 @@ POLICIES = {
     "v1": f"Frozen published v1/main head, {V1_MAIN[:12]}",
     "base": f"Frozen v1/main with the deadline switch (reproducible baseline), {BASE[:12]}",
     "c2": f"Checkpoint 2: budgeted seven-trick endgame, faster solver, series raise, {C2[:12]}",
+    "c3": f"Checkpoint 3: auction thresholds, exchange routes over 512 worlds, {C3[:12]}",
     "hp1@FILE": "Current HP1 with the flat TOML overrides of FILE (parameter A/B variant)",
     "rev:COMMIT": "The heuristic, beliefs and solver frozen at a local COMMIT (shared core must be compatible)",
     "hp1-fast": "Current HP1 with continuation, return and endgame search disabled",

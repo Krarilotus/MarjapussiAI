@@ -27,6 +27,7 @@ marja-bench new previous new previous 4000 --seed 20261012
 | `v1` | `4a1c51c`: the published `v1/main` head, the 2026-10-31 hill-climb baseline. |
 | `base` | `afe2ebb`: `v1` with the deadline switch, reproducible under `--deadlines off`. |
 | `c2` | `1b24987`: checkpoint 2 (budgeted seven-trick endgame, faster solver, series raise). |
+| `c3` | `bb2f36c`: checkpoint 3 (auction thresholds, exchange routes over 512 worlds). |
 | `rev:COMMIT` | The heuristic, beliefs and solver of any local commit (shared core compatible). |
 | `hp1@FILE` | The current HP1 with the flat TOML overrides of `FILE`. |
 | `hp1-fast` | Current HP1 with return, continuation and endgame search disabled. |
