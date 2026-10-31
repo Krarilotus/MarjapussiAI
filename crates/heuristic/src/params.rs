@@ -68,6 +68,8 @@ params! {
 
     /// HZ-1: raise after the exchange by `contract_estimate` (the best expected contract score).
     estimated_raise: bool = true,
+    /// HZ-1: points the policy's own play adds to the human-fitted `contract_estimate`.
+    raise_estimate_shift: f32 = 0.0,
     /// The owner's hard time limits per decision (ms, 2026-10-31): each exchange step
     /// (Schieben), each bid, and each card play, question or answer (including the raise-or-lead
     /// choice after the exchange), respectively.
@@ -174,6 +176,9 @@ params! {
     seed: u64 = 0,
 }
 
+/// The largest shift of the raise estimate (points): a game's card points.
+const MAX_RAISE_SHIFT: f32 = 140.0;
+
 /// The largest racing margin in paired standard errors: beyond it no move is ever dropped.
 const MAX_RACE_Z: f32 = 10.0;
 
@@ -202,6 +207,11 @@ impl Params {
             if !(0.0..=1.0).contains(&p) {
                 return Err(HeuristicError::Params(format!("{name} must be finite and in [0, 1]")));
             }
+        }
+        if !self.raise_estimate_shift.is_finite() || self.raise_estimate_shift.abs() > MAX_RAISE_SHIFT {
+            return Err(HeuristicError::Params(format!(
+                "raise_estimate_shift must be finite and within ±{MAX_RAISE_SHIFT}"
+            )));
         }
         if !self.sample_temperature.is_finite() || self.sample_temperature < 0.0 {
             return Err(HeuristicError::Params(
