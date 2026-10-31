@@ -23,6 +23,14 @@ fn tell(s: &Scene) -> (Option<i32>, RuleId) {
     (bid_of(&d), d.rule)
 }
 
+/// B-quiet at the threshold the human-choice fit implies (`take_140_min = 0.5`).
+fn human_take() -> Params {
+    Params {
+        take_140_min: 0.5,
+        ..Params::default()
+    }
+}
+
 #[test]
 fn b_tell_red_pair_on_the_first_step_is_plus_20() {
     assert_eq!(tell(&Scene::new(0, &hand(&["r-K", "r-O"]))), (Some(135), RuleId::BTell));
@@ -78,7 +86,7 @@ fn b_quiet_runs_the_tie_break_with_strong_cards() {
     let strong = ["g-A", "g-Z", "g-K", "e-A", "e-Z", "s-A", "s-Z", "r-6", "r-7"];
     let mut s = Scene::new(2, &strong);
     s.auction(&[(0, Some(120)), (1, Some(130))]);
-    let d = s.act(&s.bid_legal());
+    let d = s.act_with(human_take(), &s.bid_legal());
     assert_eq!((bid_of(&d), d.rule), (Some(140), RuleId::BGate), "{:?}", d.why);
     assert!(d.why.iter().any(|f| f.key == "p_take_140" && f.value >= 0.5));
 }
@@ -275,11 +283,13 @@ fn tie_break_steps_with_a_pair_still_to_tell_and_the_partner_yet_to_call() {
 #[test]
 fn seed_42_s1_takes_the_game_at_140() {
     // C43b, the owner's seed-42 game: S1 told its ace (125), S3 +10 (135), nothing left to
-    // tell: p_take_140 ≈ 0.69 → 140 ([O] "should have gone for the 140 to take the game");
-    // without standing_potential (Eichel A Z U 9) it would be below 0.5.
+    // tell: p_take_140 ≈ 0.69 → 140 at the human-fitted threshold ([O] "should have gone for
+    // the 140 to take the game"); without standing_potential (Eichel A Z U 9) it would be below
+    // 0.5. The default threshold (0.8, measured stronger in self-play) passes here.
     let mut s = Scene::new(1, &["e-9", "g-K", "e-Z", "e-U", "s-K", "g-6", "g-U", "e-A", "r-Z"]);
     s.auction(&[(0, Some(120)), (1, Some(125)), (2, None), (3, Some(135)), (0, None)]);
-    let d = s.act(&s.bid_legal());
+    assert_eq!(bid_of(&s.act(&s.bid_legal())), None);
+    let d = s.act_with(human_take(), &s.bid_legal());
     let fact = |k: &str| d.why.iter().find(|f| f.key == k).map(|f| f.value);
     assert_eq!((bid_of(&d), d.rule), (Some(140), RuleId::BGate), "{:?}", d.why);
     let p = fact("p_take_140").unwrap();

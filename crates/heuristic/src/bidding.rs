@@ -587,8 +587,8 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
         }
     }
     // B-quiet with nothing left to tell (C43, C43b; owner on seed 42: "should have gone for the
-    // 140 to take the game"), while 140 is still open: over 140, else 140 if `p_take_140` ≥ 0.5
-    // (the real alternative here is the pass), else pass.
+    // 140 to take the game"), while 140 is still open: over 140, else 140 if `p_take_140` reaches
+    // `Params::take_140_min` (the real alternative here is the pass), else pass.
     if tell.is_empty() && v < PAIR_LINE {
         let t = TieBreak {
             class,
