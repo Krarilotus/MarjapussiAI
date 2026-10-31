@@ -601,7 +601,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
         if let Some(d) = over_140(ctx, legal, &t, &mut why) {
             return d;
         }
-        if p_take_140(ctx, class, v, mate, &mut why) >= 0.5 {
+        if p_take_140(ctx, class, v, mate, &mut why) >= ctx.params.take_140_min {
             if let Some(a) = find(legal, Some(PAIR_LINE)) {
                 return decision(a, RuleId::BGate, why);
             }

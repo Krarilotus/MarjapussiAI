@@ -60,6 +60,9 @@ params! {
     /// Pass-back plan: minimum P(partner holds a half of the suit) to favour my single half.
     partner_half_conf: f32 = 0.5,
 
+    /// B-quiet: take the game at 140 (nothing left to tell) from this fitted P(take).
+    take_140_min: f32 = 0.5,
+
     /// HZ-1: raise after the exchange by `contract_estimate` (the best expected contract score).
     estimated_raise: bool = true,
     /// The owner's hard time limits per decision (ms, 2026-10-31): each exchange step
@@ -191,6 +194,7 @@ impl Params {
             ("partner_pair_min", self.partner_pair_min),
             ("partner_lead_conf", self.partner_lead_conf),
             ("half_question_min", self.half_question_min),
+            ("take_140_min", self.take_140_min),
         ] {
             if !(0.0..=1.0).contains(&p) {
                 return Err(HeuristicError::Params(format!("{name} must be finite and in [0, 1]")));
