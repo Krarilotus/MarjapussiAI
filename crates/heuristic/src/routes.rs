@@ -11,17 +11,19 @@ use crate::{Ctx, Rng};
 /// The partner's raise read into a deal (D1): its likelihood given the partner's hand at that
 /// decision, its current cards and those it played since. The one reader of that evidence for
 /// every consumer of believed deals (the route worlds and the endgame's weights).
-pub(crate) struct RaiseEvidence<'a> {
-    ctx: &'a Ctx<'a>,
-    raise: Option<RaiseObservation>,
+pub(crate) struct RaiseEvidence {
+    /// The partner's raise and the cards it has played since.
+    raise: Option<(RaiseObservation, engine::CardSet)>,
     floor: f32,
 }
 
-impl<'a> RaiseEvidence<'a> {
-    pub fn new(ctx: &'a Ctx<'a>) -> Self {
+impl RaiseEvidence {
+    pub fn new(ctx: &Ctx) -> Self {
         RaiseEvidence {
-            ctx,
-            raise: crate::raising::partner_raise(ctx),
+            raise: crate::raising::partner_raise(ctx).map(|r| {
+                let played = ctx.k.played_by(r.raiser);
+                (r, played)
+            }),
             floor: ctx.mind.params().conventions.convention_floor,
         }
     }
@@ -31,8 +33,8 @@ impl<'a> RaiseEvidence<'a> {
     }
 
     pub fn likelihood(&self, hands: &Hands) -> f64 {
-        self.raise.as_ref().map_or(1.0, |r| {
-            r.likelihood(hands[r.raiser as usize] | self.ctx.k.played_by(r.raiser), self.floor)
+        self.raise.as_ref().map_or(1.0, |(r, played)| {
+            r.likelihood(hands[r.raiser as usize] | *played, self.floor)
         })
     }
 }
@@ -40,7 +42,7 @@ impl<'a> RaiseEvidence<'a> {
 /// The deal weights of the Mind times the raise evidence.
 pub(crate) struct WithRaise<'a, B: Belief> {
     pub base: &'a B,
-    pub raise: &'a RaiseEvidence<'a>,
+    pub raise: &'a RaiseEvidence,
 }
 
 impl<B: Belief> Belief for WithRaise<'_, B> {

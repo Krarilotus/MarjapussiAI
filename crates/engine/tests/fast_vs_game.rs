@@ -178,3 +178,29 @@ fn from_parts_rejects_impossible_states() {
     p.public.trick[0] = p.hands[0].iter().next().unwrap();
     assert!(FastState::from_parts(p).is_err(), "card both in trick and hand");
 }
+
+#[test]
+fn question_activates_iff_a_truthful_answer_changes_trump() {
+    let mut questions = 0u64;
+    for seed in 0..1_000 {
+        let mut rng = StdRng::seed_from_u64(3_000_000 + seed);
+        let mut game = new_game(&mut rng);
+        while !game.ended() {
+            if let Some(s) = FastState::from_game(&game) {
+                for m in s.moves() {
+                    let Move::Question(q) = m else { continue };
+                    let asked = s.after(m);
+                    let simulated = asked.moves().any(|a| {
+                        let answered = asked.after(a);
+                        answered.trump() != s.trump() || answered.called() != s.called()
+                    });
+                    assert_eq!(s.question_activates(q), simulated, "seed {seed}: {q:?} in {s:?}");
+                    questions += 1;
+                }
+            }
+            let action = pick(&game, &mut rng);
+            game.apply_action_mut(action);
+        }
+    }
+    assert!(questions > 1_000, "the games must exercise questions: {questions}");
+}

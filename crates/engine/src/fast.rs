@@ -415,13 +415,19 @@ impl FastState {
     /// pair); otherwise asking only spends the asker's right.
     #[inline]
     pub fn question_activates(&self, question: QuestionType) -> bool {
-        let asker = self.hand(self.leader);
-        question_answers(self.hand(bits::partner(self.leader)), self.called, question).any(|answer| match answer {
-            AnswerType::YesPair(s) | AnswerType::YesHalf(s) => {
-                answer_trump(asker, answer, self.called >> s as u8 & 1 != 0).is_some()
-            }
+        question_answers(self.hand(bits::partner(self.leader)), self.called, question)
+            .any(|answer| self.answer_makes_trump(answer).is_some())
+    }
+
+    /// The trump the leader's partner establishes with `answer` (an uncalled suit whose halves
+    /// the team completes), if any: the one rule of `answer` and `question_activates`.
+    #[inline]
+    fn answer_makes_trump(&self, answer: AnswerType) -> Option<Suit> {
+        let already_called = match answer {
+            AnswerType::YesPair(suit) | AnswerType::YesHalf(suit) => self.called >> suit as u8 & 1 != 0,
             _ => false,
-        })
+        };
+        answer_trump(self.hand(self.leader), answer, already_called)
     }
 
     /// Legal announcements/questions/answers first, then cards. No hidden-hand pruning here.
@@ -504,11 +510,7 @@ impl FastState {
     #[inline]
     fn answer(&mut self, answer: AnswerType) {
         debug_assert!(self.moves().any(|m| m == Move::Answer(answer)), "illegal answer");
-        let already_called = match answer {
-            AnswerType::YesPair(suit) | AnswerType::YesHalf(suit) => self.called >> suit as u8 & 1 != 0,
-            _ => false,
-        };
-        if let Some(suit) = answer_trump(self.hand(self.leader), answer, already_called) {
+        if let Some(suit) = self.answer_makes_trump(answer) {
             self.pair_points[(self.leader & 1) as usize] +=
                 trump_points(suit, self.called >> suit as u8 & 1 != 0) as i16;
             self.trump = suit as u8;

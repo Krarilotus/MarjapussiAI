@@ -626,11 +626,8 @@ impl<K: Copy + PartialEq> WorldValues<K> {
     /// difference's expectation exceeds twice its standard error (effective sample size
     /// 1 / Σp²). Below that, the plan layer has no evidence against the rule it would overrule.
     pub fn clearly_better(&self, a: usize, b: usize) -> bool {
-        let d: Vec<f64> = self.values[a].iter().zip(&self.values[b]).map(|(x, y)| x - y).collect();
-        let mean: f64 = d.iter().zip(&self.p).map(|(x, p)| x * p).sum();
-        let var: f64 = d.iter().zip(&self.p).map(|(x, p)| p * (x - mean).powi(2)).sum();
-        let n = 1.0 / self.p.iter().map(|p| p * p).sum::<f64>();
-        mean > 2.0 * (var / n).sqrt()
+        let (gap, se) = solver::paired_gap(&self.values[a], &self.values[b], &self.p);
+        gap > 2.0 * se
     }
 }
 

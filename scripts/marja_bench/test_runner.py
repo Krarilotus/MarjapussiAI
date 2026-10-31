@@ -34,6 +34,19 @@ ARTIFACTS = ("report.md", "report.html", "games.csv", "summary.json")
 
 
 class RunnerTests(unittest.TestCase):
+    def test_variants_are_frozen_into_the_run_folder_by_absolute_name(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "eg7.toml"
+            source.write_text("endgame_tricks = 7\n")
+            out = root / "run"
+            out.mkdir()
+            names = runner.freeze_variants([f"hp1@{source}", "base", f"hp1@{source}", "base"], out)
+            copy = out / "variants" / "0-eg7.toml"
+            self.assertEqual(names, [f"hp1@{copy.as_posix()}", "base"] * 2)
+            source.write_text("endgame_tricks = 4\n")
+            self.assertEqual(copy.read_text(), "endgame_tricks = 7\n")
+
     def test_cache_lock_cannot_also_be_the_outer_resource_lock(self):
         with tempfile.TemporaryDirectory() as directory:
             cache = Path(directory) / "cache"

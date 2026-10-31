@@ -519,7 +519,7 @@ fn a_node_limit_that_cannot_reach_the_required_worlds_stops_early() {
             nodes: Some(1_000_000),
         },
         racing: None,
-        required,
+        min_worlds: required,
     };
     let mut solver = Solver::new();
     let run = |solver: &mut Solver, required| {

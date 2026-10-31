@@ -21,7 +21,8 @@ use crate::rules::RuleId;
 use crate::valuation::{Choice, Valuation};
 use crate::{decision, fact, Ctx, Decision, Rng};
 
-/// Transposition table of the endgame solver: 2^16 entries (2.6 MB) suffice for 4 tricks.
+/// Transposition table of the endgame solver: 2^16 entries (2.6 MB). Larger tables saved few
+/// nodes at seven tricks (3.63M against 3.52M at 2^22) and cost more per node (2026-10-31).
 const TT_BITS: u32 = 16;
 /// The endgame search's own wall-clock share of a play decision under deadlines (ms): the
 /// logical limit `Params::endgame_nodes` normally ends it first; the rest of the play limit
@@ -69,6 +70,9 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
     };
     let mut slot = ctx.solver.borrow_mut();
     let solver = slot.get_or_insert_with(|| Solver::with_tt_bits(TT_BITS));
+    // Each decision starts from an empty table: its node counts, and so the worlds a node limit
+    // completes, depend on this view alone, not on the agent's earlier searches.
+    solver.clear();
     let mut rng = Rng::new(ctx.seed);
     let min_worlds = ctx.params.endgame_min_worlds.min(ctx.params.endgame_worlds) as usize;
     let evaluated = {
@@ -91,17 +95,19 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
                 z: ctx.params.endgame_race_z as f64,
             }),
             // A search that cannot reach the minimum stops early and leaves the time to the rules.
-            required: min_worlds,
+            min_worlds,
         };
         evaluate_moves(solver, k, &table, objective, &belief, &mut rng, effort, keep).ok()
     };
     // A complete evaluation decides even with fewer consistent deals than the minimum.
-    let d = evaluated.filter(|d| d.complete || d.worlds >= min_worlds)?;
-    // An incomplete evaluation stopped at the clock only if the deadline has passed; otherwise
-    // the node limit (`Params::endgame_nodes`) ended it, deterministically.
-    if !d.complete && deadline.is_some_and(|d| Instant::now() >= d) {
+    let decided = evaluated.filter(|e| e.complete || e.worlds >= min_worlds);
+    // An unfinished search (a partial result, or the rules deciding instead) was stopped by the
+    // clock only if the deadline has passed; otherwise the node limit
+    // (`Params::endgame_nodes`) ended it, deterministically.
+    if deadline.is_some_and(|at| Instant::now() >= at) && decided.as_ref().is_none_or(|e| !e.complete) {
         ctx.deadline_hit.set(true);
     }
+    let d = decided?;
     let unavailable = || None;
     let Some(mut best) = d.best() else { return unavailable() };
     let means = |m: Move| d.moves.iter().find(|v| v.mv == m).map(|v| v.means.clone());

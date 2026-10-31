@@ -16,7 +16,7 @@ use std::sync::OnceLock;
 
 /// One game's engine scores (team A, team B), rounded to 20 points, and how often they occurred:
 /// `base` against itself, 2,500 deals in 625 series each played twice (deal seed 1), both team
-/// orders counted. Regenerate with `series_table.py` from such a run's NDJSON.
+/// orders counted. Regenerate with `scripts/marja_bench/series_table.py RUN_DIR` from such a run.
 #[rustfmt::skip]
 const GAME_SCORES: [(i16, i16, u16); 213] = [
     (-280, 140, 460), (140, -280, 460), (40, 140, 444), (140, 40, 444), (20, 140, 404), (140, 20, 404),
@@ -64,6 +64,12 @@ const MAX_LATER: usize = 3;
 struct BonusOdds {
     side: usize,
     odds: Vec<[f64; 2]>,
+}
+
+/// Builds the bonus race's table now (about 60 ms once per process), so no timed decision pays
+/// for it.
+pub(crate) fn prepare() {
+    BonusOdds::get();
 }
 
 impl BonusOdds {
@@ -169,15 +175,20 @@ impl SeriesStakes {
             let r = tally.result();
             return (r.total[us] - r.total[them]) as f64;
         }
-        // Later games are symmetric: the totals' difference stands, with its share at the end.
+        // Later games are symmetric: the totals stand, scored by the round's rules at its end,
+        // with the bonus as the race decides it.
         let t = tally.totals();
-        let linear = (t[us] - t[them]) as f64 * (1.0 + 2.0 / settings.diff_divisor as f64);
-        let bonus = 2.0 * settings.bonus_value as f64;
-        let odds = match tally.bonus_team() {
-            Some(b) => [(b == 0) as u8 as f64, (b == 1) as u8 as f64],
-            None => BonusOdds::get().at(left as usize - 1, t),
+        let end = |bonus: Option<u8>| {
+            let r = SeriesTally::resume(settings, t, 0, bonus).result();
+            (r.total[us] - r.total[them]) as f64
         };
-        linear + bonus * (odds[us] - odds[them])
+        match tally.bonus_team() {
+            Some(b) => end(Some(b)),
+            None => {
+                let odds = BonusOdds::get().at(left as usize - 1, t);
+                odds[0] * end(Some(0)) + odds[1] * end(Some(1)) + (1.0 - odds[0] - odds[1]) * end(None)
+            }
+        }
     }
 }
 

@@ -128,3 +128,16 @@ fn operation_stream_matches_physical_clear_reference() {
         }
     }
 }
+
+#[test]
+fn packed_ranks_are_no_pair_halves() {
+    // The key packs the lowest ZERO_POINT_RANKS of each suit; none of them may be a King or
+    // Ober (a pair half), whose identity the play depends on beyond its order.
+    for suit in SUITS {
+        for rank in 0..ZERO_POINT_RANKS {
+            let card = suit as u8 * SUIT_CARDS + rank;
+            assert!(!engine::CardSet::halves(suit).contains(card), "{suit:?} rank {rank}");
+            assert_eq!(CARD_POINTS[card as usize], 0);
+        }
+    }
+}

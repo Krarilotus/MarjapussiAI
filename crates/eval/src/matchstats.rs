@@ -154,8 +154,7 @@ impl MatchStats {
             team_points: points.total(),
             card_points: points.cards,
             pair_points: points.pairs,
-            card_point_ceiling: engine::CARD_POINTS.iter().map(|&p| i32::from(p)).sum::<i32>()
-                + engine::LAST_TRICK_BONUS,
+            card_point_ceiling: engine::CARD_POINTS_TOTAL,
             pair_point_ceiling: engine::PAIR_POINTS.iter().sum(),
             tricks: points.tricks,
             contract,

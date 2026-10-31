@@ -249,8 +249,9 @@ def _prepare_locked(repo, cache, requested, log_path):
     dependencies = "\n".join(
         f'{name} = {{ package = "marjapussi-{name}", path = {json.dumps((repo / "crates" / name).as_posix())} }}'
         for name in ("tools", "agent", "heuristic"))
-    for name, source in historical_sources.items():
-        dependencies += (f'\n{aliases[name]} = {{ package = "marjapussi-heuristic-{aliases[name]}", '
+    # Several names of one commit (`rev:abc`, `rev:abcdef`) share its frozen crate.
+    for alias, source in {aliases[name]: source for name, source in historical_sources.items()}.items():
+        dependencies += (f'\n{alias} = {{ package = "marjapussi-heuristic-{alias}", '
                          f'path = {json.dumps((source / "crates/heuristic").as_posix())} }}')
     cargo = f'''[package]
 name = "marja-selfplay"
@@ -272,7 +273,7 @@ panic = "abort"
         shutil.copy2(repo / "Cargo.lock", harness / "Cargo.lock")
     historical = "".join(f'''
     policies.push(Policy {{
-        name: "{name}".into(), parameters: format!("{{:?}}; effective seed supplied by worker; see policy_seed", {alias}::Params::default()),
+        name: {json.dumps(name)}.into(), parameters: format!("{{:?}}; effective seed supplied by worker; see policy_seed", {alias}::Params::default()),
         make: Box::new(|setup: Setup| {{
             let mut p = {alias}::Params {{ seed: setup.seed, ..{alias}::Params::default() }};
             {without_deadlines(source / "crates/heuristic/src/params.rs")}

@@ -13,7 +13,6 @@ use crate::rules::RuleId;
 use crate::series::SeriesStakes;
 use crate::{decision, fact, leads, play, Ctx, Decision};
 
-
 struct Certificate {
     suit: Suit,
     side: CardSet,
@@ -202,6 +201,21 @@ pub(crate) struct Hz1 {
     pub cap: i32,
 }
 
+/// The engine scores (ours, theirs) when our team plays a contract at `value` and ends with
+/// `points`, its announced `pairs` among them, the defenders taking the other card points. Both
+/// teams take a trick: the estimate does not forecast schwarz.
+fn contract_scores(value: i32, points: i32, pairs: i32) -> (i32, i32) {
+    let total = engine::CARD_POINTS_TOTAL;
+    let outcome = engine::GameOutcome {
+        playing_team: Some(0),
+        game_value: value,
+        team_points: [points, (total - (points - pairs)).clamp(0, total)],
+        team_tricks: [1, engine::TRICKS - 1],
+    };
+    let scores = engine::game_scores(&outcome, engine::SCHWARZ_FACTOR_FIFTHS);
+    (scores[0], scores[1])
+}
+
 pub(crate) fn hz1(hand: CardSet, given: CardSet, value: i32, stakes: &SeriesStakes) -> Hz1 {
     let own_pairs: i32 = hand.pair_suits().map(beliefs::conventions::pair_value).sum();
     let given_pairs: i32 = given.pair_suits().map(beliefs::conventions::pair_value).sum();
@@ -212,24 +226,28 @@ pub(crate) fn hz1(hand: CardSet, given: CardSet, value: i32, stakes: &SeriesStak
     };
     let t = &TEAM_POINTS;
     let estimate = contract_estimate(hand, own_pairs, given_pairs as f32);
-    // The contract's series worth relative to scoring nothing, with the defenders' points at
-    // the rest of the estimate (HS-1); outside a round, (2 P(make) - 1) x value.
-    let total = engine::CARD_POINTS_TOTAL;
-    let theirs = engine::round5((total - estimate.round() as i32).clamp(0, total));
-    let worth = |ours: i32| (stakes.worth_of(ours, theirs) - stakes.worth_of(0, theirs)) as f32;
+    // The contract's series worth (HS-1) when it is made with the estimate's points (at least
+    // the value) or fails with them (below it), the defenders taking the other card points.
+    let pairs = own_pairs + given_pairs;
+    let points = estimate.round() as i32;
+    let worth = |v: i32, points: i32| {
+        let (ours, theirs) = contract_scores(v, points, pairs);
+        stakes.worth_of(ours, theirs) as f32
+    };
     let score = |v: i32| {
         let p = t.p_reach(estimate, v);
-        p * worth(v) + (1.0 - p) * worth(-v)
+        p * worth(v, points.max(v)) + (1.0 - p) * worth(v, points.min(v - 1))
     };
     let keep = score(value);
     let best = engine::bid_range(engine::Points(value))
         .filter(|&v| v <= cap)
-        .max_by(|&a, &b| score(a).total_cmp(&score(b)).then(b.cmp(&a)))
-        .filter(|&v| score(v) > keep);
+        .map(|v| (v, score(v)))
+        .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
+        .filter(|&(_, s)| s > keep);
     Hz1 {
-        target: best.unwrap_or(value),
+        target: best.map_or(value, |b| b.0),
         estimate,
-        score: best.map_or(keep, score),
+        score: best.map_or(keep, |b| b.1),
         keep,
         cap,
     }

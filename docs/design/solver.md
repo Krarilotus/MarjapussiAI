@@ -28,11 +28,15 @@ final total. `reaches` checks a future-point threshold with a zero-window search
 `tricks` and `reaches_tricks` use the same search for trick counts.
 `move_values` includes every legal root action and its immediate gain.
 
-Search uses fail-soft alpha-beta, a static upper bound, move ordering and a
-fixed-size transposition table. The default table is 2^18 entries of 40 bytes
+Search uses fail-soft alpha-beta with principal-variation (zero-window) probes after the
+first move, a static upper bound, move ordering and a fixed-size transposition table. The
+bound is the card points not yet awarded (conserved through the search, so not summed per
+node), the last-trick bonus and the team's reachable uncalled pairs. The default table is 2^18 entries of 40 bytes
 (10 MiB); the heuristic agent uses 2^16 entries (2.5 MiB).
 
-At an empty trick, the key contains all hands, leader, trump, called suits,
+At an empty trick, the key contains all hands (the zero-point ranks 6–9 of each suit packed
+by their order and owner, scoring ranks literal; the stored best move is translated with
+them), leader, trump, called suits,
 **all three rights levels per player**, phase/pending question, team and measure.
 Existing points/tricks are path data; cached values describe the future.
 The hands determine how many tricks remain. Completed bounds survive between
@@ -85,7 +89,13 @@ A team with no trick gets a first-trick criterion when engine scoring penalises
 being trickless. The loss-fixed second pass runs only after all primary
 comparisons finish; if interrupted, retain the complete primary comparison.
 
-The agent keeps the four-card trigger and 64-world default, with a 45 ms search
+Since 2026-10-31 the agent searches from seven tricks left within one million solver nodes
+per decision (`solver::Effort`): a reach criterion is read from the same team's exact
+points instead of a second search; racing (`solver::Racing`) drops moves two paired
+standard errors behind after every eight worlds; a search whose nodes per world project past
+its limit before 16 worlds stops early and leaves the decision to the rules. Under live
+deadlines the search's own wall share is 65 ms. The rest of this section records the
+earlier four-card design. The agent kept the four-card trigger and 64-world default, with a 45 ms search
 deadline. It now also searches at question opportunities and multiple-answer
 choices. Known-negative repeat questions are excluded by agent policy, while
 remaining legal in the engine. Observations still update knowledge/beliefs
@@ -134,7 +144,9 @@ nine. Unlimited comparisons run only through six cards.
 
 ## Next boundaries
 
-Keep the four-card default until broader whole-agent tail measurements justify
+Measured 2026-10-31 (hill-climb log): an unbounded seven-trick search is worth about twice
+the budgeted one, so node cost and ordering remain the levers. The earlier advice was to keep
+the four-card default until broader whole-agent tail measurements justify
 extending it. Information-aware continuation policies, midgame/return planning,
 calibrated contract probabilities and GPU evaluation are separate checkpoints.
 The existing contract objective also remains an approximation to full series

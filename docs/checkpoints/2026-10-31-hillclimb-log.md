@@ -125,6 +125,24 @@ Both adopted thresholds deviate from an owner example at its stated threshold (t
 140 take; batch 1c's over-140 step). The tests keep those examples at the owner's
 thresholds and record that the defaults now pass or step instead.
 
+## Exchange routes (opponent: the checkpoint-3 candidate `0e441f7`)
+
+The return route (`return_run_route`, on) compared the store's choice only with returns that
+keep a top-controlled run; the forth route (`pass_route`) was off. Both evaluate candidates
+with the outlook's rollouts over the believed worlds, and the store's choice stands unless
+another is clearly better. The exchange step's limit is 5 s; these used at most 0.26 s.
+
+| Variant | Seeds | Points/game | Points/series | Max pass ms |
+|---|---|---|---|---:|
+| + the store's 4 best returns (`return_store_candidates`) | 1 / 2 | +2.27 / +2.39 | +17.96 / +17.68 | 17 |
+| + 8 | 1 / 2 | +2.41 / +3.57 | +17.34 / +27.21 | 39 |
+| + 16 | 1 / 2 | +2.90 / +3.71 | +19.11 / +26.99 | 66 |
+| + 32 | 1 / 2 | +4.03 / +4.81 | +28.33 / +32.68 | 152 |
+| + 8 and the forth route on | 1 / 2 | +3.65 / +4.87 | +26.23 / +35.90 | 88 |
+| + 32 and the forth route on | 1 / 2 | +5.29 / +5.99 | +36.34 / +41.73 | 144 |
+| + 32, forth route, + the store's 16 best passes forth | 1 / 2 | +5.36 / +6.11 | +37.72 / +43.83 | 167 |
+| + 64 and the forth route on | 1 | +5.97 | +40.65 | 257 |
+
 ## Series objective (HS-1) and raising
 
 | Variant | Points/game | Points/series | Cause |

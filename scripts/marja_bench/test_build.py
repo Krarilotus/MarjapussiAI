@@ -81,6 +81,21 @@ class FrozenSolverTests(unittest.TestCase):
             build.snapshot(self.repo, self.cache, build.COMPATIBLE_CORE, "previous")
 
 
+class FrozenPolicyNameTests(unittest.TestCase):
+    def test_revisions_and_historical_names_resolve_to_crate_aliases(self):
+        full = "0e441f7" + "0" * 33
+        def git(repo, *args):
+            self.assertEqual(args[:2], ("rev-parse", "--verify"))
+            return (full + "\n").encode()
+        with patch.object(build, "git", side_effect=git):
+            frozen = build.frozen_policies(Path("."), ["new", "rev:0e441f7", "base", "rev:0e441f7" + "0" * 3])
+        self.assertEqual(frozen["base"], ("base", build.BASE))
+        self.assertEqual(frozen["rev:0e441f7"], ("r" + full[:12], full))
+        # Two names of one commit share its crate alias.
+        self.assertEqual(frozen["rev:0e441f7000"][0], frozen["rev:0e441f7"][0])
+        self.assertNotIn("new", frozen)
+
+
 class BuildLifecycleTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

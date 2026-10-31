@@ -63,7 +63,8 @@ pub struct MoveValue {
 pub struct Decision {
     /// Most important first.
     pub criteria: Vec<Criterion>,
-    /// Every legal move, in `FastState::moves` order.
+    /// The compared moves in `FastState::moves` order: every legal move the caller kept, less
+    /// those racing dropped.
     pub moves: Vec<MoveValue>,
     pub worlds: usize,
     /// Every requested world was completed for every compared move/criterion.
@@ -125,26 +126,20 @@ impl std::error::Error for SolverError {}
 /// Whether the scoring (`game::scoring`) gives `team` less for taking no trick than for one,
 /// all else equal, in a made or a lost contract.
 fn trickless_costs(team: u8, playing_team: u8, game_value: i32) -> bool {
+    let s = playing_team & 1;
     [false, true].iter().any(|&made| {
+        let points = if made { game_value } else { 0 };
         let score = |tricks: u8| {
-            let mut o = GameOutcome {
-                playing_team: Some(playing_team),
-                game_value,
-                team_points: [0; 2],
-                team_tricks: [0; 2],
-            };
-            o.team_points[playing_team as usize] = if made { game_value } else { 0 };
-            o.team_tricks[team as usize] = tricks;
-            o.team_tricks[1 - team as usize] = TRICKS - tricks;
-            game_scores(&o, SCHWARZ_FACTOR_FIFTHS)[team as usize]
+            let playing_tricks = if team & 1 == s { tricks } else { TRICKS - tricks };
+            contract_game(s, game_value, points, playing_tricks)[team as usize & 1]
         };
         score(0) != score(1)
     })
 }
 
-/// `team`'s engine score margin (its score minus the other team's) in a contract game where the
-/// playing team ends with `points` and `tricks`, the other team with the rest of the cards.
-fn margin(team: u8, playing_team: u8, game_value: i32, points: i32, tricks: u8) -> f64 {
+/// The engine scores of a contract game where the playing team ends with `points` and
+/// `tricks`, the other team with the rest of the card points and tricks.
+fn contract_game(playing_team: u8, game_value: i32, points: i32, tricks: u8) -> [i32; 2] {
     let s = (playing_team & 1) as usize;
     let mut o = GameOutcome {
         playing_team: Some(playing_team & 1),
@@ -156,7 +151,12 @@ fn margin(team: u8, playing_team: u8, game_value: i32, points: i32, tricks: u8) 
     o.team_points[1 - s] = (CARD_POINTS_TOTAL - points).max(0);
     o.team_tricks[s] = tricks;
     o.team_tricks[1 - s] = TRICKS - tricks;
-    let scores = game_scores(&o, SCHWARZ_FACTOR_FIFTHS);
+    game_scores(&o, SCHWARZ_FACTOR_FIFTHS)
+}
+
+/// `team`'s engine score margin (its score minus the other team's) in that game.
+fn margin(team: u8, playing_team: u8, game_value: i32, points: i32, tricks: u8) -> f64 {
+    let scores = contract_game(playing_team, game_value, points, tricks);
     (scores[team as usize & 1] - scores[1 - (team as usize & 1)]) as f64
 }
 
@@ -210,17 +210,25 @@ impl Racing {
         else {
             return;
         };
-        let n = 1.0 / p.iter().map(|p| p * p).sum::<f64>();
         let rivals: Vec<usize> = (0..active.len()).filter(|&i| active[i] && i != leader).collect();
         for i in rivals {
-            let d: Vec<f64> = margins[leader].iter().zip(&margins[i]).map(|(a, b)| a - b).collect();
-            let gap: f64 = d.iter().zip(p).map(|(d, p)| d * p).sum();
-            let var: f64 = d.iter().zip(p).map(|(d, p)| p * (d - gap).powi(2)).sum();
-            if gap > TIE && gap > self.z * (var / n).sqrt() {
+            let (gap, se) = paired_gap(&margins[leader], &margins[i], p);
+            if gap > TIE && gap > self.z * se {
                 active[i] = false;
             }
         }
     }
+}
+
+/// The weighted mean of the paired differences `a − b` over worlds of probabilities `p`, and its
+/// standard error with the weights' effective sample size 1 / Σp²: one owner of the
+/// "clearly better" comparisons over shared worlds.
+pub fn paired_gap(a: &[f64], b: &[f64], p: &[f64]) -> (f64, f64) {
+    let d: Vec<f64> = a.iter().zip(b).map(|(x, y)| x - y).collect();
+    let gap: f64 = d.iter().zip(p).map(|(d, p)| d * p).sum();
+    let var: f64 = d.iter().zip(p).map(|(d, p)| p * (d - gap).powi(2)).sum();
+    let n = 1.0 / p.iter().map(|p| p * p).sum::<f64>();
+    (gap, (var / n).sqrt())
 }
 
 fn criteria(objective: Objective, table: &PublicState, me: u8) -> Vec<Criterion> {
@@ -358,7 +366,7 @@ pub fn evaluate_limited<R: RngCore + ?Sized, B: Belief + ?Sized>(
         worlds,
         limits,
         racing: None,
-        required: 0,
+        min_worlds: 0,
     };
     evaluate_moves(solver, knowledge, table, objective, belief, rng, effort, |_| true)
 }
@@ -374,14 +382,15 @@ pub struct Effort {
     /// Under a node limit, the fewest worlds worth completing: once the nodes per completed
     /// world project past the limit before that many, the evaluation stops (`Interrupted`) and
     /// leaves the rest of the decision's time to the caller.
-    pub required: usize,
+    pub min_worlds: usize,
 }
 
-/// Completed worlds before the node projection of `Effort::required` is trusted.
+/// Completed worlds before the node projection of `Effort::min_worlds` is trusted.
 const PROJECTION_WORLDS: usize = 2;
 
 /// `evaluate_limited` over the legal moves the caller keeps (`keep`): a root policy filter.
-/// The kept moves' values are those of the full evaluation; the others are not searched.
+/// The others are not searched, and the declarers' loss-fixed pass (HC-9) judges "no move can
+/// make it" from the compared moves only, as it does after racing drops moves.
 pub fn evaluate_moves<R: RngCore + ?Sized, B: Belief + ?Sized>(
     solver: &mut Solver,
     knowledge: &Knowledge,
@@ -396,7 +405,7 @@ pub fn evaluate_moves<R: RngCore + ?Sized, B: Belief + ?Sized>(
         worlds,
         limits,
         racing,
-        required,
+        min_worlds,
     } = effort;
     let budget = Budget::new(limits, solver);
     if budget.stopped(solver) {
@@ -494,8 +503,11 @@ pub fn evaluate_moves<R: RngCore + ?Sized, B: Belief + ?Sized>(
         weight += w;
         weight_sq += w * w;
         world_weights.push(*w);
-        let required = required.min(states.len());
-        if let Some(limit) = budget.nodes().filter(|_| completed >= PROJECTION_WORLDS && completed < required) {
+        let required = min_worlds.min(states.len());
+        if let Some(limit) = budget
+            .nodes()
+            .filter(|_| completed >= PROJECTION_WORLDS && completed < required)
+        {
             if budget.used(solver) as u128 * required as u128 > limit as u128 * completed as u128 {
                 return Err(SolverError::Interrupted);
             }
@@ -514,6 +526,7 @@ pub fn evaluate_moves<R: RngCore + ?Sized, B: Belief + ?Sized>(
         }
     }
     // A dropped move's means cover only the worlds before it left the race: it is not compared.
+    let dropped = active.iter().any(|&on| !on);
     let mut kept = active.iter();
     values.retain(|_| *kept.next().unwrap_or(&true));
     let moves: Vec<Move> = values.iter().map(|v| v.mv).collect();
@@ -568,7 +581,7 @@ pub fn evaluate_moves<R: RngCore + ?Sized, B: Belief + ?Sized>(
         moves: values,
         worlds: completed,
         complete,
-        all_deals: exact && complete,
+        all_deals: exact && complete && !dropped,
         ess: weight * weight / weight_sq,
     })
 }

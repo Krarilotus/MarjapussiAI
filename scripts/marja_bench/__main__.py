@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import queue
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -129,6 +130,25 @@ def report_existing(directory, lock):
 
 
 SERIES_GAMES = 4  # The worker's series: the site's four-game tournament round.
+
+
+VARIANT_PREFIX = "hp1@"
+
+
+def freeze_variants(policies, out):
+    """Copy each `hp1@FILE` variant into the run folder and name it by that absolute copy.
+
+    Workers run from the repository root and read the file when they start, so a relative
+    path or a file edited during the run would otherwise not be the manifest's parameters.
+    """
+    copies = {}
+    for name in dict.fromkeys(p for p in policies if p.startswith(VARIANT_PREFIX)):
+        source = Path(name[len(VARIANT_PREFIX):]).resolve()
+        target = out / "variants" / f"{len(copies)}-{source.name}"
+        target.parent.mkdir(exist_ok=True)
+        shutil.copyfile(source, target)
+        copies[name] = VARIANT_PREFIX + target.as_posix()
+    return [copies.get(p, p) for p in policies]
 
 
 def rotation_metadata(games, rotation):
@@ -311,7 +331,8 @@ def main():
     if a.workers > rotations.get("series", rotations["distinct_deals"]):
         p.error("use no more workers than distinct deals (series in series rotation)")
     unknown = {p for p in set(a.policies) - set(POLICIES) - {"hp1"}
-               if not (p.startswith("hp1@") and Path(p[4:]).is_file()) and not p.startswith(REVISION_PREFIX)}
+               if not (p.startswith(VARIANT_PREFIX) and Path(p[len(VARIANT_PREFIX):]).is_file())
+               and not p.startswith(REVISION_PREFIX)}
     if unknown:
         p.error(f"unknown policies: {', '.join(sorted(unknown))}; use --list-policies")
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -323,6 +344,7 @@ def main():
         if a.workers > len(resources.cores):
             print("Note: more workers than allocated physical cores; latency and deadline fallbacks can change.", flush=True)
         a.out.mkdir(parents=True, exist_ok=False)
+        a.policies = freeze_variants(a.policies, a.out)
         print(f"Preparing release worker (cached builds are reused). Results: {a.out}", flush=True)
         binary, build = prepare(ROOT, a.cache, a.policies, a.out / "build.log")
         manifest = {"schema": "marjapussi.benchmark/1", "status": "prepared", "policies": a.policies,
@@ -337,8 +359,9 @@ def main():
                     "primary_metric": "engine score difference per game, team slots0/2 minus slots1/3",
                     "uncertainty": "deal-clustered approximate normal interval",
                     "ceilings": "card+last-trick140, pairs280; scoring ceilings, not attainability"}
-        manifest["variants"] = {p: {"path": p[4:], "toml": Path(p[4:]).read_text(encoding="utf-8")}
-                                for p in sorted(set(a.policies)) if p.startswith("hp1@")}
+        manifest["variants"] = {p: {"path": p[len(VARIANT_PREFIX):],
+                                    "toml": Path(p[len(VARIANT_PREFIX):]).read_text(encoding="utf-8")}
+                                for p in sorted(set(a.policies)) if p.startswith(VARIANT_PREFIX)}
         save_manifest(a.out, manifest)
         if a.prepare:
             print(f"Ready: {binary}")

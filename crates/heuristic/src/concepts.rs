@@ -248,12 +248,14 @@ mod tests {
         reads.completed_continuation(query, CONTINUATION_STEPS, score);
         assert_eq!(reads.continuation_score(&query), Some(score));
         assert_eq!(Reads::default().continuation_score(&query), None);
-        let mut variants = [query; 5];
+        let mut variants = [query; 6];
         variants[0].world.swap(1, 3);
         variants[1].phase = PlayPhase::Start;
         variants[2].action = Move::Card(1);
         variants[3].plan.actor = 2;
         variants[4].plan.steps[1] = ActivationStep::Ask;
+        // A query starting mid-plan keys on its exact plan.
+        variants[5].plan.next = 1;
         for other in variants {
             assert_eq!(reads.continuation_score(&other), None);
         }

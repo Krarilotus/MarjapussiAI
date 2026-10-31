@@ -1,19 +1,36 @@
 //! Transposition table for trick starts: bounds on a team's future points, keyed by the
 //! position. Points and tricks so far are path data and stay out of the key.
 
-use engine::{FastState, CARDS, SUITS};
+use engine::{FastState, CARDS, CARD_POINTS, SUITS, VALUES};
 
-// Only 6/7/8/9 have equal point values and no pair role. Delete gaps among
-// these ranks while preserving their order and owner. Scoring ranks stay literal.
-const PACK_LOW: [[u8; 16]; 16] = {
-    let mut table = [[0; 16]; 16];
+/// Cards per suit in the engine's index layout (`Card::index` = suit × 9 + rank).
+const SUIT_CARDS: u8 = VALUES.len() as u8;
+/// The lowest ranks of a suit (6, 7, 8, 9): no points and no pair role, so a position only
+/// depends on their order and owners. Gaps among them are deleted; scoring ranks stay literal.
+const ZERO_POINT_RANKS: u8 = 4;
+/// Their bits within a suit's nine.
+const LOW: u64 = (1 << ZERO_POINT_RANKS) - 1;
+const LOW_SETS: usize = 1 << ZERO_POINT_RANKS;
+
+// The packing is only exact while those ranks score nothing (pair halves are checked in tests).
+const _: () = {
+    let mut card = 0;
+    while card < CARDS {
+        assert!(card % SUIT_CARDS as usize >= ZERO_POINT_RANKS as usize || CARD_POINTS[card] == 0);
+        card += 1;
+    }
+};
+
+/// Per set of live low ranks, each hand's low ranks with the gaps among the live ones deleted.
+const PACK_LOW: [[u8; LOW_SETS]; LOW_SETS] = {
+    let mut table = [[0; LOW_SETS]; LOW_SETS];
     let mut live = 0;
-    while live < 16 {
+    while live < LOW_SETS {
         let mut hand = 0;
-        while hand < 16 {
+        while hand < LOW_SETS {
             let mut rank = 0;
             let mut to = 0;
-            while rank < 4 {
+            while rank < ZERO_POINT_RANKS {
                 if live & (1 << rank) != 0 {
                     if hand & (1 << rank) != 0 {
                         table[live][hand] |= 1 << to;
@@ -43,14 +60,14 @@ impl Key {
         let mut h = s.hands().map(|h| h.0);
         let live = s.in_hands().0;
         for suit in SUITS {
-            let shift = suit as u8 * 9;
-            let ranks = (live >> shift & 15) as usize;
+            let shift = suit as u8 * SUIT_CARDS;
+            let ranks = (live >> shift & LOW) as usize;
             if ranks & (ranks + 1) == 0 {
                 continue; // Already packed (including an empty suit).
             }
             for hand in &mut h {
-                let packed = PACK_LOW[ranks][(*hand >> shift & 15) as usize] as u64;
-                *hand = (*hand & !(15 << shift)) | packed << shift;
+                let packed = PACK_LOW[ranks][(*hand >> shift & LOW) as usize] as u64;
+                *hand = (*hand & !(LOW << shift)) | packed << shift;
             }
         }
         let meta = team as u64
@@ -66,21 +83,21 @@ impl Key {
     /// Translate the ordering hint along with the zero-point rank abstraction.
     #[inline]
     pub(crate) fn encode_move(s: &FastState, code: u8) -> u8 {
-        if code >= CARDS as u8 || code % 9 >= 4 {
+        if code >= CARDS as u8 || code % SUIT_CARDS >= ZERO_POINT_RANKS {
             return code;
         }
-        let base = code / 9 * 9;
-        base + ((s.in_hands().0 >> base & 15) & ((1 << (code - base)) - 1)).count_ones() as u8
+        let base = code / SUIT_CARDS * SUIT_CARDS;
+        base + ((s.in_hands().0 >> base & LOW) & ((1 << (code - base)) - 1)).count_ones() as u8
     }
 
     #[inline]
     pub(crate) fn decode_move(s: &FastState, code: u8) -> u8 {
-        if code >= CARDS as u8 || code % 9 >= 4 {
+        if code >= CARDS as u8 || code % SUIT_CARDS >= ZERO_POINT_RANKS {
             return code;
         }
-        let base = code / 9 * 9;
-        let mut ranks = s.in_hands().0 >> base & 15;
-        for _ in 0..code % 9 {
+        let base = code / SUIT_CARDS * SUIT_CARDS;
+        let mut ranks = s.in_hands().0 >> base & LOW;
+        for _ in 0..code % SUIT_CARDS {
             ranks &= ranks - 1;
         }
         base + ranks.trailing_zeros() as u8

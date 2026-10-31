@@ -167,6 +167,7 @@ params! {
     /// Racing in the endgame (`solver::Racing`, every `endgame_race_batch` worlds): moves
     /// trailing the leader by more than this many paired standard errors are dropped (0: off).
     endgame_race_z: f32 = 2.0,
+    /// The worlds between two racing rounds (at least 1).
     endgame_race_batch: u32 = 8,
 
     // Card play (§6.0, §7): the valuation (C25)
@@ -185,7 +186,7 @@ params! {
     seed: u64 = 0,
 }
 
-/// The largest racing margin in paired standard errors: beyond it no move is ever dropped.
+/// The largest accepted racing margin, in paired standard errors.
 const MAX_RACE_Z: f32 = 10.0;
 
 /// How a scored choice becomes an action (C10/C11): the benchmark takes the best option.
