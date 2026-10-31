@@ -499,3 +499,50 @@ fn interrupted_evaluation_compares_only_completed_worlds_and_preserves_cache_bou
     .unwrap();
     assert_eq!(resumed, full, "interruption must not cache unfinished work as exact");
 }
+
+#[test]
+fn a_node_limit_that_cannot_reach_the_required_worlds_stops_early() {
+    use solver::{evaluate_moves, Effort, Limits, SolverError};
+    let mut rng = StdRng::seed_from_u64(11);
+    let mut game = game_from(&deal(&mut rng));
+    while !is_decision(&game, 7) {
+        let action = random_action(&game, &mut rng);
+        game.apply_action_mut(action);
+    }
+    let me = game.state.player_at_turn.0;
+    let k = knowledge_of(&game, me);
+    let table = FastState::from_game(&game).unwrap().public();
+    let effort = |required| Effort {
+        worlds: 64,
+        limits: Limits {
+            deadline: None,
+            nodes: Some(1_000_000),
+        },
+        racing: None,
+        required,
+    };
+    let mut solver = Solver::new();
+    let run = |solver: &mut Solver, required| {
+        solver.reset_nodes();
+        let result = evaluate_moves(
+            solver,
+            &k,
+            &table,
+            Objective::Points,
+            &Uniform,
+            &mut StdRng::seed_from_u64(3),
+            effort(required),
+            |_| true,
+        );
+        (result, solver.nodes())
+    };
+    // Without a requirement the limit yields the worlds it can complete.
+    let (partial, _) = run(&mut solver, 0);
+    let worlds = partial.unwrap().worlds;
+    assert!(worlds < 64);
+    // Requiring every world, the projection stops as soon as two worlds show it cannot fit.
+    solver.clear();
+    let (stopped, nodes) = run(&mut solver, 64);
+    assert_eq!(stopped, Err(SolverError::Interrupted));
+    assert!(nodes < 1_000_000, "{nodes} nodes spent before stopping");
+}

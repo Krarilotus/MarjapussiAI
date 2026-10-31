@@ -36,6 +36,16 @@ impl Budget {
         }
     }
 
+    /// Nodes searched under this budget so far.
+    pub(crate) fn used(&self, solver: &Solver) -> u64 {
+        solver.nodes().saturating_sub(self.start_nodes)
+    }
+
+    /// The node limit, if any.
+    pub(crate) fn nodes(&self) -> Option<u64> {
+        self.limits.nodes
+    }
+
     pub(crate) fn stopped(&self, solver: &Solver) -> bool {
         self.limits
             .nodes

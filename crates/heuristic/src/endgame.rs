@@ -14,7 +14,7 @@
 //!   standing ace that wins either now or later is kept, as the future-trick value says).
 
 use engine::{CardSet, GameAction, Move, PlayPhase, QuestionType};
-use solver::{evaluate_moves, Limits, Objective, Racing, Solver};
+use solver::{evaluate_moves, Effort, Limits, Objective, Racing, Solver};
 use std::time::{Duration, Instant};
 
 use crate::rules::RuleId;
@@ -84,22 +84,17 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
             deadline,
             nodes: (nodes > 0).then_some(nodes),
         };
-        evaluate_moves(
-            solver,
-            k,
-            &table,
-            objective,
-            ctx.params.endgame_worlds as usize,
-            &belief,
-            &mut rng,
+        let effort = Effort {
+            worlds: ctx.params.endgame_worlds as usize,
             limits,
-            keep,
-            (ctx.params.endgame_race_z > 0.0).then(|| Racing {
+            racing: (ctx.params.endgame_race_z > 0.0).then(|| Racing {
                 batch: RACE_BATCH,
                 z: ctx.params.endgame_race_z as f64,
             }),
-        )
-        .ok()
+            // A search that cannot reach the minimum stops early and leaves the time to the rules.
+            required: ctx.params.endgame_min_worlds as usize,
+        };
+        evaluate_moves(solver, k, &table, objective, &belief, &mut rng, effort, keep).ok()
     };
     // A complete evaluation decides even with fewer consistent deals than the minimum.
     let d = evaluated.filter(|d| d.complete || d.worlds >= ctx.params.endgame_min_worlds as usize)?;

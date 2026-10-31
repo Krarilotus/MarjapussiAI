@@ -354,25 +354,50 @@ pub fn evaluate_limited<R: RngCore + ?Sized, B: Belief + ?Sized>(
     rng: &mut R,
     limits: Limits,
 ) -> Result<Decision, SolverError> {
-    evaluate_moves(solver, knowledge, table, objective, worlds, belief, rng, limits, |_| true, None)
+    let effort = Effort {
+        worlds,
+        limits,
+        racing: None,
+        required: 0,
+    };
+    evaluate_moves(solver, knowledge, table, objective, belief, rng, effort, |_| true)
 }
+
+/// How `evaluate_moves` spends its work on one decision.
+#[derive(Clone, Copy, Debug)]
+pub struct Effort {
+    /// Worlds to solve (every consistent deal if there are no more than this).
+    pub worlds: usize,
+    pub limits: Limits,
+    /// Drop moves clearly behind as the worlds come in.
+    pub racing: Option<Racing>,
+    /// Under a node limit, the fewest worlds worth completing: once the nodes per completed
+    /// world project past the limit before that many, the evaluation stops (`Interrupted`) and
+    /// leaves the rest of the decision's time to the caller.
+    pub required: usize,
+}
+
+/// Completed worlds before the node projection of `Effort::required` is trusted.
+const PROJECTION_WORLDS: usize = 2;
 
 /// `evaluate_limited` over the legal moves the caller keeps (`keep`): a root policy filter.
 /// The kept moves' values are those of the full evaluation; the others are not searched.
-/// With `racing`, moves clearly behind are dropped as the worlds come in (`Racing`).
-#[allow(clippy::too_many_arguments)]
 pub fn evaluate_moves<R: RngCore + ?Sized, B: Belief + ?Sized>(
     solver: &mut Solver,
     knowledge: &Knowledge,
     table: &PublicState,
     objective: Objective,
-    worlds: usize,
     belief: &B,
     rng: &mut R,
-    limits: Limits,
+    effort: Effort,
     keep: impl Fn(Move) -> bool,
-    racing: Option<Racing>,
 ) -> Result<Decision, SolverError> {
+    let Effort {
+        worlds,
+        limits,
+        racing,
+        required,
+    } = effort;
     let budget = Budget::new(limits, solver);
     if budget.stopped(solver) {
         return Err(SolverError::Interrupted);
@@ -469,6 +494,12 @@ pub fn evaluate_moves<R: RngCore + ?Sized, B: Belief + ?Sized>(
         weight += w;
         weight_sq += w * w;
         world_weights.push(*w);
+        let required = required.min(states.len());
+        if let Some(limit) = budget.nodes().filter(|_| completed >= PROJECTION_WORLDS && completed < required) {
+            if budget.used(solver) as u128 * required as u128 > limit as u128 * completed as u128 {
+                return Err(SolverError::Interrupted);
+            }
+        }
         if let Some(r) = racing.filter(|r| completed % r.batch.max(1) == 0) {
             let p: Vec<f64> = world_weights.iter().map(|x| x / weight).collect();
             r.eliminate(&mut active, &margins, &p);
