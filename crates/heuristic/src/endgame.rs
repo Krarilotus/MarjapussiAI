@@ -5,7 +5,8 @@
 //! - **Worlds:** the deals consistent with my facts (`knowledge::DealSpace`): all of them when
 //!   there are at most `endgame_worlds`, otherwise that many drawn uniformly.
 //! - **Weights:** the same joint dealt-hand bidding likelihood as the feature
-//!   model, with its hidden-exchange kernel and optional card signal factors.
+//!   model, with its hidden-exchange kernel and optional card signal factors,
+//!   times the partner's raise as the route worlds read it (`routes::RaiseEvidence`).
 //!   With facts alone every consistent deal counts the same.
 //! - **Objective:** the contract (HC-9: declarers make it, then keep the defenders' points
 //!   down; defenders take points, avoiding schwarz), or the own points in an all-pass game.
@@ -69,6 +70,11 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
     let mut rng = Rng::new(ctx.seed);
     let evaluated = {
         let model = ctx.mind.deal_model();
+        let raise = crate::routes::RaiseEvidence::new(ctx);
+        let belief = crate::routes::WithRaise {
+            base: model.weights(),
+            raise: &raise,
+        };
         let nodes = ctx.params.endgame_nodes;
         let limits = Limits {
             deadline,
@@ -80,7 +86,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
             &table,
             objective,
             ctx.params.endgame_worlds as usize,
-            model.weights(),
+            &belief,
             &mut rng,
             limits,
             keep,

@@ -5,7 +5,49 @@
 use engine::{opponents, suit_of, FastState, Move, PlayPhase, SUITS};
 use knowledge::{Belief, Hands, World};
 
+use crate::raising::RaiseObservation;
 use crate::{Ctx, Rng};
+
+/// The partner's raise read into a deal (D1): its likelihood given the partner's hand at that
+/// decision, its current cards and those it played since. The one reader of that evidence for
+/// every consumer of believed deals (the route worlds and the endgame's weights).
+pub(crate) struct RaiseEvidence<'a> {
+    ctx: &'a Ctx<'a>,
+    raise: Option<RaiseObservation>,
+    floor: f32,
+}
+
+impl<'a> RaiseEvidence<'a> {
+    pub fn new(ctx: &'a Ctx<'a>) -> Self {
+        RaiseEvidence {
+            ctx,
+            raise: crate::raising::partner_raise(ctx),
+            floor: ctx.mind.params().conventions.convention_floor,
+        }
+    }
+
+    pub fn is_read(&self) -> bool {
+        self.raise.is_some()
+    }
+
+    pub fn likelihood(&self, hands: &Hands) -> f64 {
+        self.raise.as_ref().map_or(1.0, |r| {
+            r.likelihood(hands[r.raiser as usize] | self.ctx.k.played_by(r.raiser), self.floor)
+        })
+    }
+}
+
+/// The deal weights of the Mind times the raise evidence.
+pub(crate) struct WithRaise<'a, B: Belief> {
+    pub base: &'a B,
+    pub raise: &'a RaiseEvidence<'a>,
+}
+
+impl<B: Belief> Belief for WithRaise<'_, B> {
+    fn weight(&self, hands: &Hands) -> f64 {
+        self.base.weight(hands) * self.raise.likelihood(hands)
+    }
+}
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Entry {
@@ -26,18 +68,12 @@ impl Routes {
         let worlds_max = ctx.params.outlook_worlds as usize;
         let model = ctx.mind.deal_model();
         let (space, weights) = (model.space(), model.weights());
-        // D1: the partner's raise is read once into these worlds (its likelihood given the
-        // partner's hand at that decision: its current cards and those it played since). With a
+        // D1: the partner's raise is read once into these worlds (`RaiseEvidence`). With a
         // reading, `RAISE_DRAWS` times as many deals are drawn and resampled by weight, so enough
         // worlds remain that fit the raise. Scope (Astra 17.7 C): this conditions the route
-        // worlds (outlook, entries); the Mind's other belief queries don't read the raise yet.
-        let raise = crate::raising::partner_raise(ctx);
-        let floor = ctx.mind.params().conventions.convention_floor;
-        let read = |hands: &Hands| {
-            raise.as_ref().map_or(1.0, |r| {
-                r.likelihood(hands[r.raiser as usize] | ctx.k.played_by(r.raiser), floor)
-            })
-        };
+        // worlds and the endgame's weights; the Mind's other belief queries don't read it yet.
+        let raise = RaiseEvidence::new(ctx);
+        let read = |hands: &Hands| raise.likelihood(hands);
         let worlds = if space.count() <= worlds_max as u64 {
             let mut worlds = Vec::new();
             space.for_each_deal(|hands| {
@@ -47,7 +83,7 @@ impl Routes {
                 })
             });
             worlds
-        } else if raise.is_some() {
+        } else if raise.is_read() {
             let mut rng = Rng::new(ctx.seed);
             let drawn: Vec<World> = space
                 .sample_worlds(&mut rng, RAISE_DRAWS * worlds_max, weights)
