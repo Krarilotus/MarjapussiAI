@@ -111,6 +111,8 @@ params! {
     pass_route: bool = false,
     /// The store's best returns the route compares besides its choice and the run-keeping ones.
     return_store_candidates: u32 = 0,
+    /// The store's best passes forth P-route compares besides its purposeful candidates.
+    forth_store_candidates: u32 = 0,
     /// Compare the stored return with candidates preserving a top-controlled run.
     /// Independent of the pass-forth route; retains the store on unresolved comparisons.
     return_run_route: bool = true,

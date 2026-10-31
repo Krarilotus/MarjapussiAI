@@ -270,6 +270,13 @@ fn route_back(ctx: &Ctx, hand: CardSet, options: &[(GameAction, CardSet, f64)], 
     )
 }
 
+/// The store's `n` best options, best first: the route's candidates by the store's own ranking.
+fn store_ranked(options: &[(GameAction, CardSet, f64)], n: usize) -> Vec<CardSet> {
+    let mut ranked: Vec<_> = options.iter().collect();
+    ranked.sort_by(|a, b| b.2.total_cmp(&a.2));
+    ranked.into_iter().take(n).map(|o| o.1).collect()
+}
+
 fn return_candidates(
     hand: CardSet,
     options: &[(GameAction, CardSet, f64)],
@@ -277,12 +284,9 @@ fn return_candidates(
     store_best: usize,
 ) -> Vec<CardSet> {
     let mut candidates = vec![chosen];
-    // The store's next best returns, in score order.
-    let mut ranked: Vec<_> = options.iter().collect();
-    ranked.sort_by(|a, b| b.2.total_cmp(&a.2));
-    for option in ranked.into_iter().take(store_best) {
-        if !candidates.contains(&option.1) {
-            candidates.push(option.1);
+    for x in store_ranked(options, store_best) {
+        if !candidates.contains(&x) {
+            candidates.push(x);
         }
     }
     for suit in SUITS.into_iter().filter(|&s| knowledge::control_run(hand, s)) {
@@ -340,7 +344,8 @@ fn route_forth(ctx: &Ctx, hand: CardSet, options: &[(GameAction, CardSet, f64)],
         .pair_suits()
         .filter_map(|s| best_where(&|x| (x & CardSet::halves(s)).is_empty()));
     let mut candidates = vec![chosen];
-    for x in blanks.chain(whole_suits).chain(aces).chain(pairs_kept) {
+    let ranked = store_ranked(options, ctx.params.forth_store_candidates as usize);
+    for x in blanks.chain(whole_suits).chain(aces).chain(pairs_kept).chain(ranked) {
         if !candidates.contains(&x) && options.iter().any(|o| o.1 == x) {
             candidates.push(x);
         }
