@@ -9,7 +9,11 @@ use tools::record::{beliefs_json, game_record, Meta, Note, SCHEMA};
 
 #[test]
 fn an_agent_game_record_holds_every_action_with_its_rule() {
-    let params = Params::default();
+    // The records, not the search, are under test: the exchange routes sample few worlds.
+    let params = Params {
+        exchange_worlds: 8,
+        ..Params::default()
+    };
     for seed in 0..5 {
         let mut players: Vec<Box<dyn Agent>> = (0..4)
             .map(|_| Box::new(HeuristicAgent::new(params.clone())) as Box<dyn Agent>)

@@ -104,10 +104,10 @@ params! {
     /// game vs without); choosing the highest target picks the hands whose playout estimate is
     /// too high (human games: estimates of 240+ overshoot by 5 to 22 points).
     route_raise: bool = false,
-    /// P-route: the pass forth by route over the believed worlds (`passing::route_forth`). On
+    /// P-route: the pass forth by route over the exchange worlds (`passing::route_forth`). On
     /// since checkpoint 3: Astra's review (2026-10-13) holds that the forecast lacks the team's
     /// private transfer facts in play and a receiver-readable route to the giver's kept
-    /// entries, but over 512 exchange worlds it gains against receivers that read the pass by
+    /// entries, but over `exchange_worlds` it gains, also with a partner that reads the pass by
     /// the store's convention (log, "Exchange routes").
     pass_route: bool = true,
     /// The store's best returns the route compares besides its choice and the run-keeping ones
@@ -115,8 +115,9 @@ params! {
     return_store_candidates: u32 = 64,
     /// The store's best passes forth P-route compares besides its purposeful candidates.
     forth_store_candidates: u32 = 0,
-    /// Compare the stored return with candidates preserving a top-controlled run.
-    /// Independent of the pass-forth route; retains the store on unresolved comparisons.
+    /// P-route back: compare the stored return with the store's best returns
+    /// (`return_store_candidates`) and those preserving a top-controlled run. Independent of
+    /// the pass-forth route; retains the store on unresolved comparisons.
     return_run_route: bool = true,
 
     /// HO-1: leads without a planned rule by the plan layer's chain (`outlook`).

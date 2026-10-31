@@ -11,8 +11,9 @@ use beliefs::conventions::{BidObs, Message};
 use beliefs::Mind;
 use engine::{partner, ActionType, CardSet, GameAction, Suit, HAND_SIZE, SUITS};
 
+use crate::outlook::WorldValues;
 use crate::rules::RuleId;
-use crate::{decision, fact, Ctx, Decision};
+use crate::{decision, fact, Ctx, Decision, Fact};
 
 impl Partner {
     /// Snapshot only the acting giver's estimates. Features never receive the table's hands.
@@ -234,40 +235,48 @@ fn route_back(ctx: &Ctx, hand: CardSet, options: &[(GameAction, CardSet, f64)], 
     };
     let chosen = CardSet::from_cards(cards);
     let candidates = return_candidates(hand, options, chosen, ctx.params.return_store_candidates as usize);
+    let Some((action, selected, mut why)) = overrule(options, chosen, &candidates, |c| {
+        crate::outlook::return_values(ctx, c)
+    }) else {
+        return store;
+    };
+    why.push(fact(
+        "kept_run_cards",
+        SUITS
+            .into_iter()
+            .filter(|&s| knowledge::control_run(hand, s) && (selected & CardSet::suit(s)).is_empty())
+            .map(|s| (hand & CardSet::suit(s)).len())
+            .max()
+            .unwrap_or(0),
+    ));
+    decision(&action, RuleId::PRoute, why)
+}
+
+/// P-route's overrule of the store's pass `chosen`: the candidate with the best expected value
+/// over the worlds (`values`), where it is clearly better than `chosen` (`WorldValues::
+/// clearly_better`), as its legal action, its cards and the facts of the comparison. `None`
+/// keeps the store's pass, also without another candidate to compare.
+fn overrule(
+    options: &[(GameAction, CardSet, f64)],
+    chosen: CardSet,
+    candidates: &[CardSet],
+    values: impl FnOnce(&[CardSet]) -> Option<WorldValues<CardSet>>,
+) -> Option<(GameAction, CardSet, Vec<Fact>)> {
     if candidates.len() < 2 {
-        return store;
+        return None;
     }
-    let Some(values) = crate::outlook::return_values(ctx, &candidates) else {
-        return store;
-    };
-    let best = values.best();
-    let Some(base) = values.index(chosen) else {
-        return store;
-    };
+    let values = values(candidates)?;
+    let (best, base) = (values.best(), values.index(chosen)?);
     if best == base || !values.clearly_better(best, base) {
-        return store;
+        return None;
     }
     let selected = values.options[best];
-    let Some(action) = options.iter().find(|o| o.1 == selected).map(|o| o.0) else {
-        return store;
-    };
-    decision(
-        &action,
-        RuleId::PRoute,
-        vec![
-            fact("expected_score_difference", values.mean(best)),
-            fact("over_store", values.mean(best) - values.mean(base)),
-            fact(
-                "kept_run_cards",
-                SUITS
-                    .into_iter()
-                    .filter(|&s| knowledge::control_run(hand, s) && (selected & CardSet::suit(s)).is_empty())
-                    .map(|s| (hand & CardSet::suit(s)).len())
-                    .max()
-                    .unwrap_or(0),
-            ),
-        ],
-    )
+    let action = options.iter().find(|o| o.1 == selected)?.0;
+    let why = vec![
+        fact("expected_score_difference", values.mean(best)),
+        fact("over_store", values.mean(best) - values.mean(base)),
+    ];
+    Some((action, selected, why))
 }
 
 /// The store's `n` best options, best first: the route's candidates by the store's own ranking.
@@ -350,29 +359,13 @@ fn route_forth(ctx: &Ctx, hand: CardSet, options: &[(GameAction, CardSet, f64)],
             candidates.push(x);
         }
     }
-    let Some(values) = crate::outlook::pass_values(ctx, &candidates) else {
+    let Some((action, selected, mut why)) = overrule(options, chosen, &candidates, |c| {
+        crate::outlook::pass_values(ctx, c)
+    }) else {
         return store;
     };
-    let top = values.best();
-    let Some(base) = values.index(chosen) else {
-        return store;
-    };
-    if top == base || !values.clearly_better(top, base) {
-        return store;
-    }
-    let x = values.options[top];
-    let Some(action) = options.iter().find(|o| o.1 == x).map(|o| o.0) else {
-        return store;
-    };
-    decision(
-        &action,
-        RuleId::PRoute,
-        vec![
-            fact("expected_score_difference", values.mean(top)),
-            fact("over_store", values.mean(top) - values.mean(base)),
-            fact("blank_signs", blanked(x)),
-        ],
-    )
+    why.push(fact("blank_signs", blanked(selected)));
+    decision(&action, RuleId::PRoute, why)
 }
 
 /// Keep scores for selection, and calculate an explanation only for the chosen option.
@@ -441,7 +434,7 @@ mod control_tests {
         use observation::SeatEvent;
         use std::cell::RefCell;
         let params = crate::Params {
-            outlook_worlds: 8,
+            exchange_worlds: 8,
             beliefs: beliefs::BeliefParams::base_only(),
             ..crate::Params::default()
         };
@@ -481,7 +474,7 @@ mod control_tests {
             deadline: None,
             deadline_hit: Default::default(),
             series: Default::default(),
-            class: Default::default(),
+            class: crate::DecisionClass::Exchange,
             routes: RefCell::new(None),
             concepts: RefCell::new(crate::concepts::Reads::default()),
         };
@@ -515,6 +508,10 @@ mod control_tests {
         assert_eq!(return_candidates(hand, &options, store, 0), vec![store, keep]);
         // Length alone does not justify a run-preserving alternative.
         assert_eq!(return_candidates(hand - cards(&["e-A"]), &options, store, 0), vec![store]);
+        // The store's best returns follow its choice once, best first, before the run keepers.
+        let other = cards(&["e-6", "e-7", "g-6", "g-7"]);
+        let options = [option(store, 10.0), option(keep, 0.0), option(other, 5.0)];
+        assert_eq!(return_candidates(hand, &options, store, 2), vec![store, other, keep]);
     }
 
     #[test]

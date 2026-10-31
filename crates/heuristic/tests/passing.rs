@@ -2,10 +2,11 @@
 
 mod common;
 
-use common::{passed, set, Scene};
+use common::{passed, set, Scene, RULE_FIXTURE_ENDGAME_TRICKS};
 use engine::CardSet;
 use engine::Suit;
 use heuristic::passing::{back_plan, Partner};
+use heuristic::{Decision, Params, RuleId};
 
 /// MH is seat 2; VH is seat 0. Replay the supplied public auction.
 fn mh_scene(hand: &[&str], my_bids: &[(u8, Option<i32>)]) -> Scene {
@@ -18,6 +19,15 @@ fn plain_auction() -> Vec<(u8, Option<i32>)> {
     vec![(0, Some(120)), (1, None), (2, None), (3, None)]
 }
 
+/// The default player's pass (`Scene::act` keeps the store's): P-route may overrule the store.
+fn default_pass(s: &Scene) -> Decision {
+    let params = Params {
+        endgame_tricks: RULE_FIXTURE_ENDGAME_TRICKS,
+        ..Params::default()
+    };
+    s.act_with(params, &s.pass_legal())
+}
+
 #[test]
 fn hp5_green_is_only_a_tie_breaker() {
     // Green, Acorns and Bells are interchangeable Lusche pairs: blank the two that are not green.
@@ -25,8 +35,13 @@ fn hp5_green_is_only_a_tie_breaker() {
         &["g-6", "g-7", "e-6", "e-7", "s-6", "s-7", "r-A", "r-Z", "r-K"],
         &plain_auction(),
     );
-    let d = s.act(&s.pass_legal());
-    assert_eq!(passed(&d), set(&["e-6", "e-7", "s-6", "s-7"]));
+    let store = set(&["e-6", "e-7", "s-6", "s-7"]);
+    assert_eq!(passed(&s.act(&s.pass_legal())), store);
+    // The default player compares it by route and passes the Red A, 10 and K here (P-route,
+    // measured stronger in self-play: checkpoint 2026-10-31-exchange-routes).
+    let d = default_pass(&s);
+    assert_eq!(d.rule, RuleId::PRoute, "{:?}", d.why);
+    assert_ne!(passed(&d), store);
 }
 
 #[test]
@@ -38,13 +53,14 @@ fn hp6_passes_an_unknown_whole_suit_pair() {
         &["g-6", "g-7", "e-8", "e-9", "s-K", "s-O", "r-9", "r-8", "r-7"],
         &plain_auction(),
     );
-    let d = s.act(&s.pass_legal());
-    assert!(
-        CardSet::halves(Suit::Bells).is_subset(passed(&d)),
-        "{:?} {:?}",
-        passed(&d),
-        d.why
-    );
+    for d in [s.act(&s.pass_legal()), default_pass(&s)] {
+        assert!(
+            CardSet::halves(Suit::Bells).is_subset(passed(&d)),
+            "{:?} {:?}",
+            passed(&d),
+            d.why
+        );
+    }
 }
 
 #[test]
@@ -53,8 +69,9 @@ fn hp6_passes_an_unknown_acorns_pair_when_the_partner_showed_no_halves() {
         &["e-K", "e-O", "g-6", "g-7", "s-8", "s-9", "r-A", "r-Z", "r-9"],
         &plain_auction(),
     );
-    let d = s.act(&s.pass_legal());
-    assert!(CardSet::halves(Suit::Acorns).is_subset(passed(&d)), "{:?}", passed(&d));
+    for d in [s.act(&s.pass_legal()), default_pass(&s)] {
+        assert!(CardSet::halves(Suit::Acorns).is_subset(passed(&d)), "{:?}", passed(&d));
+    }
 }
 
 // Passing back: VH = seat 0 with 13 cards.

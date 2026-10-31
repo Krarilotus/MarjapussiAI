@@ -37,10 +37,8 @@ The small implementation slice is:
 - Add run-preserving return candidates, including runs without a pair, and compare
   them with the store baseline by engine score. Retain the previous known paired
   run prior and share it with the level-0 return model.
-  `return_run_route = true` enables this comparison; since checkpoint 3 it also
-  compares the store's 64 best returns (`return_store_candidates`), `pass_route`
-  compares passes forth, and both sample 512 exchange worlds (`exchange_worlds`).
-  With no extra candidate or an unresolved comparison,
+  `return_run_route = true` enables only this narrow comparison by default;
+  `pass_route` remains false. With no extra candidate or an unresolved comparison,
   the stored return remains. Level-0 returns use the paired-run prior, or keep
   their longest proven top-controlled suit when no trump plan exists; that cheap
   continuation prior is not itself a recursive return forecast.
@@ -67,3 +65,8 @@ the uninterrupted top needed to draw its outstanding ranks. No deal IDs, suit
 identities or outcomes select behavior. Synthetic tests cover these distinctions
 and hidden-card swaps. Root owns all builds, tests, runtime/strength qualification,
 and live acceptance; this checkpoint must remain incomplete until that evidence.
+
+Update 2026-10-31 (checkpoint 3): the return route also compares the store's best
+returns (`return_store_candidates`), the pass forth runs by route (`pass_route`), and
+both sample the exchange's own world pool (`exchange_worlds`); evidence in
+[the checkpoint](../checkpoints/2026-10-31-exchange-routes.md).

@@ -324,6 +324,7 @@ impl HeuristicAgent {
         let seed = self.params.seed ^ (view.seat as u64) << 56 ^ view.events.len() as u64;
         let started = std::time::Instant::now();
         let mind = sync(&mut self.mind, &self.params, view);
+        let class = DecisionClass::of(&legal);
         let ctx = Ctx {
             me: view.seat,
             k: mind.knowledge(),
@@ -331,13 +332,10 @@ impl HeuristicAgent {
             params: &self.params,
             solver: &self.solver,
             seed,
-            deadline: self
-                .params
-                .deadlines
-                .then(|| started + DecisionClass::of(&legal).budget(&self.params)),
+            deadline: self.params.deadlines.then(|| started + class.budget(&self.params)),
             deadline_hit: Default::default(),
             series: series::SeriesStakes::new(view.series, view.seat),
-            class: DecisionClass::of(&legal),
+            class,
             routes: RefCell::new(None),
             concepts: RefCell::new(concepts::Reads::default()),
         };
@@ -352,7 +350,7 @@ impl HeuristicAgent {
 /// The decision of one non-forced position, by phase.
 fn decide_in(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));
-    if has(|t| matches!(t, ActionType::Pass(_))) {
+    if ctx.class == DecisionClass::Exchange {
         return passing::decide(ctx, legal);
     }
     if let Some(d) = raising::follow(ctx, legal) {

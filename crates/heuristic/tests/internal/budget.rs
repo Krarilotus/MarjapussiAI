@@ -55,3 +55,19 @@ fn phase_budgets_follow_the_owners_hard_limits() {
         assert_eq!(DecisionClass::of(&[play]).budget(&params).as_millis(), 80);
     }
 }
+
+#[test]
+fn only_exchange_steps_sample_the_exchange_worlds() {
+    let params = Params {
+        outlook_worlds: 64,
+        exchange_worlds: 512,
+        ..Params::default()
+    };
+    let cards = std::array::from_fn(|i| Card::from_index(i as u8));
+    let bid = action(2, ActionType::NewBid(140));
+    let card = action(2, ActionType::CardPlayed(Card::from_index(9)));
+    assert_eq!(DecisionClass::of(&[action(0, ActionType::Pass(cards))]).worlds(&params), 512);
+    for legal in [vec![bid], vec![bid, card], vec![card]] {
+        assert_eq!(DecisionClass::of(&legal).worlds(&params), 64);
+    }
+}

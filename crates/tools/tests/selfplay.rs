@@ -13,9 +13,12 @@ fn hp1_players(params: &Params) -> Vec<Box<dyn Agent>> {
 #[test]
 fn fresh_and_reused_agents_play_the_same_game() {
     // Exercise the full policy with little work; separate suites check deeper/multi-world search.
+    // Without deadlines the logical budgets alone decide, so both agents do the same work.
     let p = Params {
         endgame_tricks: 2,
         endgame_worlds: 1,
+        exchange_worlds: 8,
+        deadlines: false,
         ..Params::default()
     };
     let mut endgames = 0;

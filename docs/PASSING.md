@@ -1,10 +1,14 @@
 # Passing: choices, evidence, and remaining work
 
-The local v1 continuation adds [bounded return forecasts](design/return-rollouts.md):
-C42 still selects the first pass and orders return candidates; complete seat-local
-rollouts can choose a different return. `return_worlds = 0` uses C42 alone. The
-removed HP/HK reader stays removed. Neither path infers intent from observed passes.
-The descriptions below explain the retained C42 features and historical cleanup.
+C42 (the store below) scores every legal pass and proposes one. Since checkpoint 3
+(2026-10-31) the exchange routes (P-route, `passing::route_forth`/`route_back`) compare
+the proposal with candidates by seat-local rollouts over the exchange's believed worlds
+(`exchange_worlds`) and replace it where another is clearly better: forth, the store's
+best pass per blank-suit pattern, whole suit, ace and kept pair (`pass_route`); back, the
+store's best returns (`return_store_candidates`) and those keeping a top-controlled run
+(`return_run_route`). With both off, C42 alone passes. The removed HP/HK reader stays
+removed. Neither path infers intent from observed passes. The descriptions below explain
+the retained C42 features and historical cleanup.
 
 Current after `checkpoint/2026-10-08-exchange-cleanup`. C42 and HP/HK are historical
 iteration/rule labels, not different neural networks. Both pass policies are small
