@@ -250,13 +250,19 @@ fn bluffing_an_ace_step_nobody_can_hold() {
 #[test]
 fn tie_break_over_140_with_a_derived_team_pair() {
     // Batch 1c, the owner's example: the partner +10 (3+ halves or a small pair), I hold the
-    // Red and Acorns halves and an ace to tell: our team likely holds a pair, so over 140.
+    // Red and Acorns halves and an ace to tell: our team likely holds a pair, so over 140 at the
+    // owner's 75 % cover. The default (0.85, measured stronger in self-play) keeps below 140.
     let mut s = Scene::new(2, &["r-K", "e-O", "g-A", "g-6", "s-6", "s-7", "e-6", "e-7", "g-7"]);
     s.auction(&[(0, Some(125)), (1, None)]);
-    let d = s.act(&s.bid_legal());
+    assert_ne!(s.act(&s.bid_legal()).rule, RuleId::BOver140);
+    let owner = Params {
+        over_140_cover: 0.75,
+        ..Params::default()
+    };
+    let d = s.act_with(owner.clone(), &s.bid_legal());
     assert_eq!((bid_of(&d), d.rule), (Some(145), RuleId::BOver140), "{:?}", d.why);
     let fact = |k: &str| d.why.iter().find(|f| f.key == k).map(|f| f.value).unwrap();
-    assert!(fact("team_pair_cover") >= Params::default().over_140_cover);
+    assert!(fact("team_pair_cover") >= owner.over_140_cover);
     assert!(fact("derived_pair_value") > 60.0);
 }
 

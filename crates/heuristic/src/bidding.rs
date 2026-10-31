@@ -569,7 +569,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
     if nothing_in_hand && bctx.partner_passed_first && opponents_stepped {
         let bid = if v < PAIR_LINE { PAIR_LINE } else { v + 5 };
         // Never above what the opponents can reach (addendum 10): beyond it they overreach.
-        let reach = ctx.mind.opp_reach(ctx.params.over_140_cover);
+        let reach = ctx.mind.opp_reach(ctx.params.opp_reach_cover);
         if let Some(limit) = schwarz_defend(ctx).filter(|&l| bid <= l.min(reach)) {
             if let Some(a) = find(legal, Some(bid)) {
                 why.push(fact("standing_against_us", ctx.k.standing_against_us(ctx.me)));
