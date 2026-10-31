@@ -25,6 +25,10 @@ marja-bench new previous new previous 4000 --seed 20261012
 | `previous` | `b3abdaf`: verified live HP1, including its frozen solver. |
 | `old` | `1632af8`: the earlier deployed policy. |
 | `v1` | `4a1c51c`: the published `v1/main` head, the 2026-10-31 hill-climb baseline. |
+| `base` | `afe2ebb`: `v1` with the deadline switch, reproducible under `--deadlines off`. |
+| `c2` | `1b24987`: checkpoint 2 (budgeted seven-trick endgame, faster solver, series raise). |
+| `rev:COMMIT` | The heuristic, beliefs and solver of any local commit (shared core compatible). |
+| `hp1@FILE` | The current HP1 with the flat TOML overrides of `FILE`. |
 | `hp1-fast` | Current HP1 with return, continuation and endgame search disabled. |
 | `hp1-facts` | Current HP1 with convention signals disabled. |
 | `random` | Uniform random legal actions. |
