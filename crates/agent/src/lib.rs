@@ -19,6 +19,9 @@ pub struct SeriesScore {
     pub team_totals: [i32; 2],
     /// Games left in a tournament round; `None` when playing to a target total.
     pub games_left: Option<u32>,
+    /// The team that first reached the bonus total in this round: its bonus is decided, even if
+    /// its total fell back below it.
+    pub bonus_team: Option<u8>,
 }
 
 impl From<&SeriesTally> for SeriesScore {
@@ -26,6 +29,7 @@ impl From<&SeriesTally> for SeriesScore {
         SeriesScore {
             team_totals: tally.totals(),
             games_left: tally.games_left(),
+            bonus_team: tally.bonus_team(),
         }
     }
 }
@@ -101,6 +105,7 @@ mod tests {
             SeriesScore {
                 team_totals: [120, -35],
                 games_left: Some(3),
+                bonus_team: None,
             }
         );
         let to_500 = SeriesTally::new(SeriesSettings {

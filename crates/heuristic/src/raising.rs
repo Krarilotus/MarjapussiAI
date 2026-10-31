@@ -10,7 +10,9 @@ use engine::{partner, points_set, ActionType, CardSet, GameAction, Suit, SUITS};
 use observation::SeatEvent;
 
 use crate::rules::RuleId;
+use crate::series::SeriesStakes;
 use crate::{decision, fact, leads, play, Ctx, Decision};
+
 
 struct Certificate {
     suit: Suit,
@@ -43,7 +45,7 @@ impl Certificate {
                 let won = side | trumps | CardSet::single(opening);
                 let points = if won.len() == engine::HAND_SIZE as u32 {
                     // Nine own wins capture EVERY card and the last-trick bonus.
-                    engine::CARD_POINTS.iter().map(|&p| p as i32).sum::<i32>() + engine::LAST_TRICK_BONUS
+                    engine::CARD_POINTS_TOTAL
                 } else {
                     points_set(won)
                 };
@@ -236,7 +238,7 @@ pub(crate) struct Hz1 {
     pub cap: i32,
 }
 
-pub(crate) fn hz1(hand: CardSet, given: CardSet, value: i32) -> Hz1 {
+pub(crate) fn hz1(hand: CardSet, given: CardSet, value: i32, stakes: &SeriesStakes) -> Hz1 {
     let own_pairs: i32 = hand.pair_suits().map(beliefs::conventions::pair_value).sum();
     let given_pairs: i32 = given.pair_suits().map(beliefs::conventions::pair_value).sum();
     let cap = if value <= 140 && own_pairs + given_pairs == 0 {
@@ -246,7 +248,15 @@ pub(crate) fn hz1(hand: CardSet, given: CardSet, value: i32) -> Hz1 {
     };
     let t = &TEAM_POINTS;
     let estimate = contract_estimate(hand, own_pairs, given_pairs as f32);
-    let score = |v: i32| (2.0 * t.p_reach(estimate, v) - 1.0) * v as f32;
+    // The contract's series worth relative to scoring nothing, with the defenders' points at
+    // the rest of the estimate (HS-1); outside a round, (2 P(make) - 1) x value.
+    let total = engine::CARD_POINTS_TOTAL;
+    let theirs = engine::round5((total - estimate.round() as i32).clamp(0, total));
+    let worth = |ours: i32| (stakes.worth_of(ours, theirs) - stakes.worth_of(0, theirs)) as f32;
+    let score = |v: i32| {
+        let p = t.p_reach(estimate, v);
+        p * worth(v) + (1.0 - p) * worth(-v)
+    };
     let keep = score(value);
     let best = engine::bid_range(engine::Points(value))
         .filter(|&v| v <= cap)
@@ -266,7 +276,7 @@ fn estimated_raise(ctx: &Ctx, legal: &[GameAction]) -> Option<(GameAction, i32, 
         return None;
     }
     let value = ctx.k.value();
-    let h = hz1(ctx.k.certain(ctx.me), given_back(ctx), value);
+    let h = hz1(ctx.k.certain(ctx.me), given_back(ctx), value, &ctx.series);
     if ctx.params.route_raise {
         return route_raise(ctx, legal, h.cap);
     }
@@ -303,6 +313,8 @@ pub(crate) struct RaiseObservation {
     /// Its seat kind: an agent's raise is read by its actual rule, a human's by the measured
     /// human choices.
     pub agent: bool,
+    /// The team's public series stakes, which an agent's rule weighs (HS-1).
+    pub stakes: SeriesStakes,
 }
 
 pub(crate) fn partner_raise(ctx: &Ctx) -> Option<RaiseObservation> {
@@ -325,6 +337,7 @@ pub(crate) fn partner_raise(ctx: &Ctx) -> Option<RaiseObservation> {
                     target,
                     given_to_me: given,
                     agent: ctx.mind.kinds()[raiser as usize] == crate::SeatKind::Heuristic,
+                    stakes: ctx.series,
                 });
             }
             SeatEvent::Bid { value: v, .. } => {
@@ -338,6 +351,7 @@ pub(crate) fn partner_raise(ctx: &Ctx) -> Option<RaiseObservation> {
                     target: value,
                     given_to_me: given,
                     agent: ctx.mind.kinds()[raiser as usize] == crate::SeatKind::Heuristic,
+                    stakes: ctx.series,
                 });
             }
             _ => {}
@@ -404,7 +418,7 @@ impl RaiseObservation {
         if !self.agent {
             return human;
         }
-        let hit = (hz1(hand, self.given_to_me, self.before).target == self.target) as u8 as f64;
+        let hit = (hz1(hand, self.given_to_me, self.before, &self.stakes).target == self.target) as u8 as f64;
         (1.0 - floor as f64) * hit + floor as f64 * human
     }
 
@@ -699,6 +713,7 @@ mod raise_reading_tests {
             target: 420,
             given_to_me: CardSet::EMPTY,
             agent,
+            stakes: Default::default(),
         };
         for agent in [false, true] {
             let a = obs(agent).likelihood(

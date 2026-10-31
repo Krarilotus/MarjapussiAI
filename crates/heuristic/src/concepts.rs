@@ -197,6 +197,7 @@ mod tests {
             seed: 1,
             deadline: None,
             deadline_hit: Default::default(),
+            series: Default::default(),
             routes: RefCell::new(None),
             concepts: RefCell::new(Reads {
                 remaining: 700,

@@ -513,6 +513,7 @@ mod control_tests {
             seed: 7,
             deadline: None,
             deadline_hit: Default::default(),
+            series: Default::default(),
             routes: RefCell::new(None),
             concepts: RefCell::new(crate::concepts::Reads::default()),
         };

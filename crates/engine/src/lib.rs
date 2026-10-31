@@ -26,8 +26,8 @@ pub use game::meta::GameMetaInfo;
 pub use game::parse::{parse_action, parse_legacy_format, parse_pass, LegacyGameFormat};
 pub use game::player::{hands_from_deck, PlaceAtTable, Player, PlayerTrumpPossibilities, HAND_SIZE, TRICKS};
 pub use game::points::{
-    points_card, points_pair, points_set, points_trick, Points, CARD_POINTS, LAST_TRICK_BONUS, PAIR_POINTS,
-    VALUE_POINTS,
+    points_card, points_pair, points_set, points_trick, Points, CARD_POINTS, CARD_POINTS_TOTAL, LAST_TRICK_BONUS,
+    PAIR_POINTS, VALUE_POINTS,
 };
 pub use game::rules::{trick_points, trump_points};
 pub use game::scoring::{

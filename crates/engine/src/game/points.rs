@@ -42,6 +42,16 @@ pub const CARD_POINTS: [u8; 36] = {
     t
 };
 
+/// All card points of a deal, including the last-trick bonus (140).
+pub const CARD_POINTS_TOTAL: i32 = {
+    let (mut sum, mut i) = (LAST_TRICK_BONUS, 0);
+    while i < 36 {
+        sum += CARD_POINTS[i] as i32;
+        i += 1;
+    }
+    sum
+};
+
 pub fn points_pair(suit: Suit) -> Points {
     Points(PAIR_POINTS[suit as usize])
 }

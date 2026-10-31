@@ -7,6 +7,7 @@ fn table() -> Table {
     table.series = SeriesScore {
         team_totals: [220, 415],
         games_left: Some(2),
+        bonus_team: None,
     };
     table.kinds = [
         SeatKind::Human,

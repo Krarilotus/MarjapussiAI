@@ -21,6 +21,7 @@ mod play;
 mod raising;
 mod routes;
 mod rules;
+mod series;
 mod stakes;
 mod trump_plan;
 mod valuation;
@@ -114,6 +115,8 @@ pub(crate) struct Ctx<'a> {
     /// Some evaluation of this decision was cut short by the deadline (reported as the
     /// `deadline_hit` fact: the decision may then depend on the machine's load).
     pub deadline_hit: std::cell::Cell<bool>,
+    /// What this game's outcomes are worth in the series (HS-1).
+    pub series: series::SeriesStakes,
     pub routes: RefCell<Option<routes::Routes>>,
     pub concepts: RefCell<concepts::Reads>,
 }
@@ -300,6 +303,7 @@ impl HeuristicAgent {
             seed,
             deadline: self.params.deadlines.then(|| started + budget(&self.params, &legal)),
             deadline_hit: Default::default(),
+            series: series::SeriesStakes::new(view.series, view.seat),
             routes: RefCell::new(None),
             concepts: RefCell::new(concepts::Reads::default()),
         };

@@ -163,6 +163,17 @@ impl SeriesTally {
         }
     }
 
+    /// A series resumed from its standing: the totals, the games played and the team that first
+    /// reached `bonus_at`, if any. The same rules apply to the games that follow.
+    pub fn resume(settings: SeriesSettings, totals: [i32; 2], games: u32, bonus_team: Option<u8>) -> SeriesTally {
+        SeriesTally {
+            settings,
+            totals,
+            games,
+            bonus_team: bonus_team.map(|t| t % 2),
+        }
+    }
+
     /// Adds one game's outcome.
     pub fn add(&mut self, outcome: &GameOutcome) {
         self.add_scores(game_scores(outcome, self.settings.schwarzfactor_fifths));

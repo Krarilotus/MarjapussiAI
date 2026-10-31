@@ -226,6 +226,7 @@ impl Series {
         let mut score = SeriesScore::from(&self.tally);
         if lineup[0] % 2 == 1 {
             score.team_totals.swap(0, 1);
+            score.bonus_team = score.bonus_team.map(|t| 1 - t);
         }
         score
     }
