@@ -187,6 +187,42 @@ fn route_raise(ctx: &Ctx, legal: &[GameAction], cap: i32) -> Option<(GameAction,
     })
 }
 
+/// HZ-1 by exact search: the declaring team's final points per believed world with open hands
+/// (`exchange::team_points`), less `raise_search_margin` for the open hands' optimism; the legal
+/// target with the best expected contract score, (2 P(make) - 1) x value, if it beats keeping.
+fn searched_raise(ctx: &Ctx, legal: &[GameAction], cap: i32) -> Option<(GameAction, i32, Vec<crate::Fact>)> {
+    let points = crate::exchange::team_points(ctx)?;
+    let total: f64 = points.iter().map(|p| p.0).sum();
+    let margin = ctx.params.raise_search_margin;
+    let score = |v: i32| -> f64 {
+        points
+            .iter()
+            .map(|&(w, p)| w * if p - margin >= v { v as f64 } else { -v as f64 })
+            .sum::<f64>()
+            / total
+    };
+    let value = ctx.k.value();
+    let keep = score(value);
+    let (action, target, best) = legal
+        .iter()
+        .filter_map(|a| match a.action_type {
+            ActionType::NewBid(v) if v <= cap => Some((*a, v, score(v))),
+            _ => None,
+        })
+        .max_by(|a, b| a.2.total_cmp(&b.2).then(b.1.cmp(&a.1)))?;
+    (best > keep).then(|| {
+        (
+            action,
+            target,
+            vec![
+                fact("expected_score", best),
+                fact("expected_score_keep", keep),
+                fact("raise_target", target),
+            ],
+        )
+    })
+}
+
 /// HZ-1 with HZ-3: the best expected-score raise, if it beats keeping the current value.
 /// HZ-1 with HZ-3 for a declarer holding `hand` after passing back `given`, at the contract
 /// `value`: the legal target with the best expected contract score, or `value` to keep it. The
@@ -233,6 +269,9 @@ fn estimated_raise(ctx: &Ctx, legal: &[GameAction]) -> Option<(GameAction, i32, 
     let h = hz1(ctx.k.certain(ctx.me), given_back(ctx), value);
     if ctx.params.route_raise {
         return route_raise(ctx, legal, h.cap);
+    }
+    if ctx.params.raise_search {
+        return searched_raise(ctx, legal, h.cap);
     }
     if h.target == value {
         return None;

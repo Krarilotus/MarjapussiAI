@@ -93,6 +93,10 @@ params! {
     /// game vs without); choosing the highest target picks the hands whose playout estimate is
     /// too high (human games: estimates of 240+ overshoot by 5 to 22 points).
     route_raise: bool = false,
+    /// HZ-1 by exact search (`exchange::team_points`) over the exchange's worlds, discounting the
+    /// open hands' points by this margin.
+    raise_search: bool = false,
+    raise_search_margin: i32 = 0,
     /// P-route: the pass forth by route over the believed worlds (`passing::route_forth`). Off
     /// (Astra's review 2026-10-13, followed): the forecast lacks the team's private transfer
     /// facts in play and a receiver-readable route to the giver's kept entries, so its margins

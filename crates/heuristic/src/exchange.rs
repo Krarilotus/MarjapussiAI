@@ -32,6 +32,25 @@ fn outcome(solver: &mut Solver, hands: [CardSet; 4], declarer: u8, value: i32) -
     })
 }
 
+/// The declaring team's final points after the exchange, per believed world (its weight and the
+/// points under both teams' best play with open hands), from the current position.
+pub(crate) fn team_points(ctx: &Ctx) -> Option<Vec<(f64, i32)>> {
+    let _timing = beliefs::profile::scope("exchange.team_points");
+    let us = ctx.me % 2;
+    let public = ctx.k.public_state(ctx.me, engine::PlayPhase::Cards);
+    let mut solver = Solver::with_tt_bits(TT_BITS);
+    let points: Vec<(f64, i32)> = ctx.with_worlds(|worlds: &[World]| {
+        worlds_of(ctx, worlds)
+            .iter()
+            .filter_map(|w| {
+                let state = FastState::from_public(public, w.hands).ok()?;
+                Some((w.weight, state.points(us) + solver.value(&state, us)))
+            })
+            .collect()
+    });
+    (!points.is_empty()).then_some(points)
+}
+
 /// The believed worlds the exchange searches: a prefix of the decision's pool (a sample).
 fn worlds_of<'a>(ctx: &Ctx, worlds: &'a [World]) -> &'a [World] {
     &worlds[..worlds.len().min(ctx.params.exchange_worlds as usize)]
