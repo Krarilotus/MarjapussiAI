@@ -65,8 +65,6 @@ params! {
     /// Pass-back plan: minimum P(partner holds a half of the suit) to favour my single half.
     partner_half_conf: f32 = 0.5,
 
-    /// The tie-break: 140 instead of a +5/+10 message step from this fitted `game_drive`.
-    game_drive_min: f32 = 0.5,
     /// B-quiet: take the game at 140 (nothing left to tell) from this fitted P(take). The fit
     /// imitates humans at 0.5; with the deep endgame, 0.8 scores better (2026-10-31, against
     /// checkpoint 2 on seeds 1, 2, 4: +1.2 points/game, +7 points/series; 0.7 to 0.9 a plateau,
@@ -206,7 +204,6 @@ impl Params {
             ("partner_lead_conf", self.partner_lead_conf),
             ("half_question_min", self.half_question_min),
             ("take_140_min", self.take_140_min),
-            ("game_drive_min", self.game_drive_min),
         ] {
             if !(0.0..=1.0).contains(&p) {
                 return Err(HeuristicError::Params(format!("{name} must be finite and in [0, 1]")));

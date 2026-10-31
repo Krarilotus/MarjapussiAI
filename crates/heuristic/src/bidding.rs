@@ -336,7 +336,7 @@ fn tie_break(ctx: &Ctx, legal: &[GameAction], t: &TieBreak, why: &mut Vec<Fact>)
     // 2. 140 if the game drive says so.
     let drive = game_drive(ctx, t);
     why.push(fact("game_drive", drive));
-    if drive >= ctx.params.game_drive_min {
+    if drive >= 0.5 {
         return Some(decision(find(legal, Some(PAIR_LINE))?, RuleId::BGate, why.clone()));
     }
     None
