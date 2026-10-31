@@ -70,6 +70,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
     let mut slot = ctx.solver.borrow_mut();
     let solver = slot.get_or_insert_with(|| Solver::with_tt_bits(TT_BITS));
     let mut rng = Rng::new(ctx.seed);
+    let min_worlds = ctx.params.endgame_min_worlds.min(ctx.params.endgame_worlds) as usize;
     let evaluated = {
         let model = ctx.mind.deal_model();
         let raise = crate::routes::RaiseEvidence::new(ctx);
@@ -86,16 +87,16 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
             worlds: ctx.params.endgame_worlds as usize,
             limits,
             racing: (ctx.params.endgame_race_z > 0.0).then(|| Racing {
-                batch: ctx.params.endgame_race_batch.max(1) as usize,
+                batch: ctx.params.endgame_race_batch as usize,
                 z: ctx.params.endgame_race_z as f64,
             }),
             // A search that cannot reach the minimum stops early and leaves the time to the rules.
-            required: ctx.params.endgame_min_worlds as usize,
+            required: min_worlds,
         };
         evaluate_moves(solver, k, &table, objective, &belief, &mut rng, effort, keep).ok()
     };
     // A complete evaluation decides even with fewer consistent deals than the minimum.
-    let d = evaluated.filter(|d| d.complete || d.worlds >= ctx.params.endgame_min_worlds as usize)?;
+    let d = evaluated.filter(|d| d.complete || d.worlds >= min_worlds)?;
     // An incomplete evaluation stopped at the clock only if the deadline has passed; otherwise
     // the node limit (`Params::endgame_nodes`) ended it, deterministically.
     if !d.complete && deadline.is_some_and(|d| Instant::now() >= d) {

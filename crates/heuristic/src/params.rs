@@ -157,8 +157,8 @@ params! {
     /// The endgame search's logical work limit per decision, in solver nodes (0: none). The
     /// worlds completed within it decide; the wall-clock deadline is only the live safety stop.
     endgame_nodes: u64 = 1_000_000,
-    /// The fewest completed worlds the endgame decides on, unless all consistent deals were
-    /// solved; with fewer, the play rules decide.
+    /// The fewest completed worlds the endgame decides on (at most `endgame_worlds`), unless all
+    /// consistent deals were solved; with fewer, the play rules decide.
     endgame_min_worlds: u32 = 16,
     /// Racing in the endgame (`solver::Racing`, every `endgame_race_batch` worlds): moves
     /// trailing the leader by more than this many paired standard errors are dropped (0: off).
@@ -226,6 +226,9 @@ impl Params {
                 "endgame_tricks must be in 0..={}",
                 engine::TRICKS
             )));
+        }
+        if self.endgame_race_batch == 0 {
+            return Err(HeuristicError::Params("endgame_race_batch must be positive".into()));
         }
         if self.endgame_tricks != 0 && self.endgame_worlds == 0 {
             return Err(HeuristicError::Params(
