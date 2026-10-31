@@ -2,7 +2,9 @@
 //! exact leaves, or every consistent deal when there are few. Only the seat's `Knowledge` and
 //! the engine's `PublicState` go in, so the true hidden hands cannot reach the decision.
 
-use engine::{game_scores, FastState, GameOutcome, Move, PublicState, SCHWARZ_FACTOR_FIFTHS, TRICKS};
+use engine::{
+    game_scores, FastState, GameOutcome, Move, PublicState, CARD_POINTS_TOTAL, SCHWARZ_FACTOR_FIFTHS, TRICKS,
+};
 use knowledge::{Belief, Knowledge, World};
 use rand::RngCore;
 
@@ -140,6 +142,87 @@ fn trickless_costs(team: u8, playing_team: u8, game_value: i32) -> bool {
     })
 }
 
+/// `team`'s engine score margin (its score minus the other team's) in a contract game where the
+/// playing team ends with `points` and `tricks`, the other team with the rest of the cards.
+fn margin(team: u8, playing_team: u8, game_value: i32, points: i32, tricks: u8) -> f64 {
+    let s = (playing_team & 1) as usize;
+    let mut o = GameOutcome {
+        playing_team: Some(playing_team & 1),
+        game_value,
+        team_points: [0; 2],
+        team_tricks: [0; 2],
+    };
+    o.team_points[s] = points;
+    o.team_points[1 - s] = (CARD_POINTS_TOTAL - points).max(0);
+    o.team_tricks[s] = tricks;
+    o.team_tricks[1 - s] = TRICKS - tricks;
+    let scores = game_scores(&o, SCHWARZ_FACTOR_FIFTHS);
+    (scores[team as usize & 1] - scores[1 - (team as usize & 1)]) as f64
+}
+
+/// What one unit of a criterion's measure is worth to the deciding team in engine score margin
+/// (`game::scoring` decides): the contract swing for reaching the game value, the schwarz
+/// penalty for a team's first trick, one point per point. Racing compares moves by it; the
+/// decision itself stays lexicographic.
+fn criterion_weight(objective: Objective, c: &Criterion) -> f64 {
+    let Objective::Contract {
+        playing_team,
+        game_value,
+    } = objective
+    else {
+        return 1.0;
+    };
+    let s = playing_team & 1;
+    let half = TRICKS / 2;
+    match c.measure {
+        Measure::Points { .. } => 1.0,
+        Measure::ReachPoints { .. } => {
+            margin(s, s, game_value, game_value, half) - margin(s, s, game_value, game_value - 1, half)
+        }
+        // A trickless declarer fails its contract; trickless defenders face a made one.
+        Measure::ReachTricks { team, .. } if team & 1 == s => {
+            margin(s, s, game_value, 0, 1) - margin(s, s, game_value, 0, 0)
+        }
+        Measure::ReachTricks { team, .. } => {
+            margin(team, s, game_value, CARD_POINTS_TOTAL, TRICKS - 1)
+                - margin(team, s, game_value, CARD_POINTS_TOTAL, TRICKS)
+        }
+    }
+}
+
+/// Successive elimination over the worlds (racing): after every `batch` completed worlds, a
+/// move whose expected engine score margin (`criterion_weight`) trails the leader's by more
+/// than `z` paired standard errors is no longer searched, and is left out of the decision.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Racing {
+    pub batch: usize,
+    pub z: f64,
+}
+
+impl Racing {
+    /// The moves still in the race: `margins[i][w]` is move `i`'s margin in world `w` (only for
+    /// active moves), `p` the worlds' normalised weights.
+    fn eliminate(&self, active: &mut [bool], margins: &[Vec<f64>], p: &[f64]) {
+        let mean = |i: usize| margins[i].iter().zip(p).map(|(v, p)| v * p).sum::<f64>();
+        let Some(leader) = (0..active.len())
+            .filter(|&i| active[i])
+            .max_by(|&a, &b| mean(a).total_cmp(&mean(b)).then(b.cmp(&a)))
+        else {
+            return;
+        };
+        let n = 1.0 / p.iter().map(|p| p * p).sum::<f64>();
+        let rivals: Vec<usize> = (0..active.len()).filter(|&i| active[i] && i != leader).collect();
+        for i in rivals {
+            let d: Vec<f64> = margins[leader].iter().zip(&margins[i]).map(|(a, b)| a - b).collect();
+            let gap: f64 = d.iter().zip(p).map(|(d, p)| d * p).sum();
+            let var: f64 = d.iter().zip(p).map(|(d, p)| p * (d - gap).powi(2)).sum();
+            if gap > TIE && gap > self.z * (var / n).sqrt() {
+                active[i] = false;
+            }
+        }
+    }
+}
+
 fn criteria(objective: Objective, table: &PublicState, me: u8) -> Vec<Criterion> {
     let mine = me & 1;
     let max = |measure| Criterion {
@@ -271,11 +354,12 @@ pub fn evaluate_limited<R: RngCore + ?Sized, B: Belief + ?Sized>(
     rng: &mut R,
     limits: Limits,
 ) -> Result<Decision, SolverError> {
-    evaluate_moves(solver, knowledge, table, objective, worlds, belief, rng, limits, |_| true)
+    evaluate_moves(solver, knowledge, table, objective, worlds, belief, rng, limits, |_| true, None)
 }
 
 /// `evaluate_limited` over the legal moves the caller keeps (`keep`): a root policy filter.
 /// The kept moves' values are those of the full evaluation; the others are not searched.
+/// With `racing`, moves clearly behind are dropped as the worlds come in (`Racing`).
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_moves<R: RngCore + ?Sized, B: Belief + ?Sized>(
     solver: &mut Solver,
@@ -287,6 +371,7 @@ pub fn evaluate_moves<R: RngCore + ?Sized, B: Belief + ?Sized>(
     rng: &mut R,
     limits: Limits,
     keep: impl Fn(Move) -> bool,
+    racing: Option<Racing>,
 ) -> Result<Decision, SolverError> {
     let budget = Budget::new(limits, solver);
     if budget.stopped(solver) {
@@ -344,24 +429,50 @@ pub fn evaluate_moves<R: RngCore + ?Sized, B: Belief + ?Sized>(
         })
         .collect();
     let (mut completed, mut weight, mut weight_sq) = (0usize, 0.0, 0.0);
-    let world_values = |solver: &mut Solver, s: &FastState, criteria: &[Criterion]| -> Option<Vec<Vec<f64>>> {
+    let mut active = vec![true; moves.len()];
+    let world_values = |solver: &mut Solver,
+                        s: &FastState,
+                        criteria: &[Criterion],
+                        active: &[bool]|
+     -> Option<Vec<Option<Vec<f64>>>> {
         moves
             .iter()
-            .map(|&mv| criteria_row(solver, &s.after(mv), criteria, &budget))
+            .zip(active)
+            .map(|(&mv, &on)| match on {
+                true => criteria_row(solver, &s.after(mv), criteria, &budget).map(Some),
+                false => Some(None),
+            })
             .collect()
     };
+    let weights: Vec<f64> = criteria.iter().map(|c| criterion_weight(objective, c)).collect();
+    let margin_of = |row: &[f64]| -> f64 {
+        criteria
+            .iter()
+            .zip(&weights)
+            .zip(row)
+            .map(|((c, w), x)| if c.maximize { w * x } else { -w * x })
+            .sum()
+    };
+    let (mut margins, mut world_weights) = (vec![Vec::new(); moves.len()], Vec::new());
     for (s, w) in &states {
-        let Some(row) = world_values(solver, s, &criteria) else {
+        let Some(rows) = world_values(solver, s, &criteria, &active) else {
             break;
         };
-        for (value, means) in values.iter_mut().zip(row) {
-            for (sum, mean) in value.means.iter_mut().zip(means) {
+        for (i, row) in rows.into_iter().enumerate() {
+            let Some(row) = row else { continue };
+            margins[i].push(margin_of(&row));
+            for (sum, mean) in values[i].means.iter_mut().zip(row) {
                 *sum += w * mean;
             }
         }
         completed += 1;
         weight += w;
         weight_sq += w * w;
+        world_weights.push(*w);
+        if let Some(r) = racing.filter(|r| completed % r.batch.max(1) == 0) {
+            let p: Vec<f64> = world_weights.iter().map(|x| x / weight).collect();
+            r.eliminate(&mut active, &margins, &p);
+        }
     }
     if completed == 0 {
         return Err(SolverError::Interrupted);
@@ -371,6 +482,16 @@ pub fn evaluate_moves<R: RngCore + ?Sized, B: Belief + ?Sized>(
             *mean /= weight;
         }
     }
+    // A dropped move's means cover only the worlds before it left the race: it is not compared.
+    let mut kept = active.iter();
+    values.retain(|_| *kept.next().unwrap_or(&true));
+    let moves: Vec<Move> = values.iter().map(|v| v.mv).collect();
+    let world_values = |solver: &mut Solver, s: &FastState, criteria: &[Criterion]| -> Option<Vec<Vec<f64>>> {
+        moves
+            .iter()
+            .map(|&mv| criteria_row(solver, &s.after(mv), criteria, &budget))
+            .collect()
+    };
     let mut complete = completed == states.len();
     // Declarers who cannot make the contract in any world: the loss is fixed, so they keep
     // the defenders' points down (HC-9).
@@ -433,6 +554,40 @@ mod tests {
             assert!(trickless_costs(1 - playing, playing, value));
             assert!(trickless_costs(playing, playing, value));
         }
+    }
+
+    #[test]
+    fn racing_drops_only_moves_clearly_behind() {
+        let r = Racing { batch: 8, z: 2.0 };
+        let p = vec![0.125; 8];
+        let leader = vec![10.0; 8];
+        // Behind on average but within two paired standard errors: stays in the race.
+        let close: Vec<f64> = (0..8).map(|i| if i % 2 == 0 { 12.0 } else { 7.0 }).collect();
+        let behind = vec![0.0; 8];
+        let mut active = vec![true; 3];
+        r.eliminate(&mut active, &[leader, close, behind], &p);
+        assert_eq!(active, vec![true, true, false]);
+    }
+
+    #[test]
+    fn weights_are_the_score_swings_of_the_site_scoring() {
+        let contract = Objective::Contract {
+            playing_team: 0,
+            game_value: 150,
+        };
+        let w = |measure| {
+            criterion_weight(
+                contract,
+                &Criterion {
+                    measure,
+                    maximize: true,
+                },
+            )
+        };
+        assert_eq!(w(Measure::ReachPoints { team: 0, target: 150 }), 300.0);
+        assert_eq!(w(Measure::Points { team: 1 }), 1.0);
+        assert_eq!(w(Measure::ReachTricks { team: 0, target: 1 }), 150.0);
+        assert_eq!(w(Measure::ReachTricks { team: 1, target: 1 }), 300.0);
     }
 
     #[test]

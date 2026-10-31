@@ -14,7 +14,7 @@
 //!   standing ace that wins either now or later is kept, as the future-trick value says).
 
 use engine::{CardSet, GameAction, Move, PlayPhase, QuestionType};
-use solver::{evaluate_moves, Limits, Objective, Solver};
+use solver::{evaluate_moves, Limits, Objective, Racing, Solver};
 use std::time::{Duration, Instant};
 
 use crate::rules::RuleId;
@@ -23,6 +23,8 @@ use crate::{decision, fact, Ctx, Decision, Rng};
 
 /// Transposition table of the endgame solver: 2^16 entries (2.6 MB) suffice for 4 tricks.
 const TT_BITS: u32 = 16;
+/// Worlds per racing round (`Params::endgame_race_z`).
+const RACE_BATCH: usize = 8;
 /// The endgame search's own wall-clock share of a play decision under deadlines (ms).
 const SEARCH_MS: u64 = 45;
 
@@ -90,6 +92,10 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
             &mut rng,
             limits,
             keep,
+            (ctx.params.endgame_race_z > 0.0).then(|| Racing {
+                batch: RACE_BATCH,
+                z: ctx.params.endgame_race_z as f64,
+            }),
         )
         .ok()
     };

@@ -13,4 +13,4 @@ pub use completed::{
 };
 pub use search::{Limits, Solver, DEFAULT_TT_BITS};
 pub use trick::{trick_control, TrickControl};
-pub use worlds::{evaluate, evaluate_limited, evaluate_moves, Criterion, Decision, Measure, MoveValue, Objective, SolverError};
+pub use worlds::{evaluate, evaluate_limited, evaluate_moves, Criterion, Racing, Decision, Measure, MoveValue, Objective, SolverError};
