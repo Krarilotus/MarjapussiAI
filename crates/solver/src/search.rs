@@ -8,8 +8,8 @@
 //! counts tricks instead of points for `tricks` and `reaches_tricks` (schwarz).
 
 use engine::{
-    points_set, suit_of, takes, trick_winner, value_of, CardSet, FastState, Move, CARD_POINTS, LAST_TRICK_BONUS,
-    PAIR_POINTS, SUITS, TRICKS,
+    points_set, suit_of, takes, trick_winner, value_of, CardSet, FastState, Move, PlayPhase, CARD_POINTS,
+    LAST_TRICK_BONUS, PAIR_POINTS, SUITS, TRICKS,
 };
 
 use crate::tt::{Key, TransTable, NO_MOVE};
@@ -47,22 +47,15 @@ impl Budget {
 /// Default transposition table: 2^18 entries of 40 bytes (10 MB).
 pub const DEFAULT_TT_BITS: u32 = 18;
 
-/// The most `team` can still score: every card point left, the last-trick bonus, and every
-/// uncalled pair whose halves remain in the team. This deliberately overestimates
+/// Uncalled pairs that could still score for `team`. This deliberately overestimates
 /// activation: a question can reach a partner or split pair despite lost own rights.
 #[inline]
-fn max_future(s: &FastState, team: u8) -> i32 {
-    if s.is_over() {
-        return 0;
-    }
-    let trick = s.trick().iter().fold(CardSet::EMPTY, |a, &c| a | CardSet::single(c));
-    let mut most = points_set(s.in_hands() | trick) + LAST_TRICK_BONUS;
+fn pair_bound(s: &FastState, team: u8) -> i32 {
+    let hand = s.hand(team) | s.hand(team + 2);
+    let mut most = 0;
     for suit in SUITS {
-        if s.called() >> suit as u8 & 1 == 0 {
-            let pair = CardSet::halves(suit);
-            if pair.is_subset(s.hand(team) | s.hand(team + 2)) {
-                most += PAIR_POINTS[suit as usize];
-            }
+        if s.called() >> suit as u8 & 1 == 0 && CardSet::halves(suit).is_subset(hand) {
+            most += PAIR_POINTS[suit as usize];
         }
     }
     most
@@ -89,28 +82,37 @@ impl MoveList {
             scores: [0; 18],
             len: 0,
         };
-        for m in s.moves().filter(|m| !matches!(m, Move::Card(_))) {
-            let score = match m {
-                Move::Announce(suit) => 10_000 + PAIR_POINTS[suit as usize],
-                Move::Question(_) => {
-                    let asked = s.after(m);
-                    // With exposed hands an answer provides no information. If no answer
-                    // changes trump or scores a pair, playing directly dominates this
-                    // question: same cards and lead, with at least as many rights retained.
-                    // Keep all root questions in world evaluation; this is not an
-                    // information-set pruning rule.
-                    if !asked.moves().any(|a| {
-                        let answered = asked.after(a);
-                        answered.trump() != s.trump() || answered.called() != s.called()
-                    }) {
-                        continue;
+        if s.phase() != PlayPhase::Cards {
+            for m in s.moves().filter(|m| !matches!(m, Move::Card(_))) {
+                let score = match m {
+                    Move::Announce(suit) => 10_000 + PAIR_POINTS[suit as usize],
+                    Move::Question(_) => {
+                        let asked = s.after(m);
+                        // With exposed hands an answer provides no information. If no answer
+                        // changes trump or scores a pair, playing directly dominates this
+                        // question: same cards and lead, with at least as many rights retained.
+                        // Keep all root questions in world evaluation; this is not an
+                        // information-set pruning rule.
+                        if !asked.moves().any(|a| {
+                            let answered = asked.after(a);
+                            answered.trump() != s.trump() || answered.called() != s.called()
+                        }) {
+                            continue;
+                        }
+                        9_000
                     }
-                    9_000
-                }
-                Move::Answer(_) => 10_000,
-                Move::Card(_) => unreachable!(),
-            };
-            list.push(m.code(), score);
+                    Move::Answer(_) => 10_000,
+                    Move::Card(_) => unreachable!(),
+                };
+                list.push(m.code(), score);
+            }
+        }
+        let legal = s.legal_cards();
+        if list.len == 0 && legal.len() <= 1 {
+            for c in legal.iter() {
+                list.push(c, 0);
+            }
+            return list;
         }
         let trick = s.trick();
         let trump = s.trump();
@@ -121,7 +123,7 @@ impl MoveList {
             let w = trick_winner(trick, trump);
             (trick[w], (s.leader() as usize + w) % 2 == mover as usize % 2)
         });
-        for c in s.legal_cards().iter() {
+        for c in legal.iter() {
             // Equivalence: the next lower live card of the suit is ours and scores the same, so
             // no live card lies between them and they are interchangeable from here on.
             let below = (live & CardSet::suit(suit_of(c))).0 & ((1u64 << c) - 1);
@@ -168,6 +170,8 @@ pub struct Solver {
     /// The searched measure: tricks if set, else points.
     tricks: bool,
     nodes: u64,
+    /// Card points already awarded plus all still available, including the last bonus.
+    card_total: i32,
 }
 
 impl Default for Solver {
@@ -188,6 +192,7 @@ impl Solver {
             team: 0,
             tricks: false,
             nodes: 0,
+            card_total: 0,
         }
     }
 
@@ -249,7 +254,7 @@ impl Solver {
     #[inline]
     fn most(&self, s: &FastState) -> i32 {
         if !self.tricks {
-            max_future(s, self.team)
+            self.card_total - s.card_points(0) - s.card_points(1) + pair_bound(s, self.team)
         } else {
             (TRICKS - s.tricks_done()) as i32
         }
@@ -281,6 +286,11 @@ impl Solver {
             return Some(0);
         }
         self.set(team, tricks);
+        // Card points are conserved through every continuation. Compute the total once,
+        // rather than summing live ranks again at every node. Pair points are separate.
+        let live = s.trick().iter().fold(s.in_hands(), |a, &c| a | CardSet::single(c));
+        self.card_total =
+            s.card_points(0) + s.card_points(1) + points_set(live) + if s.is_over() { 0 } else { LAST_TRICK_BONUS };
         let (alpha, beta) = target.map_or((-1, self.most(s) + 1), |target| (target - 1, target));
         self.search(s, alpha, beta, budget)
     }
@@ -336,7 +346,7 @@ impl Solver {
                 }
                 alpha = alpha.max(lo);
                 beta = beta.min(hi);
-                tt_best = e.best;
+                tt_best = Key::decode_move(s, e.best);
             }
         }
         let (alpha0, beta0) = (alpha, beta);
@@ -348,7 +358,20 @@ impl Solver {
         for &code in &moves.codes[..moves.len] {
             let child = s.after(Move::from_code(code));
             let gain = self.so_far(&child) - base;
-            let v = gain + self.search(&child, alpha - gain, beta - gain, budget)?;
+            let mut v;
+            if best_move != NO_MOVE && beta - alpha > 1 {
+                let (a, b) = if maximizing {
+                    (alpha, alpha + 1)
+                } else {
+                    (beta - 1, beta)
+                };
+                v = gain + self.search(&child, a - gain, b - gain, budget)?;
+                if v > alpha && v < beta {
+                    v = gain + self.search(&child, alpha - gain, beta - gain, budget)?;
+                }
+            } else {
+                v = gain + self.search(&child, alpha - gain, beta - gain, budget)?;
+            }
             if maximizing {
                 if v > best {
                     best = v;
@@ -374,7 +397,7 @@ impl Solver {
             } else {
                 (best, best)
             };
-            self.tt.store(key, lo, hi, best_move);
+            self.tt.store(key, lo, hi, Key::encode_move(s, best_move));
         }
         Some(best)
     }

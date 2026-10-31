@@ -192,22 +192,44 @@ fn criteria(objective: Objective, table: &PublicState, me: u8) -> Vec<Criterion>
     }
 }
 
-/// The measure after move `m` in world `s`.
-fn measure(solver: &mut Solver, s: &FastState, m: Move, measure: Measure, budget: &Budget) -> Option<f64> {
-    let child = s.after(m);
+/// The measure from a root child in one world.
+fn measure(solver: &mut Solver, child: &FastState, measure: Measure, budget: &Budget) -> Option<f64> {
     match measure {
-        Measure::Points { team } => {
-            Some((child.points(team) + solver.solve(&child, team, false, None, budget)?) as f64)
-        }
+        Measure::Points { team } => Some((child.points(team) + solver.solve(child, team, false, None, budget)?) as f64),
         Measure::ReachPoints { team, target } => {
             let needed = target - child.points(team);
-            Some((solver.solve(&child, team, false, Some(needed), budget)? >= needed) as u8 as f64)
+            Some((solver.solve(child, team, false, Some(needed), budget)? >= needed) as u8 as f64)
         }
         Measure::ReachTricks { team, target } => {
             let needed = target as i32 - child.tricks_won(team) as i32;
-            Some((solver.solve(&child, team, true, Some(needed), budget)? >= needed) as u8 as f64)
+            Some((solver.solve(child, team, true, Some(needed), budget)? >= needed) as u8 as f64)
         }
     }
+}
+
+/// Every criterion's measure from a root child in one world. A points optimum also answers
+/// every threshold of the same team, so a reach criterion is read from it without another
+/// search. Teams must match: pair points make opposing optima non-complementary.
+fn criteria_row(solver: &mut Solver, child: &FastState, criteria: &[Criterion], budget: &Budget) -> Option<Vec<f64>> {
+    let mut row = vec![0.0; criteria.len()];
+    for (i, c) in criteria.iter().enumerate() {
+        if matches!(c.measure, Measure::Points { .. }) {
+            row[i] = measure(solver, child, c.measure, budget)?;
+        }
+    }
+    for (i, c) in criteria.iter().enumerate() {
+        row[i] = match c.measure {
+            Measure::Points { .. } => continue,
+            Measure::ReachPoints { team, target } => {
+                match criteria.iter().position(|c| c.measure == Measure::Points { team }) {
+                    Some(j) => (row[j] >= target as f64) as u8 as f64,
+                    None => measure(solver, child, c.measure, budget)?,
+                }
+            }
+            Measure::ReachTricks { .. } => measure(solver, child, c.measure, budget)?,
+        };
+    }
+    Some(row)
 }
 
 /// The deciding seat's moves judged over worlds from `knowledge`, by `objective`.
@@ -306,12 +328,7 @@ pub fn evaluate_limited<R: RngCore + ?Sized, B: Belief + ?Sized>(
     let world_values = |solver: &mut Solver, s: &FastState, criteria: &[Criterion]| -> Option<Vec<Vec<f64>>> {
         moves
             .iter()
-            .map(|&mv| {
-                criteria
-                    .iter()
-                    .map(|c| measure(solver, s, mv, c.measure, &budget))
-                    .collect()
-            })
+            .map(|&mv| criteria_row(solver, &s.after(mv), criteria, &budget))
             .collect()
     };
     for (s, w) in &states {

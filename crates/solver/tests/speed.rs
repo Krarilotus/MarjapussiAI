@@ -1,16 +1,14 @@
 //! Solve time T(k) by tricks left, and the time per decision of world-sampled evaluation.
 //! Run: `cargo test --release -p marjapussi-solver --test speed -- --ignored --nocapture --test-threads 1`
 
+#[path = "support/positions.rs"]
+mod positions;
+
 use std::time::{Duration, Instant};
 
-use engine::get_all_cards;
-use engine::ActionType;
-use engine::Game;
-use engine::GamePhase;
 use engine::{CardSet, CARDS};
 use engine::{FastState, Move, TRICKS};
-use knowledge::{Tracker, Uniform};
-use observation::{seat_events, start_hand};
+use knowledge::Uniform;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -91,43 +89,7 @@ fn decision_time_by_worlds() {
     eprintln!("|---|---|---|---|---|---|---|---|---|");
     for k in [4usize, 5, 6, 7, 8, 9] {
         // Decisions of random games where the seat to move holds k cards.
-        let mut decisions = vec![];
-        let mut seed = 0u64;
-        while decisions.len() < 20 {
-            seed += 1;
-            let mut rng = StdRng::seed_from_u64(seed);
-            let mut deck = get_all_cards();
-            deck.shuffle(&mut rng);
-            let hands = [0, 9, 18, 27].map(|i| deck[i..i + 9].to_vec());
-            let mut game = Game::new("speed".into(), ["S0", "S1", "S2", "S3"].map(String::from), Some(hands));
-            let stop = rng.random_range(0..4);
-            while !game.ended() {
-                let s = &game.state;
-                let me = s.player_at_turn.0;
-                let in_play = matches!(s.phase, GamePhase::Trick | GamePhase::StartTrick);
-                if in_play && s.players[me as usize].cards.len() == k && s.current_trick.len() % 4 == stop {
-                    let mut tracker = Tracker::new(me, start_hand(&game, me));
-                    for e in seat_events(&game, me) {
-                        tracker.apply(&e).unwrap();
-                    }
-                    let fast = FastState::from_game(&game).unwrap();
-                    decisions.push((
-                        *tracker.knowledge(),
-                        fast.public(),
-                        fast.moves().count(),
-                        fast.points(me % 2),
-                    ));
-                    break;
-                }
-                let legal: Vec<_> = game
-                    .legal_actions()
-                    .iter()
-                    .filter(|a| !matches!(a.action_type, ActionType::UndoRequest))
-                    .cloned()
-                    .collect();
-                game.apply_action_mut(legal[rng.random_range(0..legal.len())]);
-            }
-        }
+        let decisions = positions::decisions(k, 20);
         let moves = decisions.iter().map(|d| d.2).sum::<usize>() as f64 / decisions.len() as f64;
         // Larger hands exercise interruption only; no unbounded full-game run.
         for worlds in [50, 100, 200].into_iter().filter(|_| k <= 6) {
@@ -223,5 +185,48 @@ fn decision_time_by_worlds() {
                 completed_worlds[pass] as f64 / n as f64,
             );
         }
+    }
+}
+
+/// Full decisions, no deadline truncation: same 20 fixtures as decision_time_by_worlds.
+#[test]
+#[ignore]
+fn decision_time_contract_64() {
+    let mut solver = Solver::with_tt_bits(16);
+    eprintln!("| k | decisions | worlds | mean ms | max ms | mean nodes |");
+    for k in [5, 6, 7] {
+        let decisions = positions::decisions(k, 20);
+        let mut times = vec![];
+        let mut nodes = 0;
+        for (i, (know, table, _, _)) in decisions.iter().enumerate() {
+            solver.clear();
+            solver.reset_nodes();
+            let team = i % 2;
+            let objective = Objective::Contract {
+                playing_team: team as u8,
+                game_value: (table.card_points[team] + table.pair_points[team]) as i32 + 30,
+            };
+            let start = Instant::now();
+            let d = evaluate_limited(
+                &mut solver,
+                know,
+                table,
+                objective,
+                64,
+                &Uniform,
+                &mut StdRng::seed_from_u64(64),
+                Limits::default(),
+            )
+            .unwrap();
+            times.push(start.elapsed().as_nanos());
+            assert!(d.complete);
+            nodes += solver.nodes();
+        }
+        eprintln!(
+            "| {k} | 20 | 64 | {:.3} | {:.3} | {} |",
+            ms(times.iter().sum::<u128>()) / 20.0,
+            ms(*times.iter().max().unwrap()),
+            nodes / 20
+        );
     }
 }

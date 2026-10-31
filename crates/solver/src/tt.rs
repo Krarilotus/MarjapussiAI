@@ -1,7 +1,33 @@
 //! Transposition table for trick starts: bounds on a team's future points, keyed by the
 //! position. Points and tricks so far are path data and stay out of the key.
 
-use engine::{FastState, CARDS};
+use engine::{FastState, CARDS, SUITS};
+
+// Only 6/7/8/9 have equal point values and no pair role. Delete gaps among
+// these ranks while preserving their order and owner. Scoring ranks stay literal.
+const PACK_LOW: [[u8; 16]; 16] = {
+    let mut table = [[0; 16]; 16];
+    let mut live = 0;
+    while live < 16 {
+        let mut hand = 0;
+        while hand < 16 {
+            let mut rank = 0;
+            let mut to = 0;
+            while rank < 4 {
+                if live & (1 << rank) != 0 {
+                    if hand & (1 << rank) != 0 {
+                        table[live][hand] |= 1 << to;
+                    }
+                    to += 1;
+                }
+                rank += 1;
+            }
+            hand += 1;
+        }
+        live += 1;
+    }
+    table
+};
 
 /// A trick-start position, the team the values are for, and the measure (points or tricks).
 /// Hands, leader, trump, called suits and trump rights decide the rest of the play;
@@ -14,7 +40,19 @@ pub(crate) struct Key([u64; 4]);
 impl Key {
     #[inline]
     pub(crate) fn of(s: &FastState, team: u8, tricks: bool) -> Key {
-        let h = s.hands();
+        let mut h = s.hands().map(|h| h.0);
+        let live = s.in_hands().0;
+        for suit in SUITS {
+            let shift = suit as u8 * 9;
+            let ranks = (live >> shift & 15) as usize;
+            if ranks & (ranks + 1) == 0 {
+                continue; // Already packed (including an empty suit).
+            }
+            for hand in &mut h {
+                let packed = PACK_LOW[ranks][(*hand >> shift & 15) as usize] as u64;
+                *hand = (*hand & !(15 << shift)) | packed << shift;
+            }
+        }
         let meta = team as u64
             | (s.leader() as u64) << 1
             | (s.trump().map_or(4, |t| t as u64)) << 3
@@ -22,7 +60,30 @@ impl Key {
             | (s.rights_code() as u64) << 10
             | (s.phase().code() as u64) << 18
             | (tricks as u64) << 21;
-        Key([h[0].0, h[1].0, h[2].0, h[3].0 | meta << CARDS])
+        Key([h[0], h[1], h[2], h[3] | meta << CARDS])
+    }
+
+    /// Translate the ordering hint along with the zero-point rank abstraction.
+    #[inline]
+    pub(crate) fn encode_move(s: &FastState, code: u8) -> u8 {
+        if code >= CARDS as u8 || code % 9 >= 4 {
+            return code;
+        }
+        let base = code / 9 * 9;
+        base + ((s.in_hands().0 >> base & 15) & ((1 << (code - base)) - 1)).count_ones() as u8
+    }
+
+    #[inline]
+    pub(crate) fn decode_move(s: &FastState, code: u8) -> u8 {
+        if code >= CARDS as u8 || code % 9 >= 4 {
+            return code;
+        }
+        let base = code / 9 * 9;
+        let mut ranks = s.in_hands().0 >> base & 15;
+        for _ in 0..code % 9 {
+            ranks &= ranks - 1;
+        }
+        base + ranks.trailing_zeros() as u8
     }
 
     #[inline]

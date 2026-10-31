@@ -468,3 +468,54 @@ fn split_pair_question_changes_the_last_trick_only_for_an_uncalled_suit() {
         assert_eq!(answered.phase(), PlayPhase::Cards);
     }
 }
+
+/// Reuse bounds between order-preserving renamings of the zero-point ranks.
+/// Both point and trick optima are checked independently by exhaustive minimax;
+/// scoring ranks, pair cards, suit identities and public state remain unchanged.
+#[test]
+fn zero_point_rank_gaps_preserve_values_and_cached_bounds() {
+    let mut rng = StdRng::seed_from_u64(0x6007_8009);
+    let mut solver = Solver::with_tt_bits(10);
+    let mut changed = 0;
+    for i in 0..300usize {
+        let original = position(&mut rng, 1 + (i % 3) as u8, 0);
+        let mut parts = original.parts();
+        for suit in SUITS {
+            let base = suit as u8 * 9;
+            let live = original.in_hands().0 >> base & 15;
+            let old: Vec<_> = (0..4).filter(|r| live >> r & 1 != 0).collect();
+            let mut new = vec![0, 1, 2, 3];
+            new.shuffle(&mut rng);
+            new.truncate(old.len());
+            new.sort_unstable();
+            for hand in &mut parts.hands {
+                let ranks = hand.0 >> base & 15;
+                hand.0 &= !(15 << base);
+                for (&from, &to) in old.iter().zip(&new) {
+                    if ranks >> from & 1 != 0 {
+                        hand.0 |= 1 << (base + to);
+                    }
+                }
+            }
+        }
+        let renamed = FastState::from_parts(parts).unwrap();
+        changed += usize::from(original != renamed);
+        for team in 0..2 {
+            let points = brute(&original, team);
+            let tricks = brute_tricks(&original, team);
+            assert_eq!(brute(&renamed, team), points);
+            assert_eq!(brute_tricks(&renamed, team), tricks);
+            for s in [&original, &renamed, &original] {
+                assert_eq!(solver.value(s, team), points, "{s:?}");
+                for target in [points - 1, points, points + 1] {
+                    assert_eq!(solver.reaches(s, team, target), points >= target);
+                }
+                assert_eq!(solver.tricks(s, team), tricks);
+                for target in [tricks, tricks + 1] {
+                    assert_eq!(solver.reaches_tricks(s, team, target), tricks >= target);
+                }
+            }
+        }
+    }
+    assert!(changed >= 150, "too few renamed positions: {changed}");
+}
