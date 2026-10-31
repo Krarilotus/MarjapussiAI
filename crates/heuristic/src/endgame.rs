@@ -23,8 +23,6 @@ use crate::{decision, fact, Ctx, Decision, Rng};
 
 /// Transposition table of the endgame solver: 2^16 entries (2.6 MB) suffice for 4 tricks.
 const TT_BITS: u32 = 16;
-/// Worlds per racing round (`Params::endgame_race_z`).
-const RACE_BATCH: usize = 8;
 /// The endgame search's own wall-clock share of a play decision under deadlines (ms): the
 /// logical limit `Params::endgame_nodes` normally ends it first; the rest of the play limit
 /// stays for the rules' fallback.
@@ -88,7 +86,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
             worlds: ctx.params.endgame_worlds as usize,
             limits,
             racing: (ctx.params.endgame_race_z > 0.0).then(|| Racing {
-                batch: RACE_BATCH,
+                batch: ctx.params.endgame_race_batch.max(1) as usize,
                 z: ctx.params.endgame_race_z as f64,
             }),
             // A search that cannot reach the minimum stops early and leaves the time to the rules.

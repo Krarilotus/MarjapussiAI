@@ -147,9 +147,10 @@ params! {
     /// The fewest completed worlds the endgame decides on, unless all consistent deals were
     /// solved; with fewer, the play rules decide.
     endgame_min_worlds: u32 = 16,
-    /// Racing in the endgame (`solver::Racing`, batches of `RACE_BATCH` worlds): moves trailing
-    /// the leader by more than this many paired standard errors are dropped (0: off).
+    /// Racing in the endgame (`solver::Racing`, every `endgame_race_batch` worlds): moves
+    /// trailing the leader by more than this many paired standard errors are dropped (0: off).
     endgame_race_z: f32 = 2.0,
+    endgame_race_batch: u32 = 8,
 
     // Card play (§6.0, §7): the valuation (C25)
     /// P8/P10a: the partner "may hold a pair" (worth a "Yours", and a right to keep) from this.

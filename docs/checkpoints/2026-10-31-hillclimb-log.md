@@ -88,6 +88,16 @@ the moves above 80 ms from 126 to 33. Less budget costs strength without lowerin
 maximum: the tail is the rules' fallback, not the search. *Raw work in a run without
 deadlines; the live lane (deadlines wall) stayed at 91.6 ms.
 
+## After checkpoint 2 (opponent `c2` unless stated)
+
+| Variant | Seed | Points/game | Points/series | Cause |
+|---|---|---:|---:|---|
+| B-take on (`b_take = true`), owner's "reassess once the declarer play improves" | 1 | −1.63 [−5.11, +1.85] | +0.47 [−24.35, +25.30] | 3,193 vs 1,807 contracts, success 63% vs 65%: still overbids |
+| same | 2 | −8.21 [−11.74, −4.69] | −45.02 [−72.73, −17.31] | rejected |
+| Rollouts keep to 8 worlds after a spent endgame search (`194da89`, reverted) | 1 | −3.51 [−5.53, −1.48] | −20.59 [−36.21, −4.98] | the full rollout comparison decides many seven-trick positions the budget cannot finish |
+| same | 2 | −4.37 [−6.44, −2.29] | −32.63 [−48.52, −16.73] | and the maximum time stayed (93 ms): the tail is the search, not the fallback |
+| `target-cpu` x86-64-v2 / v3 (solver benchmark) | | no change within 5% | | the hot path is not bit-count bound |
+
 ## Series objective (HS-1) and raising
 
 | Variant | Points/game | Points/series | Cause |
