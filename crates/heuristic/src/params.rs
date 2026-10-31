@@ -93,22 +93,11 @@ params! {
     /// game vs without); choosing the highest target picks the hands whose playout estimate is
     /// too high (human games: estimates of 240+ overshoot by 5 to 22 points).
     route_raise: bool = false,
-    /// HZ-1 by exact search (`exchange::team_points`) over the exchange's worlds, discounting the
-    /// open hands' points by this margin.
-    raise_search: bool = false,
-    raise_search_margin: i32 = 0,
     /// P-route: the pass forth by route over the believed worlds (`passing::route_forth`). Off
     /// (Astra's review 2026-10-13, followed): the forecast lacks the team's private transfer
     /// facts in play and a receiver-readable route to the giver's kept entries, so its margins
     /// (+178 over the owner's HP-5 pass) are not yet a fair comparison.
     pass_route: bool = false,
-    /// The exchange by exact search (`exchange`): the store's best passes, judged over the
-    /// believed worlds by the double-dummy contract outcome, forth and back respectively.
-    exchange_forth: bool = false,
-    exchange_back: bool = false,
-    /// The store's best passes the exchange search compares, and the believed worlds it solves.
-    exchange_candidates: u32 = 8,
-    exchange_worlds: u32 = 16,
     /// Compare the stored return with candidates preserving a top-controlled run.
     /// Independent of the pass-forth route; retains the store on unresolved comparisons.
     return_run_route: bool = true,
@@ -174,6 +163,9 @@ params! {
     seed: u64 = 0,
 }
 
+/// The largest racing margin in paired standard errors: beyond it no move is ever dropped.
+const MAX_RACE_Z: f32 = 10.0;
+
 /// How a scored choice becomes an action (C10/C11): the benchmark takes the best option.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Selection {
@@ -203,6 +195,11 @@ impl Params {
             return Err(HeuristicError::Params(
                 "sample_temperature must be finite and nonnegative".into(),
             ));
+        }
+        if !(0.0..=MAX_RACE_Z).contains(&self.endgame_race_z) {
+            return Err(HeuristicError::Params(format!(
+                "endgame_race_z must be finite and in [0, {MAX_RACE_Z}]"
+            )));
         }
         if self.endgame_tricks > engine::TRICKS as u32 {
             return Err(HeuristicError::Params(format!(

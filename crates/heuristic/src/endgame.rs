@@ -25,8 +25,10 @@ use crate::{decision, fact, Ctx, Decision, Rng};
 const TT_BITS: u32 = 16;
 /// Worlds per racing round (`Params::endgame_race_z`).
 const RACE_BATCH: usize = 8;
-/// The endgame search's own wall-clock share of a play decision under deadlines (ms).
-const SEARCH_MS: u64 = 45;
+/// The endgame search's own wall-clock share of a play decision under deadlines (ms): the
+/// logical limit `Params::endgame_nodes` normally ends it first; the rest of the play limit
+/// stays for the rules' fallback.
+const SEARCH_MS: u64 = 65;
 
 pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option<Decision> {
     let _timing = beliefs::profile::scope("endgame");
