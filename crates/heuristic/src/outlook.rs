@@ -545,6 +545,12 @@ pub(crate) struct WorldValues<K> {
 /// guard's standard error has a sample to stand on).
 const MIN_WORLDS: usize = 8;
 
+/// Whether an evaluation under way has enough worlds at its `i`-th: after `MIN_WORLDS`, once
+/// the deadline has passed or the exact endgame spent the decision's work (`Ctx::search_spent`).
+fn enough(ctx: &Ctx, i: usize) -> bool {
+    i >= MIN_WORLDS && (ctx.search_spent.get() || past(ctx))
+}
+
 /// The decision's deadline has passed: an evaluation not yet started is skipped (its rule
 /// decides), one under way stops after `MIN_WORLDS`.
 fn past(ctx: &Ctx) -> bool {
@@ -571,7 +577,7 @@ impl<K: Copy + PartialEq> WorldValues<K> {
         let mut values = vec![Vec::new(); options.len()];
         let mut p = Vec::new();
         for (i, w) in worlds.iter().enumerate() {
-            if i >= MIN_WORLDS && past(ctx) {
+            if enough(ctx, i) {
                 break;
             }
             let row: Option<Vec<i32>> = options.iter().map(|o| value(w, o)).collect();
@@ -791,7 +797,7 @@ pub(crate) fn final_outcomes(ctx: &Ctx) -> Option<Outcomes> {
             return None;
         }
         for (i, w) in worlds.iter().enumerate() {
-            if i >= MIN_WORLDS && past(ctx) {
+            if enough(ctx, i) {
                 break;
             }
             if let Some(ends) = plans.iter().map(|&plan| ends(w, plan)).collect::<Option<Vec<_>>>() {

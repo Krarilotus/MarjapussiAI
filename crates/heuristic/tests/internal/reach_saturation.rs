@@ -231,6 +231,7 @@ fn with_ctx<T>(
         seed: params.seed ^ (view.seat as u64) << 56 ^ view.events.len() as u64,
         deadline: Some(Instant::now() + Duration::from_secs(60)),
         deadline_hit: Default::default(),
+        search_spent: Default::default(),
         series: Default::default(),
         routes: RefCell::new(None),
         concepts: RefCell::new(crate::concepts::Reads::default()),
