@@ -45,6 +45,8 @@ are the open questions (research proposal 5).
 | Continuation store by consumed plan prefix | `perf --games 100` decision hash unchanged | outlook.route 7.8 s → 3.5 s |
 | Endgame root filter searched first (`evaluate_moves`) | decision hash unchanged | small: few questions are filtered |
 | Root dedup of publicly equivalent cards (rejected) | nodes 152,219 vs 152,406 | the TT already answers equivalent cards; not worth the code |
+| Killer moves per ply (rejected) | nodes +1% / +2% / −4% at 5 / 6 / 7 cards | ordering is already 95% first-move cutoffs mid-trick, 83% at trick starts |
+| Transposition table 2^18–2^22 entries (rejected) | 3.63M → 3.52M nodes at 7 cards, slower per node | the table is not the bottleneck |
 
 ## Budgeted deep endgame (after the fix; includes the series raise and raise evidence)
 
@@ -97,6 +99,31 @@ deadlines; the live lane (deadlines wall) stayed at 91.6 ms.
 | Rollouts keep to 8 worlds after a spent endgame search (`194da89`, reverted) | 1 | −3.51 [−5.53, −1.48] | −20.59 [−36.21, −4.98] | the full rollout comparison decides many seven-trick positions the budget cannot finish |
 | same | 2 | −4.37 [−6.44, −2.29] | −32.63 [−48.52, −16.73] | and the maximum time stayed (93 ms): the tail is the search, not the fallback |
 | `target-cpu` x86-64-v2 / v3 (solver benchmark) | | no change within 5% | | the hot path is not bit-count bound |
+| Racing every 4 worlds instead of 8 | 1 / 2 | −1.05 / −1.23 | −5.88 / −7.87 | early eliminations on too few worlds; rejected |
+| 96 endgame worlds | 1 / 2 | +0.19 / +0.47 | +1.07 / +2.16 | no measurable gain |
+| 128 outlook worlds (vs `0e441f7`) | 1 / 2 | +0.00 / +2.03 | +3.36 / +17.14 | move max 132–181 ms: over the limit; rejected |
+| Endgame from 8 tricks (vs `0e441f7`) | 1 / 2 | −0.03 / +0.15 | −0.14 / +1.34 | almost no eight-trick search finishes in the budget |
+
+## Bidding thresholds (convention-preserving; opponent `c2`, or the frontier `dbc1345` where marked)
+
+| Variant | Seeds | Points/game | Points/series | Note |
+|---|---|---|---|---|
+| B-quiet `take_140_min` 0.4 | 1 / 2 | −0.55 / −0.64 | −3.06 / −4.06 | takes more often: worse |
+| 0.6 | 1 / 2 | +0.59 / +0.30 | +2.84 / +2.17 | |
+| 0.7 | 1 / 2 / 4 | +0.96 / +0.45 / +1.50 | +4.43 / +2.99 / +9.36 | |
+| **0.8 (adopted, `dbc1345`)** | 1 / 2 / 4 | **+1.28 / +0.29 / +1.90** | **+6.20 / +1.63 / +13.03** | passing lets a 125–135 message bid play |
+| 0.9 | 1 / 4 | +1.02 / +2.15 | +3.31 / +14.44 | plateau |
+| 0.5 × the series' break-even scale (HS-1, reverted) | 1 / 2 | −0.56 / −0.52 | −2.19 / −2.88 | the scale mostly lowers the threshold: like 0.4 |
+| Partnership `dbc1345` + `c2` vs `c2` + `c2` | 1 / 2 | +0.61 / +0.03 | +2.46 / −0.34 | no partnership regression |
+| B-over140 `over_140_cover` 0.65 (vs `dbc1345`) | 1 / 2 | −2.51 / −1.83 | −17.42 / −9.27 | crosses 140 more: worse |
+| **0.85 (adopted, `c926961`; B-defend's reach kept at 0.75)** | 1 / 2 / 4 | **+2.18 / +0.71 / +1.61** | **+16.04 / +1.55 / +6.64** | identical with the reach also at 0.85 |
+| 0.95 | 1 / 2 | +2.43 / +0.45 | +17.92 / +0.11 | plateau |
+| Game-drive tie-break 0.6 / 0.4 (vs `dbc1345`, reverted) | 1 / 2 | −0.48 / +0.30; −0.49 / −0.78 | −4.16 / +3.13; −0.81 / −5.79 | neutral |
+| HZ-1 estimate shift −5 / +5 / +10 (vs `dbc1345`, reverted) | 1 / 2 | +0.39 / −0.29; −0.97 / −0.55; −0.76 / −0.95 | | the human-fitted estimate needs no shift |
+
+Both adopted thresholds deviate from an owner example at its stated threshold (the seed-42
+140 take; batch 1c's over-140 step). The tests keep those examples at the owner's
+thresholds and record that the defaults now pass or step instead.
 
 ## Series objective (HS-1) and raising
 

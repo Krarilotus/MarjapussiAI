@@ -233,7 +233,7 @@ fn route_back(ctx: &Ctx, hand: CardSet, options: &[(GameAction, CardSet, f64)], 
         return store;
     };
     let chosen = CardSet::from_cards(cards);
-    let candidates = return_candidates(hand, options, chosen);
+    let candidates = return_candidates(hand, options, chosen, ctx.params.return_store_candidates as usize);
     if candidates.len() < 2 {
         return store;
     }
@@ -270,8 +270,21 @@ fn route_back(ctx: &Ctx, hand: CardSet, options: &[(GameAction, CardSet, f64)], 
     )
 }
 
-fn return_candidates(hand: CardSet, options: &[(GameAction, CardSet, f64)], chosen: CardSet) -> Vec<CardSet> {
+fn return_candidates(
+    hand: CardSet,
+    options: &[(GameAction, CardSet, f64)],
+    chosen: CardSet,
+    store_best: usize,
+) -> Vec<CardSet> {
     let mut candidates = vec![chosen];
+    // The store's next best returns, in score order.
+    let mut ranked: Vec<_> = options.iter().collect();
+    ranked.sort_by(|a, b| b.2.total_cmp(&a.2));
+    for option in ranked.into_iter().take(store_best) {
+        if !candidates.contains(&option.1) {
+            candidates.push(option.1);
+        }
+    }
     for suit in SUITS.into_iter().filter(|&s| knowledge::control_run(hand, s)) {
         if let Some(option) = options
             .iter()
@@ -497,9 +510,9 @@ mod control_tests {
             )
         };
         let options = [option(store, 10.0), option(keep, 0.0)];
-        assert_eq!(return_candidates(hand, &options, store), vec![store, keep]);
+        assert_eq!(return_candidates(hand, &options, store, 0), vec![store, keep]);
         // Length alone does not justify a run-preserving alternative.
-        assert_eq!(return_candidates(hand - cards(&["e-A"]), &options, store), vec![store]);
+        assert_eq!(return_candidates(hand - cards(&["e-A"]), &options, store, 0), vec![store]);
     }
 
     #[test]
