@@ -31,6 +31,7 @@ fn access(mind: &Mind, suit: Suit, own: f32, partner: f32) -> f32 {
         deadline: None,
         deadline_hit: Default::default(),
         series: Default::default(),
+        class: Default::default(),
         routes: RefCell::new(None),
         concepts: RefCell::new(crate::concepts::Reads::default()),
     };

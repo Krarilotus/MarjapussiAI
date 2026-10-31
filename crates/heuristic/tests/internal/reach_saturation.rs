@@ -232,6 +232,7 @@ fn with_ctx<T>(
         deadline: Some(Instant::now() + Duration::from_secs(60)),
         deadline_hit: Default::default(),
         series: Default::default(),
+        class: Default::default(),
         routes: RefCell::new(None),
         concepts: RefCell::new(crate::concepts::Reads::default()),
     };

@@ -481,6 +481,7 @@ mod control_tests {
             deadline: None,
             deadline_hit: Default::default(),
             series: Default::default(),
+            class: Default::default(),
             routes: RefCell::new(None),
             concepts: RefCell::new(crate::concepts::Reads::default()),
         };

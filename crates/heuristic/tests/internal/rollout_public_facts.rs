@@ -273,6 +273,7 @@ fn initialization_uses_public_pair_constraints_not_observers_private_hand() {
         deadline: None,
         deadline_hit: Default::default(),
         series: Default::default(),
+        class: Default::default(),
         routes: RefCell::new(None),
         concepts: RefCell::new(crate::concepts::Reads::default()),
     };
@@ -320,6 +321,7 @@ fn known_from(params: &crate::Params, mind: &Mind) -> Known {
         deadline: None,
         deadline_hit: Default::default(),
         series: Default::default(),
+        class: Default::default(),
         routes: RefCell::new(None),
         concepts: RefCell::new(crate::concepts::Reads::default()),
     };

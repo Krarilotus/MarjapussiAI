@@ -78,22 +78,50 @@ impl std::fmt::Display for HeuristicError {
 
 impl std::error::Error for HeuristicError {}
 
-/// The owner's hard time limits (2026-10-31): each exchange step under 5 s, each bid under
-/// 200 ms, each card play, question or answer under 100 ms. The raise-or-lead choice after the
-/// exchange is both a bid and a card play, so the stricter limit applies. Bounded evaluations
-/// stop at four fifths of the limit; the last fifth is left for the work after them.
-fn budget(params: &Params, legal: &[GameAction]) -> std::time::Duration {
-    let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));
-    let ms = if has(|t| matches!(t, ActionType::Pass(_))) {
-        params.planning_budget_ms
-    } else if has(|t| matches!(t, ActionType::CardPlayed(_))) {
-        params.play_budget_ms
-    } else if has(|t| matches!(t, ActionType::NewBid(_))) {
-        params.bidding_budget_ms
-    } else {
-        params.play_budget_ms
-    };
-    std::time::Duration::from_millis(ms as u64 * 4 / 5)
+/// The owner's decision classes by their hard time limits (2026-10-31): each exchange step
+/// under 5 s, each bid under 200 ms, each card play, question or answer under 100 ms. The
+/// raise-or-lead choice after the exchange is both a bid and a card play: the stricter class.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DecisionClass {
+    #[default]
+    Move,
+    Bid,
+    Exchange,
+}
+
+impl DecisionClass {
+    pub fn of(legal: &[GameAction]) -> Self {
+        let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));
+        if has(|t| matches!(t, ActionType::Pass(_))) {
+            DecisionClass::Exchange
+        } else if has(|t| matches!(t, ActionType::CardPlayed(_))) {
+            DecisionClass::Move
+        } else if has(|t| matches!(t, ActionType::NewBid(_))) {
+            DecisionClass::Bid
+        } else {
+            DecisionClass::Move
+        }
+    }
+
+    /// The class's limit. Bounded evaluations stop at four fifths of it; the last fifth is left
+    /// for the work after them.
+    fn budget(self, params: &Params) -> std::time::Duration {
+        let ms = match self {
+            DecisionClass::Exchange => params.planning_budget_ms,
+            DecisionClass::Bid => params.bidding_budget_ms,
+            DecisionClass::Move => params.play_budget_ms,
+        };
+        std::time::Duration::from_millis(ms as u64 * 4 / 5)
+    }
+
+    /// The believed worlds the decision's routes sample: more for an exchange step's limit.
+    pub fn worlds(self, params: &Params) -> usize {
+        let worlds = match self {
+            DecisionClass::Exchange => params.exchange_worlds,
+            _ => params.outlook_worlds,
+        };
+        worlds as usize
+    }
 }
 
 /// Everything a rule module needs for one decision.
@@ -116,6 +144,8 @@ pub(crate) struct Ctx<'a> {
     pub deadline_hit: std::cell::Cell<bool>,
     /// What this game's outcomes are worth in the series (HS-1).
     pub series: series::SeriesStakes,
+    /// The decision's class by the owner's time limits.
+    pub class: DecisionClass,
     pub routes: RefCell<Option<routes::Routes>>,
     pub concepts: RefCell<concepts::Reads>,
 }
@@ -300,9 +330,13 @@ impl HeuristicAgent {
             params: &self.params,
             solver: &self.solver,
             seed,
-            deadline: self.params.deadlines.then(|| started + budget(&self.params, &legal)),
+            deadline: self
+                .params
+                .deadlines
+                .then(|| started + DecisionClass::of(&legal).budget(&self.params)),
             deadline_hit: Default::default(),
             series: series::SeriesStakes::new(view.series, view.seat),
+            class: DecisionClass::of(&legal),
             routes: RefCell::new(None),
             concepts: RefCell::new(concepts::Reads::default()),
         };

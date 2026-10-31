@@ -124,6 +124,8 @@ params! {
     /// The believed worlds per decision for the outlook and the routes (a compute budget; the
     /// decision deadline stops the evaluations early).
     outlook_worlds: u32 = 64,
+    /// The believed worlds of an exchange step's routes (its limit is 5 s, not 100 ms).
+    exchange_worlds: u32 = 64,
     /// The outlook's simulated players see each believed world's hands (classic Monte-Carlo
     /// actors) instead of only the table's knowledge. Off (owner, 2026-10-12, following Astra's
     /// review): actors decide from what they know; they are improved, not given the deal.
