@@ -103,7 +103,9 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
     };
     // A complete evaluation decides even with fewer consistent deals than the minimum.
     let d = evaluated.filter(|d| d.complete || d.worlds >= ctx.params.endgame_min_worlds as usize)?;
-    if !d.complete && deadline.is_some() {
+    // An incomplete evaluation stopped at the clock only if the deadline has passed; otherwise
+    // the node limit (`Params::endgame_nodes`) ended it, deterministically.
+    if !d.complete && deadline.is_some_and(|d| Instant::now() >= d) {
         ctx.deadline_hit.set(true);
     }
     let unavailable = || None;
