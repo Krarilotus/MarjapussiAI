@@ -270,21 +270,6 @@ fn p_take_140(ctx: &Ctx, class: HandClass, value: i32, mate: PartnerCalls, why: 
     p
 }
 
-/// B-quiet's threshold on `p_take_140`: `Params::take_140_min`, moved by the series (HS-1) as
-/// far as the round moves the make probability at which declaring 140 pays.
-fn take_140_threshold(ctx: &Ctx, class: HandClass, why: &mut Vec<Fact>) -> f32 {
-    let hand = ctx.k.certain(ctx.me);
-    let estimate =
-        crate::raising::contract_estimate(hand, uncalled_pair_value(ctx.k, class), ctx.mind.derived_pair_value());
-    let total = engine::CARD_POINTS_TOTAL;
-    let theirs = engine::round5((total - estimate.round() as i32).clamp(0, total));
-    let scale = ctx.series.declare_odds_scale(PAIR_LINE, theirs) as f32;
-    if scale != 1.0 {
-        why.push(fact("series_odds_scale", scale));
-    }
-    (ctx.params.take_140_min * scale).min(1.0)
-}
-
 /// The partner in the auction so far: no call yet, its last call a pass, a pair message sent.
 #[derive(Clone, Copy)]
 struct PartnerCalls {
@@ -616,7 +601,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
         if let Some(d) = over_140(ctx, legal, &t, &mut why) {
             return d;
         }
-        if p_take_140(ctx, class, v, mate, &mut why) >= take_140_threshold(ctx, class, &mut why) {
+        if p_take_140(ctx, class, v, mate, &mut why) >= ctx.params.take_140_min {
             if let Some(a) = find(legal, Some(PAIR_LINE)) {
                 return decision(a, RuleId::BGate, why);
             }

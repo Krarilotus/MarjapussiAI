@@ -151,27 +151,6 @@ impl SeriesStakes {
         self.worth(scores)
     }
 
-    /// How the round moves the make probability at which declaring at `value` pays, against
-    /// scoring nothing, with the defenders at `theirs`: the break-even under this round's worth
-    /// over the break-even under the game's score difference. Below 1 the round favours
-    /// declaring (the bonus is within reach), above 1 caution; 1 outside a round.
-    pub fn declare_odds_scale(&self, value: i32, theirs: i32) -> f64 {
-        let break_even = |stakes: &SeriesStakes| {
-            let (made, failed, none) = (
-                stakes.worth_of(value, theirs),
-                stakes.worth_of(-value, theirs),
-                stakes.worth_of(0, 0),
-            );
-            ((none - failed) / (made - failed)).clamp(0.0, 1.0)
-        };
-        let game = break_even(&SeriesStakes { round: None, ..*self });
-        if game > 0.0 {
-            break_even(self) / game
-        } else {
-            1.0
-        }
-    }
-
     /// The expected final series margin (ours − theirs) when this game ends with `scores`
     /// (engine scores by physical team), up to a constant shared by all its outcomes.
     pub fn worth(&self, scores: [i32; 2]) -> f64 {
@@ -215,15 +194,6 @@ mod tests {
             },
             0,
         )
-    }
-
-    #[test]
-    fn the_round_lowers_the_odds_to_declare_when_a_made_game_reaches_the_bonus() {
-        assert_eq!(SeriesStakes::default().declare_odds_scale(140, 40), 1.0);
-        let near = round([380, 300], 1).declare_odds_scale(140, 40);
-        // In the first game the bonus race moves the odds less than when a made game reaches it.
-        let early = round([0, 0], 4).declare_odds_scale(140, 40);
-        assert!(near < 0.8 && near < early && early < 1.0, "{near} {early}");
     }
 
     #[test]
