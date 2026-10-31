@@ -138,6 +138,11 @@ params! {
     endgame_tricks: u32 = 4,
     /// Worlds solved per decision (all consistent deals if there are fewer).
     endgame_worlds: u32 = 64,
+    /// The endgame search's logical work limit per decision, in solver nodes (0: none). The
+    /// worlds completed within it decide; the wall-clock deadline is only the live safety stop.
+    endgame_nodes: u64 = 0,
+    /// The fewest completed worlds the endgame decides on; with fewer, the play rules decide.
+    endgame_min_worlds: u32 = 1,
 
     // Card play (§6.0, §7): the valuation (C25)
     /// P8/P10a: the partner "may hold a pair" (worth a "Yours", and a right to keep) from this.

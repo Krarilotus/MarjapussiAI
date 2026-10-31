@@ -519,8 +519,27 @@ pub fn run_with(policies: Vec<Policy>) -> Result<(), String> {
         ],
         &["--compact"],
     );
+    let mut policies = policies;
+    for arg in ["--seat0", "--seat1", "--seat2", "--seat3"] {
+        if let Some(name) = cli.str(arg) {
+            if !policies.iter().any(|p| p.name == name) {
+                policies.extend(variant(name)?);
+            }
+        }
+    }
     let options = Options::parse(&cli, &policies)?;
     write_games(&policies, &options, &mut BufWriter::new(std::io::stdout().lock()))
+}
+
+/// `hp1@<file>`: the current HP1 with the flat TOML overrides of `<file>` (`Params::from_toml`),
+/// an ad-hoc variant for parameter A/B runs; `None` for any other unregistered name.
+fn variant(name: &str) -> Result<Option<Policy>, String> {
+    let Some(path) = name.strip_prefix("hp1@") else {
+        return Ok(None);
+    };
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{name}: {e}"))?;
+    let params = Params::from_toml(&text).map_err(|e| format!("{name}: {e}"))?;
+    Ok(Some(hp1(name, params)))
 }
 
 #[cfg(test)]

@@ -20,7 +20,9 @@ COMPATIBLE_CORE = "b3abdaf1f5e47111904db442ce36db7dc4ae9e0b"
 V1_BASELINE = "af55bedcebe982644b937573ee739dada254b9fd"
 # The published v1/main head (2026-10-14): the frontier baseline of the 2026-10-31 hill climb.
 V1_MAIN = "4a1c51c671db5c5d89b23ec0dc1526449c2b0dcb"
-HISTORICAL = {"old": OLD, "previous": COMPATIBLE_CORE, "v1base": V1_BASELINE, "v1": V1_MAIN}
+# v1/main with the deadline switch only: the reproducible baseline (`--deadlines off`).
+BASE = "afe2ebb9e79eba9661c6cfdae101570578d42475"
+HISTORICAL = {"old": OLD, "previous": COMPATIBLE_CORE, "v1base": V1_BASELINE, "v1": V1_MAIN, "base": BASE}
 # Source-reviewed additive knowledge helpers; existing core algorithms unchanged.
 # Keep this exact anchor so any subsequent core change requires another review.
 COMPATIBLE_CORES = (
@@ -43,6 +45,9 @@ POLICIES = {
     "previous": f"Verified live HP1 with frozen beliefs and solver, {COMPATIBLE_CORE[:12]}",
     "v1base": f"Frozen v1 handoff before the control/reuse fixes, {V1_BASELINE[:12]}",
     "v1": f"Frozen published v1/main head, {V1_MAIN[:12]}",
+    "base": f"Frozen v1/main with the deadline switch (reproducible baseline), {BASE[:12]}",
+    "hp1@FILE": "Current HP1 with the flat TOML overrides of FILE (parameter A/B variant)",
+    "rev:COMMIT": "The heuristic, beliefs and solver frozen at a local COMMIT (shared core must be compatible)",
     "hp1-fast": "Current HP1 with continuation, return and endgame search disabled",
     "hp1-facts": "Current HP1 using hard facts without convention signals",
     "random": "Uniform random legal actions",
@@ -167,6 +172,25 @@ def without_deadlines(params_source):
     return ("if !setup.deadlines { " + " ".join(f"p.{b} = u32::MAX;" for b in budgets) + " }") if budgets else ""
 
 
+REVISION_PREFIX = "rev:"
+
+
+def frozen_policies(repo, requested):
+    """Frozen policies by name: the named HISTORICAL revisions and `rev:<commit>` lineups.
+
+    Returns name -> (crate alias, full revision). A `rev:` policy freezes any local commit's
+    heuristic, beliefs and solver, so candidates are compared without touching the checkout.
+    """
+    frozen = {}
+    for name in requested:
+        if name in HISTORICAL:
+            frozen[name] = (name, HISTORICAL[name])
+        elif name.startswith(REVISION_PREFIX):
+            revision = git(repo, "rev-parse", "--verify", name[len(REVISION_PREFIX):] + "^{commit}").decode().strip()
+            frozen[name] = ("r" + revision[:12], revision)
+    return frozen
+
+
 def prepare(repo, cache, requested, log_path):
     repo, cache = Path(repo).resolve(), Path(cache).resolve()
     cache.mkdir(parents=True, exist_ok=True)
@@ -179,9 +203,11 @@ def prepare(repo, cache, requested, log_path):
 def _prepare_locked(repo, cache, requested, log_path):
     digest = fingerprint(repo)
     compiler = toolchain(repo)
-    historical_sources = {name: snapshot(repo, cache, revision, name) for name, revision in HISTORICAL.items() if name in requested}
+    frozen = frozen_policies(repo, requested)
+    historical_sources = {name: snapshot(repo, cache, revision, alias) for name, (alias, revision) in frozen.items()}
+    aliases = {name: alias for name, (alias, _) in frozen.items()}
     builder = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    versions = {name: HISTORICAL[name] for name in historical_sources}
+    versions = {name: revision for name, (_, revision) in frozen.items()}
     proofs = {name: json.loads((source / "source-proof.json").read_text())
               for name, source in historical_sources.items()}
     key = hashlib.sha256(f"worker-v1:{digest}:{builder}:{versions}:{json.dumps(compiler, sort_keys=True)}".encode()).hexdigest()[:20]
@@ -216,7 +242,7 @@ def _prepare_locked(repo, cache, requested, log_path):
         f'{name} = {{ package = "marjapussi-{name}", path = {json.dumps((repo / "crates" / name).as_posix())} }}'
         for name in ("tools", "agent", "heuristic"))
     for name, source in historical_sources.items():
-        dependencies += (f'\n{name} = {{ package = "marjapussi-heuristic-{name}", '
+        dependencies += (f'\n{aliases[name]} = {{ package = "marjapussi-heuristic-{aliases[name]}", '
                          f'path = {json.dumps((source / "crates/heuristic").as_posix())} }}')
     cargo = f'''[package]
 name = "marja-selfplay"
@@ -238,13 +264,13 @@ panic = "abort"
         shutil.copy2(repo / "Cargo.lock", harness / "Cargo.lock")
     historical = "".join(f'''
     policies.push(Policy {{
-        name: "{name}".into(), parameters: format!("{{:?}}; effective seed supplied by worker; see policy_seed", {name}::Params::default()),
+        name: "{name}".into(), parameters: format!("{{:?}}; effective seed supplied by worker; see policy_seed", {alias}::Params::default()),
         make: Box::new(|setup: Setup| {{
-            let mut p = {name}::Params {{ seed: setup.seed, ..{name}::Params::default() }};
+            let mut p = {alias}::Params {{ seed: setup.seed, ..{alias}::Params::default() }};
             {without_deadlines(source / "crates/heuristic/src/params.rs")}
-            Box::new({name}::HeuristicAgent::new(p))
+            Box::new({alias}::HeuristicAgent::new(p))
         }}),
-    }});''' for name, source in historical_sources.items())
+    }});''' for name, source in historical_sources.items() for alias in [aliases[name]])
     source = '''use tools::selfplay::{builtin_policies, run_with, Policy, Setup};
 fn main() {
     let mut policies = builtin_policies();

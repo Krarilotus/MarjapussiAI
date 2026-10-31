@@ -53,7 +53,11 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
     let mut rng = Rng::new(ctx.seed);
     let evaluated = {
         let model = ctx.mind.deal_model();
-        let limits = Limits { deadline, nodes: None };
+        let nodes = ctx.params.endgame_nodes;
+        let limits = Limits {
+            deadline,
+            nodes: (nodes > 0).then_some(nodes),
+        };
         evaluate_limited(
             solver,
             k,
@@ -66,7 +70,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
         )
         .ok()
     };
-    let mut d = evaluated?;
+    let mut d = evaluated.filter(|d| d.worlds >= ctx.params.endgame_min_worlds as usize)?;
     if !d.complete && deadline.is_some() {
         ctx.deadline_hit.set(true);
     }

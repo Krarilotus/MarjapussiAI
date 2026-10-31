@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 
-from build import CACHE_LOCK, POLICIES, prepare
+from build import CACHE_LOCK, POLICIES, REVISION_PREFIX, prepare
 from report import compact_game, write_reports
 from resources import Resources, RunLock
 
@@ -310,7 +310,8 @@ def main():
         p.error(f"series rotation needs whole series: a multiple of {2 * SERIES_GAMES} games")
     if a.workers > rotations.get("series", rotations["distinct_deals"]):
         p.error("use no more workers than distinct deals (series in series rotation)")
-    unknown = set(a.policies) - set(POLICIES) - {"hp1"}
+    unknown = {p for p in set(a.policies) - set(POLICIES) - {"hp1"}
+               if not (p.startswith("hp1@") and Path(p[4:]).is_file()) and not p.startswith(REVISION_PREFIX)}
     if unknown:
         p.error(f"unknown policies: {', '.join(sorted(unknown))}; use --list-policies")
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -336,6 +337,8 @@ def main():
                     "primary_metric": "engine score difference per game, team slots0/2 minus slots1/3",
                     "uncertainty": "deal-clustered approximate normal interval",
                     "ceilings": "card+last-trick140, pairs280; scoring ceilings, not attainability"}
+        manifest["variants"] = {p: {"path": p[4:], "toml": Path(p[4:]).read_text(encoding="utf-8")}
+                                for p in sorted(set(a.policies)) if p.startswith("hp1@")}
         save_manifest(a.out, manifest)
         if a.prepare:
             print(f"Ready: {binary}")

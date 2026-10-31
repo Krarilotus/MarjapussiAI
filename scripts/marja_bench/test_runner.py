@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, Mock, patch
 def load_runner():
     dependencies = {}
     for name, attributes in {
-        "build": {"CACHE_LOCK": ".build.lock", "POLICIES": {}, "prepare": Mock()},
+        "build": {"CACHE_LOCK": ".build.lock", "POLICIES": {}, "REVISION_PREFIX": "rev:", "prepare": Mock()},
         "report": {"compact_game": lambda row: row, "write_reports": Mock()},
         "resources": {"Resources": Mock(), "RunLock": Mock()},
     }.items():
