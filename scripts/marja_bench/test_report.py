@@ -31,7 +31,71 @@ def game(index, delta=20, raised=False, size=4):
                              "ambiguous": True, "available_at_pass": []}]}}}
 
 
+def series_game(index, scores):
+    """A `--rotation series` row: `scores` are the physical teams' engine scores."""
+    deal, orientation = index // 2, index % 2
+    rotation = (deal % 4) ^ orientation
+    row = game(index, size=2)
+    lineup = [(s + 4 - rotation) % 4 for s in range(4)]
+    row.update(rotation_mode="series", rotation=rotation, lineup=lineup, hands_turned=rotation >= 2)
+    for d in row["decisions"]:
+        d["phase"] = ["bidding", "passing_forth", "trick", "raising"][d["seat"]]
+    row["metrics"]["scores"] = scores
+    return row
+
+
+def with_series(rows):
+    """Adds the worker's per-partnership tally (team 0 = slots 0/2), as `selfplay` writes it."""
+    for start in range(0, len(rows), 8):
+        for orientation in (0, 1):
+            totals = [0, 0]
+            for g in rows[start + orientation:start + 8:2]:
+                a = g["lineup"][0] % 2
+                g["series"] = {"index": g["deal_index"] // 4, "game": g["deal_index"] % 4, "totals_before": list(totals)}
+                totals[a] += g["metrics"]["scores"][0]
+                totals[1 - a] += g["metrics"]["scores"][1]
+            d = abs(totals[0] - totals[1]) // 5
+            lead = 0 if totals[0] > totals[1] else 1
+            difference = [0, 0] if totals[0] == totals[1] else [d if t == lead else -d for t in (0, 1)]
+            bonus = [300, -300] if totals[0] >= 500 else [0, 0]
+            g["series"]["result"] = {"games": totals, "difference": difference, "bonus": bonus,
+                                     "total": [totals[t] + difference[t] + bonus[t] for t in (0, 1)]}
+    return rows
+
+
 class ReportTest(unittest.TestCase):
+    def test_series_rotation_reports_series_margins_and_hard_limits(self):
+        # Team A (slots 0/2) scores 300 whenever it opens (600 per series: the bonus), else 0 vs 100.
+        rows = []
+        for index in range(16):
+            rotation = (index // 2 % 4) ^ (index % 2)
+            a_physical = (4 - rotation) % 4 % 2  # The opening seat holds slot (4 - rotation) % 4.
+            rows.append(series_game(index, [300, 0] if a_physical == 0 else [100, 0]))
+        rows = with_series(rows)
+        manifest = {"policies": ["new", "v1", "new", "v1"], "games": 16, "rotation_mode": "series",
+                    "games_per_deal": 2, "status": "complete", "workers": 1}
+        report = summarize(rows, manifest)
+        series = report["series"]
+        self.assertEqual((series["plays"], series["series"]), (4, 2))
+        self.assertEqual(series["margin_per_series"]["deal_clusters"], 2)
+        self.assertEqual(series["teams"][0]["bonus_rate"], 1.0)
+        self.assertEqual(series["teams"][0]["series_won"], 4)
+        self.assertEqual(series["margin_per_series"]["mean"], rows[7]["series"]["result"]["total"][0]
+                         - rows[7]["series"]["result"]["total"][1])
+        limits = report["slots"][0]["hard_limits"]
+        self.assertEqual(limits["bid"]["limit_ms"], 200)
+        self.assertEqual(limits["move"]["limit_ms"], 100)
+        self.assertEqual(limits["pass"]["limit_ms"], 5000)
+        self.assertIn("series points/series", markdown(report))
+        bad = copy.deepcopy(rows)
+        bad[2]["series"]["game"] = 0
+        with self.assertRaises(ValueError):
+            summarize(bad, manifest)
+        bad = copy.deepcopy(rows)
+        bad[1]["rotation"] = 0
+        with self.assertRaises(ValueError):
+            summarize(bad, manifest)
+
     def test_two_game_blocks_preserve_denominators_and_cluster_uncertainty(self):
         rows = [game(i, delta=(i // 2 % 2) * 40 - 20, size=2) for i in range(256)]
         for row in rows:

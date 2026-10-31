@@ -13,11 +13,14 @@ import tomllib
 from resources import RunLock
 
 CACHE_LOCK = ".build.lock"
+WORKER_BINARY = "marja-selfplay.exe" if os.name == "nt" else "marja-selfplay"
 
 OLD = "1632af833199e5253271d493af8531badfac81c0"
 COMPATIBLE_CORE = "b3abdaf1f5e47111904db442ce36db7dc4ae9e0b"
 V1_BASELINE = "af55bedcebe982644b937573ee739dada254b9fd"
-HISTORICAL = {"old": OLD, "previous": COMPATIBLE_CORE, "v1base": V1_BASELINE}
+# The published v1/main head (2026-10-14): the frontier baseline of the 2026-10-31 hill climb.
+V1_MAIN = "4a1c51c671db5c5d89b23ec0dc1526449c2b0dcb"
+HISTORICAL = {"old": OLD, "previous": COMPATIBLE_CORE, "v1base": V1_BASELINE, "v1": V1_MAIN}
 # Source-reviewed additive knowledge helpers; existing core algorithms unchanged.
 # Keep this exact anchor so any subsequent core change requires another review.
 COMPATIBLE_CORES = (
@@ -29,6 +32,8 @@ COMPATIBLE_CORES = (
     # Additive `knowledge::control_run` (2026-10-13): a new pure hand fact and its export; the
     # historical policies don't call it and no existing knowledge code changed.
     "5ec49bafffd30f830a17824d2c63dfc600f7f237",
+    # The published v1/main core; the earlier anchors are not in every clone.
+    V1_MAIN,
 )
 SHARED = ("engine", "observation", "knowledge", "agent")
 FROZEN = ("heuristic", "beliefs", "solver")
@@ -37,6 +42,7 @@ POLICIES = {
     "old": f"Exact previous heuristic and beliefs, {OLD[:12]}",
     "previous": f"Verified live HP1 with frozen beliefs and solver, {COMPATIBLE_CORE[:12]}",
     "v1base": f"Frozen v1 handoff before the control/reuse fixes, {V1_BASELINE[:12]}",
+    "v1": f"Frozen published v1/main head, {V1_MAIN[:12]}",
     "hp1-fast": "Current HP1 with continuation, return and endgame search disabled",
     "hp1-facts": "Current HP1 using hard facts without convention signals",
     "random": "Uniform random legal actions",
@@ -84,11 +90,22 @@ def verify_frozen(source, proof):
             raise RuntimeError(f"Cached historical source was modified: {source / name}")
 
 
+def available(repo, revision):
+    """Whether this clone holds the commit (private anchors are absent from public clones)."""
+    try:
+        git(repo, "cat-file", "-e", f"{revision}^{{commit}}")
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
 def snapshot(repo, cache, revision, name):
     """Verified git source, with only package metadata/path dependencies adapted."""
+    if not available(repo, revision):
+        raise RuntimeError(f"Historical policy {name} needs commit {revision}, which this clone lacks")
     core_paths = [f"crates/{p}" for p in SHARED]
-    compatible = next((revision for revision in COMPATIBLE_CORES
-                       if not git(repo, "diff", revision, "--", *core_paths)), None)
+    compatible = next((anchor for anchor in COMPATIBLE_CORES
+                       if available(repo, anchor) and not git(repo, "diff", anchor, "--", *core_paths)), None)
     untracked = git(repo, "ls-files", "--others", "--exclude-standard", "--",
                     *[f"crates/{p}" for p in SHARED]).decode()
     if compatible is None or untracked:
@@ -136,6 +153,20 @@ def snapshot(repo, cache, revision, name):
     return destination
 
 
+def without_deadlines(params_source):
+    """Rust statements removing a frozen policy's wall-clock limits under `--deadlines off`.
+
+    Policies with `Params::deadlines` switch them off; older ones only have the per-phase
+    budgets, set beyond reach (their endgame search keeps its own 45 ms wall limit).
+    """
+    path = Path(params_source)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if "deadlines: bool" in text:
+        return "p.deadlines = setup.deadlines;"
+    budgets = [b for b in ("planning_budget_ms", "bidding_budget_ms", "play_budget_ms") if f"{b}: u32" in text]
+    return ("if !setup.deadlines { " + " ".join(f"p.{b} = u32::MAX;" for b in budgets) + " }") if budgets else ""
+
+
 def prepare(repo, cache, requested, log_path):
     repo, cache = Path(repo).resolve(), Path(cache).resolve()
     cache.mkdir(parents=True, exist_ok=True)
@@ -154,7 +185,7 @@ def _prepare_locked(repo, cache, requested, log_path):
     proofs = {name: json.loads((source / "source-proof.json").read_text())
               for name, source in historical_sources.items()}
     key = hashlib.sha256(f"worker-v1:{digest}:{builder}:{versions}:{json.dumps(compiler, sort_keys=True)}".encode()).hexdigest()[:20]
-    binary = cache / "bin" / key / "marja-selfplay.exe"
+    binary = cache / "bin" / key / WORKER_BINARY
     record = binary.parent / "build.json"
     metadata = {"revision": git(repo, "rev-parse", "HEAD").decode().strip(),
                 "source_sha256": digest, "historical_policies": versions,
@@ -202,17 +233,25 @@ strip = "debuginfo"
 panic = "abort"
 '''
     (harness / "Cargo.toml").write_text(cargo, encoding="utf-8")
+    if not (harness / "Cargo.lock").exists() and (repo / "Cargo.lock").exists():
+        # Offline resolution starts from the workspace's locked (and locally cached) versions.
+        shutil.copy2(repo / "Cargo.lock", harness / "Cargo.lock")
     historical = "".join(f'''
     policies.push(Policy {{
         name: "{name}".into(), parameters: format!("{{:?}}; effective seed supplied by worker; see policy_seed", {name}::Params::default()),
-        make: Box::new(|seed, _| Box::new({name}::HeuristicAgent::new({name}::Params {{ seed, ..{name}::Params::default() }}))),
-    }});''' for name in historical_sources)
-    source = '''use tools::selfplay::{builtin_policies, run_with, Policy};
+        make: Box::new(|setup: Setup| {{
+            let mut p = {name}::Params {{ seed: setup.seed, ..{name}::Params::default() }};
+            {without_deadlines(source / "crates/heuristic/src/params.rs")}
+            Box::new({name}::HeuristicAgent::new(p))
+        }}),
+    }});''' for name, source in historical_sources.items())
+    source = '''use tools::selfplay::{builtin_policies, run_with, Policy, Setup};
 fn main() {
     let mut policies = builtin_policies();
     policies.push(Policy {
         name: "new".into(), parameters: format!("{:?}; effective seed supplied by worker; see policy_seed", heuristic::Params::default()),
-        make: Box::new(|seed, _| Box::new(heuristic::HeuristicAgent::new(heuristic::Params { seed, ..heuristic::Params::default() }))),
+        make: Box::new(|setup: Setup| Box::new(heuristic::HeuristicAgent::new(heuristic::Params {
+            seed: setup.seed, deadlines: setup.deadlines, ..heuristic::Params::default() }))),
     });
 ''' + historical + '''
     if let Err(error) = run_with(policies) { eprintln!("{error}"); std::process::exit(1); }

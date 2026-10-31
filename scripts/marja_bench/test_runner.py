@@ -53,7 +53,7 @@ class RunnerTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.directory = Path(temporary.name)
         self.manifest = {"status": "complete", "games": 1, "writers_stopped": True}
-        self.options = SimpleNamespace(workers=1, games=1, seed=1, rotation="teams-and-seats", policy_seed=None,
+        self.options = SimpleNamespace(workers=1, games=1, seed=1, rotation="teams-and-seats", policy_seed=None, compact=False, deadlines="wall",
                                        policies=["new", "old", "new", "old"])
         self.resources = Mock()
         self.resources.describe.return_value = {}
@@ -105,7 +105,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(self.stored_manifest()["status"], "complete")
 
     def test_team_job_is_128_blocks_and_forwards_zero_without_dropping_it(self):
-        options = SimpleNamespace(workers=2, games=256, seed=20261013, rotation="teams", policy_seed=0,
+        options = SimpleNamespace(workers=2, games=256, seed=20261013, rotation="teams", policy_seed=0, compact=False, deadlines="wall",
                                   policies=["new", "previous", "new", "previous"])
         metadata = runner.rotation_metadata(options.games, options.rotation)
         self.assertEqual((metadata["distinct_deals"], metadata["full_rotation_blocks"],

@@ -22,6 +22,8 @@ use crate::{decision, fact, Ctx, Decision, Rng};
 
 /// Transposition table of the endgame solver: 2^16 entries (2.6 MB) suffice for 4 tricks.
 const TT_BITS: u32 = 16;
+/// The endgame search's own wall-clock share of a play decision under deadlines (ms).
+const SEARCH_MS: u64 = 45;
 
 pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option<Decision> {
     let _timing = beliefs::profile::scope("endgame");
@@ -30,9 +32,12 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
     if tricks_left == 0 || tricks_left > ctx.params.endgame_tricks {
         return None;
     }
-    let own_deadline = Instant::now() + Duration::from_millis(45);
-    let deadline = ctx.deadline.map_or(own_deadline, |outer| outer.min(own_deadline));
-    if Instant::now() >= deadline {
+    // Under deadlines, the search keeps the rest of the play limit for the valuation's fallback.
+    let deadline = ctx
+        .deadline
+        .map(|outer| outer.min(Instant::now() + Duration::from_millis(SEARCH_MS)));
+    if deadline.is_some_and(|d| Instant::now() >= d) {
+        ctx.deadline_hit.set(true);
         return None;
     }
     let table = k.public_state(ctx.me, PlayPhase::from_actions(legal));
@@ -48,10 +53,7 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
     let mut rng = Rng::new(ctx.seed);
     let evaluated = {
         let model = ctx.mind.deal_model();
-        let limits = Limits {
-            deadline: Some(deadline),
-            nodes: None,
-        };
+        let limits = Limits { deadline, nodes: None };
         evaluate_limited(
             solver,
             k,
@@ -65,6 +67,9 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
         .ok()
     };
     let mut d = evaluated?;
+    if !d.complete && deadline.is_some() {
+        ctx.deadline_hit.set(true);
+    }
     // A called suit cannot become trump again; known answers without activation add no information.
     // This root policy filter does not change the engine's legal question list.
     let mate = engine::partner(ctx.me);

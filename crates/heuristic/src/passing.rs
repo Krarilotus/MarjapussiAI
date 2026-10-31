@@ -461,6 +461,7 @@ mod control_tests {
             solver: &RefCell::new(None),
             seed: 7,
             deadline: None,
+            deadline_hit: Default::default(),
             routes: RefCell::new(None),
             concepts: RefCell::new(crate::concepts::Reads::default()),
         };

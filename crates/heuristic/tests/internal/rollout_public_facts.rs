@@ -271,6 +271,7 @@ fn initialization_uses_public_pair_constraints_not_observers_private_hand() {
         solver: &solver,
         seed: 0,
         deadline: None,
+        deadline_hit: Default::default(),
         routes: RefCell::new(None),
         concepts: RefCell::new(crate::concepts::Reads::default()),
     };
@@ -316,6 +317,7 @@ fn known_from(params: &crate::Params, mind: &Mind) -> Known {
         solver: &solver,
         seed: 0,
         deadline: None,
+        deadline_hit: Default::default(),
         routes: RefCell::new(None),
         concepts: RefCell::new(crate::concepts::Reads::default()),
     };

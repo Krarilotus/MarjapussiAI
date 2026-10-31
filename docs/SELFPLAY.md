@@ -1,6 +1,6 @@
 # Compare four policies
 
-Run from Git Bash on Windows, with Python 3.11+ and Rust installed:
+Run from Git Bash on Windows or a POSIX shell (Linux, WSL), with Python 3.11+ and Rust installed:
 
 ```sh
 bash marja-bench --install
@@ -24,6 +24,7 @@ marja-bench new previous new previous 4000 --seed 20261012
 | `new`, `hp1` | Current checkout's default HP1. |
 | `previous` | `b3abdaf`: verified live HP1, including its frozen solver. |
 | `old` | `1632af8`: the earlier deployed policy. |
+| `v1` | `4a1c51c`: the published `v1/main` head, the 2026-10-31 hill-climb baseline. |
 | `hp1-fast` | Current HP1 with return, continuation and endgame search disabled. |
 | `hp1-facts` | Current HP1 with convention signals disabled. |
 | `random` | Uniform random legal actions. |
@@ -36,6 +37,34 @@ compatibility guard. No new shared-core anchor replaces the historical solver.
 Run manifests retain per-file historical source proofs, compiler, dependency-lock,
 generated-harness and binary hashes, parameters and effective policy seeds.
 Keep the checkout unchanged during a build and retain the cache for reproduction.
+
+## Series: points per game and per series
+
+`--rotation series` plays the site's four-game tournament round (`SeriesSettings`):
+four consecutive deals form one series, played in order, and every seat sees the
+running series score (`SeatView::series`). The opening seat holds slots 0, 3, 2, 1,
+so each player opens once and the opening partnership alternates. The whole series
+is then replayed on the same hands with the partnerships swapped (openers 3, 0, 1, 2).
+`--games` counts both plays: 5,000 games are 2,500 deals in 625 series, each played
+twice. The report adds **series points per series** (game scores, ±1/5 of the
+difference and the 500-point bonus), clustered by series, beside the per-game margin.
+
+```sh
+./marja-bench new v1 new v1 5000 --rotation series --policy-seed 0 \
+  --workers 30 --cpus 32 --memory-gib 24 --compact
+```
+
+`--compact` drops the full game records and decision facts the report does not read
+(about 6.6 KB instead of 26 KB per game). Leave it out to keep complete records for
+explaining individual games. Identical policies give exactly zero on both margins:
+each replay mirrors its game.
+
+On POSIX the job pins workers to physical cores when there are enough, runs at
+nice 10 and caps each worker's address space at the memory budget divided by the
+workers (no whole-tree commit limit without cgroups). The report's **hard limits**
+table gives each slot's maximum wall time per decision class against the owner's
+limits: 100 ms per card play, question or answer (including the raise-or-lead choice
+after the exchange), 200 ms per bid and 5 s per exchange step.
 
 ## Games and reports
 

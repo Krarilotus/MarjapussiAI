@@ -546,7 +546,11 @@ const MIN_WORLDS: usize = 8;
 /// The decision's deadline has passed: an evaluation not yet started is skipped (its rule
 /// decides), one under way stops after `MIN_WORLDS`.
 fn past(ctx: &Ctx) -> bool {
-    ctx.deadline.is_some_and(|d| std::time::Instant::now() >= d)
+    let past = ctx.deadline.is_some_and(|d| std::time::Instant::now() >= d);
+    if past {
+        ctx.deadline_hit.set(true);
+    }
+    past
 }
 
 impl<K: Copy + PartialEq> WorldValues<K> {

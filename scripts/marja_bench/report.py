@@ -15,6 +15,18 @@ SEQUENCE_COUNTERS = ("transitions", "represented_transitions", "comparisons", "r
                      "response_hits", "suffix_hits", "retained_bytes", "completed_candidates",
                      "attempted_candidates", "total_candidates")
 
+# The owner's hard wall-time limits per decision class (2026-10-31): a card play, question or
+# answer (including the raise-or-lead choice after the exchange) 100 ms; a bid 200 ms; each
+# exchange step (Schieben) 5 s.
+HARD_LIMITS_MS = {"move": 100, "bid": 200, "pass": 5000}
+
+
+def limit_class(phase):
+    if phase == "bidding":
+        return "bid"
+    return "pass" if phase.startswith("passing") else "move"
+
+
 SOLVER_EFFORT_MEANING = (
     "Canonical response-solver search nodes: actual counts attempted callbacks including failures; "
     "represented also charges completed memo hits. Algorithm-specific effort, not wall time, total CPU, "
@@ -106,14 +118,14 @@ def compact_decision(decision):
             "capture_ms": decision.get("capture_ms"),
             "assessment_serialization_ms": decision.get("assessment_serialization_ms"),
             "facts": [f for f in decision["facts"] if f["key"] in
-                      ("forecast_complete", "forecast_decisions", "forecast_reused_decisions")
+                      ("forecast_complete", "forecast_decisions", "forecast_reused_decisions", "deadline_hit")
                       or decision["rule"] == "HE-1" and f["key"] == "complete"]}
 
 
 def compact_game(game):
     """Keep report inputs only; full hands, actions and explanations stay on disk."""
     row = {k: game[k] for k in ("index", "deal_index", "deal_seed", "rotation", "lineup", "metrics")}
-    row.update({k: game[k] for k in ("rotation_mode", "games_per_deal", "hands_turned", "policy_seeds") if k in game})
+    row.update({k: game[k] for k in ("rotation_mode", "games_per_deal", "hands_turned", "policy_seeds", "series") if k in game})
     if "policies" in game:
         row["policy_seeds"] = [p.get("policy_seed", p.get("stream_seed")) for p in game["policies"]]
     row["decisions"] = [compact_decision(d) for d in game["decisions"]]
@@ -137,7 +149,7 @@ def latency(values):
             "total_seconds": sum(values) / 1000}
 
 
-def clustered_mean(games, value):
+def clustered_mean(games, value, cluster=lambda game: game["deal_index"]):
     """Game-weighted mean with a deal-clustered, approximate normal 95% interval.
 
     Unequal final blocks retain their actual game counts; cluster residual sums,
@@ -145,7 +157,7 @@ def clustered_mean(games, value):
     """
     groups = defaultdict(list)
     for game in games:
-        groups[game["deal_index"]].append(value(game))
+        groups[cluster(game)].append(value(game))
     n, g = len(games), len(groups)
     estimate = mean([v for values in groups.values() for v in values])
     if g < 2:
@@ -216,26 +228,77 @@ def recorded_timing(decisions, key):
             "seconds": sum(values) / 1000 if values else None}
 
 
+SERIES_GAMES = 4
+
+
+def series_metrics(games):
+    """Completed series per partnership (team 0 = slots 0/2), clustered by the series' deals.
+
+    Each series is played twice on the same hands with the partnerships swapped; both plays
+    form one uncertainty cluster. Totals include the round's difference and 500-point bonus.
+    """
+    plays = [{"series": g["series"]["index"], "orientation": g["index"] % 2, **g["series"]["result"]}
+             for g in games if "result" in g.get("series", {})]
+    if not plays:
+        return None
+
+    def team(t):
+        bonus = [p for p in plays if p["bonus"][t] > 0]
+        return {"total_per_series": mean([p["total"][t] for p in plays]),
+                "games_per_series": mean([p["games"][t] for p in plays]),
+                "difference_per_series": mean([p["difference"][t] for p in plays]),
+                "bonus_per_series": mean([p["bonus"][t] for p in plays]),
+                "bonus_series": len(bonus), "bonus_rate": len(bonus) / len(plays),
+                "series_won": sum(p["total"][t] > p["total"][1 - t] for p in plays)}
+
+    return {"plays": len(plays), "series": len({p["series"] for p in plays}),
+            "margin_per_series": clustered_mean(plays, lambda p: p["total"][0] - p["total"][1],
+                                                cluster=lambda p: p["series"]),
+            "teams": [team(0), team(1)]}
+
+
+def hard_limits(decisions):
+    """Maximum wall time, overruns and deadline cuts per decision class (owner's hard limits).
+
+    A deadline hit is the policy's `deadline_hit` fact: a wall-clock deadline cut an evaluation
+    short, so that decision may depend on the machine's load.
+    """
+    result = {}
+    for name, limit in HARD_LIMITS_MS.items():
+        chosen = [d for d in decisions if limit_class(d["phase"]) == name]
+        times = [d["ms"] for d in chosen]
+        result[name] = {"limit_ms": limit, "decisions": len(times), "max_ms": max(times, default=None),
+                        "over_limit": sum(t > limit for t in times),
+                        "deadline_hits": sum(any(f["key"] == "deadline_hit" for f in d["facts"]) for d in chosen)}
+    return result
+
+
 def summarize(games, manifest):
     if not games:
         raise ValueError("No finished games to report")
     if len({g["index"] for g in games}) != len(games):
         raise ValueError("Duplicate game indices in input")
     mode = manifest.get("rotation_mode", "teams-and-seats")
-    if mode not in ("teams", "teams-and-seats"):
+    if mode not in ("teams", "teams-and-seats", "series"):
         raise ValueError("Unknown rotation mode")
-    size = 2 if mode == "teams" else 4
+    size = 4 if mode == "teams-and-seats" else 2
     if manifest.get("games_per_deal", size) != size:
         raise ValueError("Manifest rotation block size mismatch")
     for g in games:
         if not 0 <= g["index"] < manifest["games"]:
             raise ValueError("Game index outside requested sample")
-        if g["index"] != size * g["deal_index"] + g["rotation"] or not 0 <= g["rotation"] < size:
+        orientation = g["index"] - size * g["deal_index"]
+        # A series' game g opens with slot [0, 3, 2, 1][g]; its replay swaps the partnerships.
+        rotation = (g["deal_index"] % SERIES_GAMES) ^ orientation if mode == "series" else orientation
+        if not 0 <= orientation < size or g["rotation"] != rotation:
             raise ValueError("Invalid deal/rotation identity")
         if g.get("rotation_mode", "teams-and-seats") != mode or g.get("games_per_deal", size) != size:
             raise ValueError("Worker/manifest rotation mismatch")
-        if "hands_turned" in g and g["hands_turned"] != (mode == "teams-and-seats" and g["rotation"] >= 2):
+        if "hands_turned" in g and g["hands_turned"] != (mode != "teams" and g["rotation"] >= 2):
             raise ValueError("Incorrect hand rotation")
+        if mode == "series" and (g.get("series", {}).get("index") != g["deal_index"] // SERIES_GAMES
+                                 or g["series"].get("game") != g["deal_index"] % SERIES_GAMES):
+            raise ValueError("Invalid series identity")
         if manifest.get("policy_seed") is not None:
             seeds = g.get("policy_seeds") or [p.get("policy_seed") for p in g.get("policies", [])]
             if seeds != [manifest["policy_seed"]] * 4:
@@ -327,6 +390,7 @@ def summarize(games, manifest):
                       "all_decisions": latency([d["ms"] for d in decisions]),
                       "nonforced_decisions": latency([d["ms"] for d in decisions if d["rule"] != "HX-1"]),
                       "phases": {p: latency(v) for p, v in phases.items()},
+                      "hard_limits": hard_limits(decisions),
                       "rules": {p: latency(v) for p, v in rules.items()},
                       "complete_forecasts": complete, "incomplete_forecasts": incomplete,
                       "forecast_completion": {"known_decisions": complete + incomplete,
@@ -368,8 +432,8 @@ def summarize(games, manifest):
             "distinct_deals": len({g["deal_index"] for g in games}),
             "all_pass_games": sum(g["metrics"]["contract"] is None for g in games),
             "schwarz_games": sum(g["metrics"]["schwarz"] for g in games),
-            "score_difference_per_game": delta, "teams": teams, "slots": slots,
-            "manifest": manifest}
+            "score_difference_per_game": delta, "series": series_metrics(games),
+            "teams": teams, "slots": slots, "manifest": manifest}
 
 
 def number(value):
@@ -391,6 +455,21 @@ def markdown(report):
              f"**A − B: {number(delta['mean'])} engine score points/game**. " +
              (f"Approximate deal-clustered 95% interval: [{number(interval[0])}, {number(interval[1])}]." if interval else "Too few deals for an interval."), "",
              "| Measure | Team A | Team B |", "|---|---:|---:|"]
+    series = report.get("series")
+    if series:
+        sd = series["margin_per_series"]
+        lines[-2:-2] = [f"**A − B: {number(sd['mean'])} series points/series** over {series['plays']:,} series plays "
+                        f"({series['series']:,} series, each replayed with partnerships swapped). " +
+                        (f"Approximate series-clustered 95% interval: [{number(sd['ci95'][0])}, {number(sd['ci95'][1])}]."
+                         if sd["ci95"] else "Too few series for an interval."), "",
+                        "| Series measure | Team A | Team B |", "|---|---:|---:|"] + [
+            f"| {label} | {fmt(series['teams'][0][key])} | {fmt(series['teams'][1][key])} |"
+            for label, key, fmt in [("Series total / series", "total_per_series", number),
+                                    ("Game scores / series", "games_per_series", number),
+                                    ("Difference share (±1/5) / series", "difference_per_series", number),
+                                    ("500-point bonus / series", "bonus_per_series", number),
+                                    ("Bonus rate (first to 500)", "bonus_rate", percent),
+                                    ("Series won", "series_won", str)]] + [""]
     specs = [("Engine score / game", "score_per_game", number), ("Wins", "wins", str),
              ("Losses", "losses", str), ("Draws", "draws", str), ("Win rate (draws separate)", "win_rate", percent),
              ("Card + last-trick points / game", "card_points_per_game", number),
@@ -415,6 +494,14 @@ def markdown(report):
         incomplete = str(slot["incomplete_forecasts"]) if coverage["known_decisions"] else "unknown"
         lines.append(f"| {slot['slot']}: {slot['policy']} | {t['count']} | {number(t['mean_ms'])} | {number(t['median_ms'])} | {number(t['p95_ms'])} | {number(t['max_ms'])} | {incomplete} | "
                      f"{coverage['known_decisions']} known / {coverage['unknown_decisions']} unknown |")
+    lines += ["", "## Hard limits", "", f"Deadlines: {report['manifest'].get('deadlines', 'wall')}. "
+              "A deadline hit means a wall-clock deadline cut an evaluation short (load-dependent decision).", "",
+              "| Slot / policy | " + " | ".join(
+        f"{name} max ms (limit {limit}) | {name} over | {name} deadline hits" for name, limit in HARD_LIMITS_MS.items()) + " |",
+        "|---|" + "---:|---:|---:|" * len(HARD_LIMITS_MS)]
+    for slot in report["slots"]:
+        cells = [f"{number(c['max_ms'])} | {c['over_limit']} | {c['deadline_hits']}" for c in slot["hard_limits"].values()]
+        lines.append(f"| {slot['slot']}: {slot['policy']} | " + " | ".join(cells) + " |")
     lines += ["", "Times measure Agent::act wall time, including forced actions; setup and posthoc diagnostics are excluded. "
               "Nonforced and per-phase timings are in summary.json. Parallel CPU contention can affect deadline-limited decisions.", "",
               "Forecast counts use only explicit forecast_complete = 0/1 facts. Coverage counts decisions, including forced actions; "
@@ -531,10 +618,15 @@ def write_reports(directory, games, manifest):
     (directory / "report.html").write_text(page + "".join(body + sections) + "</html>", encoding="utf-8")
     with (directory / "games.csv").open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["index", "deal_index", "deal_seed", "rotation", "score_A", "score_B", "cards_A", "cards_B", "pairs_A", "pairs_B", "contract", "made", "schwarz"])
+        writer.writerow(["index", "deal_index", "deal_seed", "rotation", "score_A", "score_B", "cards_A", "cards_B", "pairs_A", "pairs_B", "contract", "made", "schwarz",
+                         "contract_team", "series", "series_game", "series_before_A", "series_before_B"])
         for game in games:
             m = game["metrics"]
+            series = game.get("series", {})
+            before = series.get("totals_before", [None, None])
             writer.writerow([game[k] for k in ("index", "deal_index", "deal_seed", "rotation")] +
                             [team_value(game, m[key], team) for key in ("scores", "card_points", "pair_points") for team in (0, 1)] +
-                            [m["contract"]["final_value"] if m["contract"] else None, m["contract"]["made"] if m["contract"] else None, m["schwarz"]])
+                            [m["contract"]["final_value"] if m["contract"] else None, m["contract"]["made"] if m["contract"] else None, m["schwarz"],
+                             "AB"[team_index(game, m["contract"]["team"])] if m["contract"] else None,
+                             series.get("index"), series.get("game"), before[0], before[1]])
     return result

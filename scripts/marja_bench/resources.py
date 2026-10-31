@@ -1,4 +1,4 @@
-"""One bounded Windows process tree, including Cargo and all game workers."""
+"""One bounded process tree, including Cargo and all game workers (Windows job or POSIX limits)."""
 
 import ctypes as c
 import ctypes.wintypes as w
@@ -52,11 +52,61 @@ class CpuInfo(c.Structure):
     _fields_ = [("mask", c.c_size_t), ("relationship", w.DWORD), ("data", c.c_ulonglong * 2)]
 
 
-class Resources:
+def Resources(cpus=2, memory_gib=4):
+    """The platform's bounded process tree: a Windows job object, or POSIX limits."""
+    return WindowsResources(cpus, memory_gib) if os.name == "nt" else PosixResources(cpus, memory_gib)
+
+
+class PosixResources:
+    """Linux: an affinity subset, lowered priority and a per-process address-space cap.
+
+    POSIX has no portable whole-tree commit limit without cgroups, so each worker receives
+    the job's memory divided by the worker count (at least 1 GiB) as RLIMIT_AS.
+    """
+    NICE = 10
+
     def __init__(self, cpus=2, memory_gib=4):
-        if os.name != "nt":
-            raise RuntimeError("This resource-bounded launcher currently supports Windows/Git Bash. "
-                               "The Rust selfplay worker itself is portable.")
+        allowed = sorted(os.sched_getaffinity(0))
+        if not 1 <= cpus <= len(allowed):
+            raise ValueError(f"--cpus must be between 1 and {len(allowed)} available logical CPUs")
+        self.cpus = allowed[:cpus]
+        self.memory_gib = memory_gib
+        siblings = {}
+        for cpu in self.cpus:
+            path = Path(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list")
+            key = path.read_text().strip() if path.exists() else str(cpu)
+            siblings.setdefault(key, []).append(cpu)
+        self.cores = list(siblings.values())
+        os.sched_setaffinity(0, self.cpus)
+        os.setpriority(os.PRIO_PROCESS, 0, max(os.getpriority(os.PRIO_PROCESS, 0), self.NICE))
+        self.workers = 1
+
+    def child_limits(self, workers):
+        """A `preexec_fn` applying the per-worker address-space cap."""
+        import resource
+        self.workers = workers
+        limit = max(1, self.memory_gib * 1024 // max(1, workers)) * 1024**2
+        return lambda: resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+
+    def pin(self, process, worker, workers):
+        # When possible, one physical core (including its SMT sibling) per worker.
+        if workers <= len(self.cores):
+            expected = set(self.cores[worker])
+            os.sched_setaffinity(process.pid, expected)
+            if os.sched_getaffinity(process.pid) != expected:
+                raise RuntimeError(f"Worker {worker} CPU affinity differs from {sorted(expected)}")
+
+    def describe(self):
+        import resource
+        peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / 1024
+        return {"logical_cpus": len(self.cpus), "physical_cores": len(self.cores),
+                "affinity": self.cpus, "memory_gib": self.memory_gib,
+                "memory_limit": "RLIMIT_AS per worker = memory / workers",
+                "priority": f"nice {self.NICE}", "peak_worker_rss_mib": peak}
+
+
+class WindowsResources:
+    def __init__(self, cpus=2, memory_gib=4):
         self.k = k = c.WinDLL("kernel32", use_last_error=True)
         k.CreateJobObjectW.argtypes = [c.c_void_p, w.LPCWSTR]
         k.CreateJobObjectW.restype = w.HANDLE
@@ -91,6 +141,9 @@ class Resources:
         self.check(k.SetInformationJobObject(self.job, 9, c.byref(limits), c.sizeof(limits)))
         self.check(k.AssignProcessToJobObject(self.job, k.GetCurrentProcess()))
         # Keep this handle open until process exit: closing a kill-on-close job would kill us too.
+
+    def child_limits(self, workers):
+        return None  # The job object bounds the whole tree.
 
     @staticmethod
     def check(ok):

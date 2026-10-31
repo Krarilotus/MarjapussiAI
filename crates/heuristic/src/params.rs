@@ -62,11 +62,16 @@ params! {
 
     /// HZ-1: raise after the exchange by `contract_estimate` (the best expected contract score).
     estimated_raise: bool = true,
-    /// The owner's time budgets per decision (ms): return passing/raising,
-    /// bidding/first pass, and card play, respectively.
+    /// The owner's hard time limits per decision (ms, 2026-10-31): each exchange step
+    /// (Schieben), each bid, and each card play, question or answer (including the raise-or-lead
+    /// choice after the exchange), respectively.
     planning_budget_ms: u32 = 5000,
-    bidding_budget_ms: u32 = 1000,
+    bidding_budget_ms: u32 = 200,
     play_budget_ms: u32 = 100,
+    /// The time limits as wall-clock deadlines (live play). Off for reproducible evaluation:
+    /// only the logical work limits (worlds, solver nodes) bound a decision, so its result
+    /// does not depend on the machine's load.
+    deadlines: bool = true,
     /// B-take: bid on over an opponent's contract at 140 or more by the fitted rule. Off for the
     /// deployed execution (2026-10-13, Astra's review 17.4: a restriction to reassess once the
     /// declarer play improves): at its own decisions bidding was worse than passing (branchdiff,

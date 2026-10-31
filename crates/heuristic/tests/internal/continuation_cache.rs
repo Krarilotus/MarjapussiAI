@@ -35,6 +35,7 @@ fn context<'a>(params: &'a crate::Params, mind: &'a Mind, solver: &'a RefCell<Op
         solver,
         seed: 7,
         deadline: None,
+        deadline_hit: Default::default(),
         routes: RefCell::new(None),
         concepts: RefCell::new(crate::concepts::Reads::default()),
     }

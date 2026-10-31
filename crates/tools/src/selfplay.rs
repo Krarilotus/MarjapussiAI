@@ -2,14 +2,14 @@
 
 use std::io::{BufWriter, Write};
 
-use agent::Agent;
+use agent::{Agent, SeriesScore};
 use beliefs::{conventions::Message, Signals};
-use engine::GamePhase;
+use engine::{GamePhase, SeriesSettings, SeriesTally};
 use eval::{
     matchstats::{MatchObserver, MatchStats},
-    play_game_with,
+    play_table_with,
     suite::DealSuite,
-    RandomAgent, Rng,
+    RandomAgent, Rng, Table,
 };
 use heuristic::{HeuristicAgent, Params};
 use serde_json::{json, Value};
@@ -21,12 +21,24 @@ use crate::{
 
 pub const SCHEMA: &str = "marjapussi.selfplay/1";
 
-/// A registered policy. The factory receives a deal/slot-derived stream seed and physical
-/// seat. It is called afresh for every game; true-hand diagnostics never reach the factory.
+/// What a policy factory receives for one seat of one game; true-hand diagnostics never
+/// reach it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Setup {
+    /// The deal/slot-derived stream seed, or the run's fixed `--policy-seed`.
+    pub seed: u64,
+    /// The physical seat.
+    pub seat: u8,
+    /// The owner's wall-clock deadlines (`--deadlines wall`, live behaviour) or only the
+    /// policy's logical work limits (`--deadlines off`: reproducible under any CPU load).
+    pub deadlines: bool,
+}
+
+/// A registered policy. The factory is called afresh for every seat of every game.
 pub struct Policy {
     pub name: String,
     pub parameters: String,
-    pub make: Box<dyn Fn(u64, u8) -> Box<dyn Agent>>,
+    pub make: Box<dyn Fn(Setup) -> Box<dyn Agent>>,
 }
 
 fn hp1(name: &str, params: Params) -> Policy {
@@ -38,9 +50,10 @@ fn hp1(name: &str, params: Params) -> Policy {
     Policy {
         name: name.into(),
         parameters,
-        make: Box::new(move |seed, _seat| {
+        make: Box::new(move |setup| {
             let mut params = params.clone();
-            params.seed = seed;
+            params.seed = setup.seed;
+            params.deadlines = setup.deadlines;
             Box::new(HeuristicAgent::new(params))
         }),
     }
@@ -60,7 +73,7 @@ pub fn builtin_policies() -> Vec<Policy> {
         Policy {
             name: "random".into(),
             parameters: "uniform legal actions; SplitMix64 stream per deal and slot".into(),
-            make: Box::new(|seed, _seat| Box::new(RandomAgent(Rng::new(seed)))),
+            make: Box::new(|setup| Box::new(RandomAgent(Rng::new(setup.seed)))),
         },
     ]
 }
@@ -73,27 +86,56 @@ struct Options {
     workers: usize,
     rotation: Rotation,
     policy_seed: Option<u64>,
+    /// Omit the full game record and per-decision facts (scores, timings and rules remain).
+    compact: bool,
+    /// `Setup::deadlines` for every policy.
+    deadlines: bool,
 }
+
+/// Games of one series in `--rotation series`: the site's tournament round (`SeriesSettings`).
+const SERIES_GAMES: u64 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Rotation {
     Teams,
     TeamsAndSeats,
+    /// Four consecutive deals form one series, played in order with the running series score
+    /// public; the opening seat moves through all four slots. The whole series is replayed with
+    /// the partnerships swapped on the same hands.
+    Series,
 }
 impl Rotation {
     fn games_per_deal(self) -> u64 {
-        if self == Self::Teams {
-            2
+        match self {
+            Self::Teams | Self::Series => 2,
+            Self::TeamsAndSeats => 4,
+        }
+    }
+    /// Consecutive deals one worker plays together: a series stays on one worker.
+    fn deals_per_block(self) -> u64 {
+        if self == Self::Series {
+            SERIES_GAMES
         } else {
-            4
+            1
         }
     }
     fn name(self) -> &'static str {
-        if self == Self::Teams {
-            "teams"
-        } else {
-            "teams-and-seats"
+        match self {
+            Self::Teams => "teams",
+            Self::TeamsAndSeats => "teams-and-seats",
+            Self::Series => "series",
         }
+    }
+    /// The policy lineup rotation (`lineup`) and whether the hands turn by two seats.
+    /// In a series, game `g` opens with slot `[0, 3, 2, 1][g]`; the replay swaps partnerships
+    /// (rotation `g ^ 1`, openers `[3, 0, 1, 2]`) so each deal's hands are played by both teams
+    /// from the same seats.
+    fn seating(self, deal_index: u64, game: u8) -> (u8, bool) {
+        let rotation = match self {
+            Self::Series => (deal_index % SERIES_GAMES) as u8 ^ game,
+            _ => game,
+        };
+        (rotation, self != Self::Teams && rotation >= 2)
     }
 }
 
@@ -125,8 +167,15 @@ impl Options {
         let rotation = match cli.str("--rotation").unwrap_or("teams-and-seats") {
             "teams" => Rotation::Teams,
             "teams-and-seats" => Rotation::TeamsAndSeats,
+            "series" => Rotation::Series,
             other => return Err(format!("--rotation: unknown mode {other}")),
         };
+        let series_block = rotation.games_per_deal() * rotation.deals_per_block();
+        if rotation == Rotation::Series && games % series_block != 0 {
+            return Err(format!(
+                "--rotation series needs whole series: --games a multiple of {series_block}"
+            ));
+        }
         let policy_seed = cli
             .str("--policy-seed")
             .map(|v| {
@@ -147,7 +196,55 @@ impl Options {
             workers,
             rotation,
             policy_seed,
+            compact: cli.flag("--compact"),
+            deadlines: match cli.str("--deadlines").unwrap_or("wall") {
+                "wall" => true,
+                "off" => false,
+                other => return Err(format!("--deadlines: unknown mode {other} (wall, off)")),
+            },
         })
+    }
+}
+
+/// One series of the `series` rotation, kept per partnership (team 0 = slots 0 and 2), since
+/// the slots move between physical seats from game to game.
+struct Series {
+    index: u64,
+    tally: SeriesTally,
+}
+
+impl Series {
+    fn new(index: u64) -> Self {
+        Series {
+            index,
+            tally: SeriesTally::new(SeriesSettings::default()),
+        }
+    }
+
+    /// The public score as the table's physical teams (team 0 = seats 0 and 2) see it.
+    fn view(&self, lineup: [u8; 4]) -> SeriesScore {
+        let mut score = SeriesScore::from(&self.tally);
+        if lineup[0] % 2 == 1 {
+            score.team_totals.swap(0, 1);
+        }
+        score
+    }
+
+    /// Adds one game's physical team scores; returns the series record for that game.
+    fn add(&mut self, lineup: [u8; 4], mut scores: [i32; 2], game: u64) -> Value {
+        let before = self.tally.totals();
+        if lineup[0] % 2 == 1 {
+            scores.swap(0, 1);
+        }
+        self.tally.add_scores(scores);
+        let mut record = json!({"index": self.index, "game": game, "totals_before": before});
+        if self.tally.is_over() {
+            let r = self.tally.result();
+            record["result"] = json!({
+                "games": r.games, "difference": r.difference, "bonus": r.bonus, "total": r.total,
+            });
+        }
+        record
     }
 }
 
@@ -237,11 +334,18 @@ pub(crate) fn metrics_json(m: &MatchStats) -> Value {
     })
 }
 
-fn game(policies: &[Policy], options: &Options, deal_index: u64, rotation: u8, index: u64) -> Result<Value, String> {
+fn game(
+    policies: &[Policy],
+    options: &Options,
+    deal_index: u64,
+    game: u8,
+    index: u64,
+    mut series: Option<&mut Series>,
+) -> Result<Value, String> {
+    let (rotation, hands_turned) = options.rotation.seating(deal_index, game);
     let lineup = lineup(rotation);
     let seed = options.suite.deal_seed(deal_index);
     let mut hands = options.suite.hands(deal_index);
-    let hands_turned = options.rotation == Rotation::TeamsAndSeats && rotation >= 2;
     if hands_turned {
         hands.rotate_left(2);
     }
@@ -249,20 +353,31 @@ fn game(policies: &[Policy], options: &Options, deal_index: u64, rotation: u8, i
         .iter()
         .enumerate()
         .map(|(seat, &slot)| {
-            (policies[options.slots[slot as usize]].make)(
-                options.policy_seed.unwrap_or_else(|| stream_seed(seed, slot)),
-                seat as u8,
-            )
+            (policies[options.slots[slot as usize]].make)(Setup {
+                seed: options.policy_seed.unwrap_or_else(|| stream_seed(seed, slot)),
+                seat: seat as u8,
+                deadlines: options.deadlines,
+            })
         })
         .collect();
     let mut phases = Vec::new();
     let mut event_counts = Vec::new();
     let mut observer = MatchObserver::default();
-    let (info, log) = play_game_with(&hands, &mut players, |table, seat, _decision| {
+    let mut table = Table::new(&hands);
+    table.kinds = std::array::from_fn(|s| players[s].kind());
+    if let Some(series) = &series {
+        table.series = series.view(lineup);
+    }
+    let (info, log) = play_table_with(table, &mut players, usize::MAX, |table, seat, _decision| {
         phases.push(phase(&table.game.state.phase));
         event_counts.push(table.view(seat).events.len());
         observer.observe(table);
-    });
+    })
+    .map_err(|e| format!("game {index}: {e}"))?;
+    let series = series
+        .as_deref_mut()
+        .map(|s| s.add(lineup, info.scores(), deal_index % SERIES_GAMES));
+    let metrics = metrics_json(&observer.finish(&info));
     // The runner logs only decisions, not the four engine START events. game_record filters
     // precisely those START events, so these notes stay aligned with its action indices.
     let notes: Vec<_> = log
@@ -286,13 +401,23 @@ fn game(policies: &[Policy], options: &Options, deal_index: u64, rotation: u8, i
         .zip(event_counts)
         .enumerate()
         .map(|(step, ((l, phase), event_count))| {
-            json!({
-                "step": step, "seat": l.seat, "phase": phase, "event_count": event_count,
-                "action": action_json(&l.decision.action, phase == "raising"),
+            let facts = l.decision.explanation.facts.iter();
+            let facts: Vec<_> = if options.compact {
+                facts.filter(|f| REPORTED_FACTS.contains(&f.key)).collect()
+            } else {
+                facts.collect()
+            };
+            let mut d = json!({
+                "step": step, "seat": l.seat, "phase": phase,
                 "ms": l.nanos as f64 / 1_000_000.0,
                 "rule": l.decision.explanation.label,
-                "facts": l.decision.explanation.facts.iter().map(|f| json!({"key": f.key, "value": f.value})).collect::<Vec<_>>(),
-            })
+                "facts": facts.iter().map(|f| json!({"key": f.key, "value": f.value})).collect::<Vec<_>>(),
+            });
+            if !options.compact {
+                d["event_count"] = json!(event_count);
+                d["action"] = action_json(&l.decision.action, phase == "raising");
+            }
+            d
         })
         .collect();
     let slots: Vec<_> = options
@@ -300,36 +425,76 @@ fn game(policies: &[Policy], options: &Options, deal_index: u64, rotation: u8, i
         .iter()
         .enumerate()
         .map(|(slot, &i)| {
-            json!({
-                "name": policies[i].name, "parameters": policies[i].parameters,
+            let mut p = json!({
+                "name": policies[i].name,
                 "stream_seed": stream_seed(seed, slot as u8),
                 "policy_seed": options.policy_seed.unwrap_or_else(|| stream_seed(seed, slot as u8)),
-            })
+            });
+            if !options.compact {
+                p["parameters"] = json!(policies[i].parameters);
+            }
+            p
         })
         .collect();
-    Ok(json!({
+    let mut envelope = json!({
         "schema": SCHEMA, "index": index, "deal_index": deal_index, "deal_seed": seed,
         "rotation": rotation, "hands_turned": hands_turned, "lineup": lineup, "policies": slots,
         "rotation_mode": options.rotation.name(), "games_per_deal": options.rotation.games_per_deal(),
-        "record": game_record(&meta, &info, &notes), "decisions": decisions,
-        "metrics": metrics_json(&observer.finish(&info)),
-    }))
+        "decisions": decisions, "metrics": metrics,
+    });
+    if !options.compact {
+        envelope["record"] = game_record(&meta, &info, &notes);
+    }
+    if let Some(series) = series {
+        envelope["series"] = series;
+    }
+    Ok(envelope)
 }
 
+/// The decision facts the benchmark report reads; `--compact` keeps only these.
+const REPORTED_FACTS: [&str; 5] = [
+    "forecast_complete",
+    "forecast_decisions",
+    "forecast_reused_decisions",
+    "complete",
+    "deadline_hit",
+];
+
 fn write_games(policies: &[Policy], options: &Options, writer: &mut impl Write) -> Result<(), String> {
-    for deal_index in (options.worker_index..options.suite.deals).step_by(options.workers) {
-        for rotation in 0..options.rotation.games_per_deal() as u8 {
-            let Some(index) = (deal_index * options.rotation.games_per_deal()).checked_add(u64::from(rotation)) else {
-                break;
-            };
-            if index >= options.games {
-                break;
+    let mut emit = |envelope: Value, index: u64| -> Result<(), String> {
+        serde_json::to_writer(&mut *writer, &envelope).map_err(|e| format!("write game {index}: {e}"))?;
+        writeln!(writer)
+            .and_then(|_| writer.flush())
+            .map_err(|e| format!("flush game {index}: {e}"))
+    };
+    let per_deal = options.rotation.games_per_deal();
+    let per_block = options.rotation.deals_per_block();
+    for block in (options.worker_index..options.suite.deals.div_ceil(per_block)).step_by(options.workers) {
+        let deals = block * per_block..((block + 1) * per_block).min(options.suite.deals);
+        if options.rotation == Rotation::Series {
+            // Each orientation plays its own series through the block's deals in order.
+            for orientation in 0..per_deal as u8 {
+                let mut series = Series::new(block);
+                for deal_index in deals.clone() {
+                    let index = deal_index * per_deal + u64::from(orientation);
+                    emit(
+                        game(policies, options, deal_index, orientation, index, Some(&mut series))?,
+                        index,
+                    )?;
+                }
             }
-            let envelope = game(policies, options, deal_index, rotation, index)?;
-            serde_json::to_writer(&mut *writer, &envelope).map_err(|e| format!("write game {index}: {e}"))?;
-            writeln!(writer)
-                .and_then(|_| writer.flush())
-                .map_err(|e| format!("flush game {index}: {e}"))?;
+            continue;
+        }
+        for deal_index in deals {
+            for rotation in 0..per_deal as u8 {
+                let Some(index) = (deal_index * per_deal).checked_add(u64::from(rotation)) else {
+                    break;
+                };
+                if index >= options.games {
+                    break;
+                }
+                emit(game(policies, options, deal_index, rotation, index, None)?, index)?;
+            }
         }
     }
     Ok(())
@@ -350,8 +515,9 @@ pub fn run_with(policies: Vec<Policy>) -> Result<(), String> {
             "--workers",
             "--rotation",
             "--policy-seed",
+            "--deadlines",
         ],
-        &[],
+        &["--compact"],
     );
     let options = Options::parse(&cli, &policies)?;
     write_games(&policies, &options, &mut BufWriter::new(std::io::stdout().lock()))
@@ -360,9 +526,9 @@ pub fn run_with(policies: Vec<Policy>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{cell::RefCell, rc::Rc};
     use agent::{Decision, Explanation, Fact, SeatView};
     use engine::GameAction;
+    use std::{cell::RefCell, rc::Rc};
 
     struct First(&'static str);
     impl Agent for First {
@@ -385,7 +551,7 @@ mod tests {
             .map(|name| Policy {
                 name: name.into(),
                 parameters: "first legal".into(),
-                make: Box::new(move |_, _| Box::new(First(name))),
+                make: Box::new(move |_| Box::new(First(name))),
             })
             .into_iter()
             .collect()
@@ -431,7 +597,7 @@ mod tests {
         let policies = policies();
         let options = options(0);
         let games: Vec<_> = (0..4)
-            .map(|r| game(&policies, &options, 0, r, u64::from(r)).unwrap())
+            .map(|r| game(&policies, &options, 0, r, u64::from(r), None).unwrap())
             .collect();
         assert_eq!(games[0]["lineup"], json!([0, 1, 2, 3]));
         assert_eq!(games[1]["lineup"], json!([3, 0, 1, 2]));
@@ -494,13 +660,82 @@ mod tests {
     }
 
     #[test]
+    fn series_rotate_the_opener_swap_partnerships_and_keep_a_public_tally() {
+        let policies = policies();
+        let mut rows = Vec::new();
+        for worker in 0..2 {
+            let mut options = options(worker);
+            options.games = 32;
+            options.rotation = Rotation::Series;
+            options.suite.deals = 16;
+            options.compact = true;
+            let mut bytes = Vec::new();
+            write_games(&policies, &options, &mut bytes).unwrap();
+            for line in std::str::from_utf8(&bytes).unwrap().lines() {
+                let row: Value = serde_json::from_str(line).unwrap();
+                assert_eq!(row["series"]["index"].as_u64().unwrap() % 2, worker);
+                assert!(row.get("record").is_none());
+                rows.push(row);
+            }
+        }
+        rows.sort_by_key(|g| g["index"].as_u64().unwrap());
+        assert_eq!(rows.len(), 32);
+        for (index, row) in rows.iter().enumerate() {
+            let (deal, orientation) = (index as u64 / 2, index as u64 % 2);
+            assert_eq!(row["deal_index"], deal);
+            assert_eq!(row["series"]["index"], deal / SERIES_GAMES);
+            assert_eq!(row["series"]["game"], deal % SERIES_GAMES);
+            let rotation = (deal % SERIES_GAMES) ^ orientation;
+            assert_eq!(row["rotation"], rotation);
+            assert_eq!(row["hands_turned"], rotation >= 2);
+            // The opening seat 0 holds slots 0, 3, 2, 1 through a series (3, 0, 1, 2 in the
+            // replay): every slot opens once and the opening partnership alternates.
+            let opener = row["lineup"][0].as_u64().unwrap();
+            let openers = if orientation == 0 { [0, 3, 2, 1] } else { [3, 0, 1, 2] };
+            assert_eq!(opener, openers[(deal % SERIES_GAMES) as usize]);
+            assert_eq!(opener % 2, (deal + orientation) % 2);
+        }
+        for (deal, pair) in rows.chunks_exact(2).enumerate() {
+            // Same hands at the same seats, partnerships swapped: physical scores agree.
+            assert_eq!(pair[0]["hands_turned"], pair[1]["hands_turned"], "deal {deal}");
+            assert_ne!(
+                pair[0]["lineup"][0].as_u64().unwrap() % 2,
+                pair[1]["lineup"][0].as_u64().unwrap() % 2
+            );
+        }
+        for series in rows.chunks_exact(2 * SERIES_GAMES as usize) {
+            for orientation in 0..2 {
+                let games: Vec<_> = series.iter().skip(orientation).step_by(2).collect();
+                let mut totals = [0i64; 2];
+                for g in &games {
+                    assert_eq!(g["series"]["totals_before"], json!(totals));
+                    let scores = g["metrics"]["scores"].as_array().unwrap();
+                    let a = (g["lineup"][0].as_u64().unwrap() % 2) as usize;
+                    totals[a] += scores[0].as_i64().unwrap();
+                    totals[1 - a] += scores[1].as_i64().unwrap();
+                }
+                let result = &games[3]["series"]["result"];
+                assert_eq!(result["games"], json!(totals));
+                assert!(games[..3].iter().all(|g| g["series"].get("result").is_none()));
+            }
+        }
+    }
+
+    #[test]
+    fn series_need_whole_series() {
+        let args = ["--rotation", "series", "--games", "12"].map(String::from);
+        let cli = Cli::from_args(args, &["--rotation", "--games"], &[]);
+        assert!(Options::parse(&cli, &policies()).is_err());
+    }
+
+    #[test]
     fn teams_shards_128_original_deals_twice_and_supplies_live_seed_zero() {
         let received = Rc::new(RefCell::new(Vec::new()));
         let mut policies = policies();
         for policy in &mut policies {
             let received = received.clone();
-            policy.make = Box::new(move |seed, _| {
-                received.borrow_mut().push(seed);
+            policy.make = Box::new(move |setup| {
+                received.borrow_mut().push(setup.seed);
                 Box::new(First("first"))
             });
         }

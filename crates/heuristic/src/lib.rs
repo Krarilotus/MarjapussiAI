@@ -77,21 +77,16 @@ impl std::fmt::Display for HeuristicError {
 
 impl std::error::Error for HeuristicError {}
 
-/// The owner's time budgets (2026-10-14): return passing and raising under 5 s,
-/// bidding and first pass under 1 s, card play under 100 ms. Bounded evaluations stop at four
-/// fifths of the budget; the last fifth is left for the work after them.
-fn budget(params: &Params, knowledge: &Knowledge, legal: &[GameAction]) -> std::time::Duration {
+/// The owner's hard time limits (2026-10-31): each exchange step under 5 s, each bid under
+/// 200 ms, each card play, question or answer under 100 ms. The raise-or-lead choice after the
+/// exchange is both a bid and a card play, so the stricter limit applies. Bounded evaluations
+/// stop at four fifths of the limit; the last fifth is left for the work after them.
+fn budget(params: &Params, legal: &[GameAction]) -> std::time::Duration {
     let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));
     let ms = if has(|t| matches!(t, ActionType::Pass(_))) {
-        // Every seat observes that the first pass happened, even when its cards
-        // are hidden. With a legal Pass, no previous passer means passing forth.
-        if knowledge.first_passer().is_none() {
-            params.bidding_budget_ms
-        } else {
-            params.planning_budget_ms
-        }
-    } else if has(|t| matches!(t, ActionType::CardPlayed(_))) && has(|t| matches!(t, ActionType::NewBid(_))) {
         params.planning_budget_ms
+    } else if has(|t| matches!(t, ActionType::CardPlayed(_))) {
+        params.play_budget_ms
     } else if has(|t| matches!(t, ActionType::NewBid(_))) {
         params.bidding_budget_ms
     } else {
@@ -112,8 +107,12 @@ pub(crate) struct Ctx<'a> {
     pub solver: &'a RefCell<Option<solver::Solver>>,
     /// Seed for `Params.sample_temperature > 0` (deterministic per seat and event count).
     pub seed: u64,
-    /// A caller-owned soft deadline, propagated to bounded primitive searches.
+    /// A caller-owned soft deadline, propagated to bounded primitive searches; `None` without
+    /// `Params::deadlines`.
     pub deadline: Option<std::time::Instant>,
+    /// Some evaluation of this decision was cut short by the deadline (reported as the
+    /// `deadline_hit` fact: the decision may then depend on the machine's load).
+    pub deadline_hit: std::cell::Cell<bool>,
     pub routes: RefCell<Option<routes::Routes>>,
     pub concepts: RefCell<concepts::Reads>,
 }
@@ -298,33 +297,43 @@ impl HeuristicAgent {
             params: &self.params,
             solver: &self.solver,
             seed,
-            deadline: Some(started + budget(&self.params, mind.knowledge(), &legal)),
+            deadline: self.params.deadlines.then(|| started + budget(&self.params, &legal)),
+            deadline_hit: Default::default(),
             routes: RefCell::new(None),
             concepts: RefCell::new(concepts::Reads::default()),
         };
-        let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));
-        if has(|t| matches!(t, ActionType::Pass(_))) {
-            return passing::decide(&ctx, &legal);
+        let mut d = decide_in(&ctx, &legal);
+        if ctx.deadline_hit.get() {
+            d.why.push(fact("deadline_hit", 1.0));
         }
-        if let Some(d) = raising::follow(&ctx, &legal) {
-            return d;
-        }
-        if has(|t| matches!(t, ActionType::NewBid(_))) {
-            if has(|t| matches!(t, ActionType::CardPlayed(_))) {
-                let cards: Vec<GameAction> = legal
-                    .iter()
-                    .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
-                    .cloned()
-                    .collect();
-                return raising::decide(&ctx, &legal, &cards);
-            }
-            return bidding::decide(&ctx, &legal);
-        }
-        if has(|t| matches!(t, ActionType::Answer(_))) {
-            return play::answer(&ctx, &legal);
-        }
-        play::decide(&ctx, &legal)
+        d
     }
+}
+
+/// The decision of one non-forced position, by phase.
+fn decide_in(ctx: &Ctx, legal: &[GameAction]) -> Decision {
+    let has = |f: fn(&ActionType) -> bool| legal.iter().any(|a| f(&a.action_type));
+    if has(|t| matches!(t, ActionType::Pass(_))) {
+        return passing::decide(ctx, legal);
+    }
+    if let Some(d) = raising::follow(ctx, legal) {
+        return d;
+    }
+    if has(|t| matches!(t, ActionType::NewBid(_))) {
+        if has(|t| matches!(t, ActionType::CardPlayed(_))) {
+            let cards: Vec<GameAction> = legal
+                .iter()
+                .filter(|a| matches!(a.action_type, ActionType::CardPlayed(_)))
+                .cloned()
+                .collect();
+            return raising::decide(ctx, legal, &cards);
+        }
+        return bidding::decide(ctx, legal);
+    }
+    if has(|t| matches!(t, ActionType::Answer(_))) {
+        return play::answer(ctx, legal);
+    }
+    play::decide(ctx, legal)
 }
 
 #[cfg(test)]

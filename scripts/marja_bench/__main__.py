@@ -1,4 +1,4 @@
-"""Git Bash entry point for local, resource-bounded policy comparisons."""
+"""Entry point (Git Bash or POSIX shell) for local, resource-bounded policy comparisons."""
 
 import argparse
 from datetime import datetime, timezone
@@ -128,13 +128,22 @@ def report_existing(directory, lock):
         generate_reports(directory, manifest, final_status)
 
 
+SERIES_GAMES = 4  # The worker's series: the site's four-game tournament round.
+
+
 def rotation_metadata(games, rotation):
-    size = 2 if rotation == "teams" else 4
-    return {"rotation_mode": rotation, "games_per_deal": size,
-            "distinct_deals": (games + size - 1) // size,
-            "full_rotation_blocks": games // size, "partial_block_games": games % size,
-            "rotation": ("slots_clockwise_0_1; original_hands_unchanged" if size == 2 else
-                         "slots_clockwise_0_1_2_3; hands_turned_two_seats_for_2_3")}
+    size = 4 if rotation == "teams-and-seats" else 2
+    metadata = {"rotation_mode": rotation, "games_per_deal": size,
+                "distinct_deals": (games + size - 1) // size,
+                "full_rotation_blocks": games // size, "partial_block_games": games % size,
+                "rotation": {"teams": "slots_clockwise_0_1; original_hands_unchanged",
+                             "teams-and-seats": "slots_clockwise_0_1_2_3; hands_turned_two_seats_for_2_3",
+                             "series": "four deals per series, opening slots 0_3_2_1; replay with partnerships "
+                                       "swapped (rotation g^1); hands_turned_two_seats_for_rotations_2_3"}[rotation]}
+    if rotation == "series":
+        metadata.update(series_games=SERIES_GAMES, series=games // (size * SERIES_GAMES),
+                        series_plays=games // SERIES_GAMES)
+    return metadata
 
 
 def worker_command(binary, options, worker):
@@ -143,6 +152,10 @@ def worker_command(binary, options, worker):
                "--rotation", options.rotation]
     if options.policy_seed is not None:
         command += ["--policy-seed", str(options.policy_seed)]
+    if options.compact:
+        command.append("--compact")
+    if options.deadlines != "wall":
+        command += ["--deadlines", options.deadlines]
     for seat, policy in enumerate(options.policies):
         command += [f"--seat{seat}", policy]
     return command
@@ -175,7 +188,8 @@ def run_workers(binary, options, resources, directory, manifest):
             with (directory / f"worker-{worker}.stderr.log").open("xb") as stderr:
                 process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=stderr,
                                            text=True, encoding="utf-8", cwd=ROOT,
-                                           creationflags=subprocess.CREATE_NO_WINDOW)
+                                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                                           preexec_fn=resources.child_limits(options.workers))
             processes.append(process)
             resources.pin(process, worker, options.workers)
             thread = threading.Thread(target=read_worker, args=(worker, process), daemon=True)
@@ -247,8 +261,14 @@ def main():
                                 epilog="Example: marja-bench new old new old 4000 --workers 8 --cpus 16")
     p.add_argument("lineup", nargs="*", metavar="POLICY0 POLICY1 POLICY2 POLICY3 GAMES")
     p.add_argument("--seed", type=int, default=20261011)
-    p.add_argument("--rotation", choices=("teams", "teams-and-seats"), default="teams-and-seats",
-                   help="teams: two games per original deal; teams-and-seats: four (compatible default)")
+    p.add_argument("--rotation", choices=("teams", "teams-and-seats", "series"), default="teams-and-seats",
+                   help="teams: two games per original deal; teams-and-seats: four (compatible default); "
+                        "series: four-game series with the public series score, each replayed with partnerships swapped")
+    p.add_argument("--deadlines", choices=("wall", "off"), default="wall",
+                   help="wall: the live wall-clock decision deadlines; off: only logical work limits, "
+                        "so results do not depend on CPU load (frozen pre-switch policies keep their 45 ms endgame limit)")
+    p.add_argument("--compact", action="store_true",
+                   help="Workers omit full game records and decision facts the report does not read")
     p.add_argument("--policy-seed", type=int, help="Fixed policy seed for every agent; 0 matches the live defaults. Omit for derived deal/slot streams.")
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--cpus", type=int, default=2, help="Logical CPU limit for the whole job (default: shared-PC limit 2)")
@@ -286,8 +306,10 @@ def main():
     if a.policy_seed is not None and not 0 <= a.policy_seed < 2**64:
         p.error("policy-seed must be 0..2^64-1")
     rotations = rotation_metadata(a.games, a.rotation)
-    if a.workers > rotations["distinct_deals"]:
-        p.error("use no more workers than distinct deals")
+    if a.rotation == "series" and a.games % (2 * SERIES_GAMES):
+        p.error(f"series rotation needs whole series: a multiple of {2 * SERIES_GAMES} games")
+    if a.workers > rotations.get("series", rotations["distinct_deals"]):
+        p.error("use no more workers than distinct deals (series in series rotation)")
     unknown = set(a.policies) - set(POLICIES) - {"hp1"}
     if unknown:
         p.error(f"unknown policies: {', '.join(sorted(unknown))}; use --list-policies")
@@ -303,7 +325,8 @@ def main():
         print(f"Preparing release worker (cached builds are reused). Results: {a.out}", flush=True)
         binary, build = prepare(ROOT, a.cache, a.policies, a.out / "build.log")
         manifest = {"schema": "marjapussi.benchmark/1", "status": "prepared", "policies": a.policies,
-                    "games": a.games, "seed": a.seed, "workers": a.workers,
+                    "games": a.games, "seed": a.seed, "workers": a.workers, "compact": a.compact,
+                    "deadlines": a.deadlines,
                     **rotations, "policy_seed": a.policy_seed,
                     "policy_seed_mode": "fixed" if a.policy_seed is not None else "derived_per_deal_slot",
                     "diagnostics": "current act-call assessment; historical assessment unavailable; no second evaluator",

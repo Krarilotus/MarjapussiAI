@@ -176,6 +176,7 @@ mod tests {
             solver: &RefCell::new(None),
             seed: 1,
             deadline: None,
+            deadline_hit: Default::default(),
             routes: RefCell::new(None),
             concepts: RefCell::new(Reads {
                 remaining: 700,

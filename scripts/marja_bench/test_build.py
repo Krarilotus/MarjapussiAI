@@ -42,7 +42,7 @@ class FrozenSolverTests(unittest.TestCase):
 
     def git(self, repo, *args):
         self.calls.append(args)
-        if args[0] in ("diff", "ls-files"):
+        if args[0] in ("diff", "ls-files", "cat-file"):
             return b""
         if args[0] == "archive":
             self.assertEqual(set(args[2:]), {f"crates/{p}" for p in build.FROZEN})
@@ -278,7 +278,7 @@ class BuildLifecycleTests(unittest.TestCase):
         self.mode = "later_copy_failed"
         with self.assertRaisesRegex(OSError, "copy failed"):
             self.prepare()
-        self.assertEqual(len(list(self.cache.glob("bin/*/marja-selfplay.exe"))), 1)
+        self.assertEqual(len(list(self.cache.glob(f"bin/*/{build.WORKER_BINARY}"))), 1)
         self.assertFalse(list(self.cache.glob("bin/*/build.json")))
         self.mode = "ok"
         self.steps.clear()
