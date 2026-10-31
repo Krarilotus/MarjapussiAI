@@ -89,9 +89,28 @@ impl Default for Reads {
     }
 }
 
+/// Marks a stored key as a consumed plan prefix: `plan.next = CONSUMED + used`, apart from
+/// the unconsumed `next` values `0..=CONTINUATION_STEPS` of exact queries.
+const CONSUMED: usize = CONTINUATION_STEPS + 1;
+
+impl ContinuationQuery {
+    /// The key of a trajectory from the plan's first step that consumed `used` steps: those
+    /// decided every activation, later ones never came up. A query starting mid-plan stays exact.
+    fn consumed(mut self, used: usize) -> Self {
+        if self.plan.next == 0 {
+            self.plan.steps[used..].fill(ActivationStep::Wait);
+            self.plan.next = CONSUMED + used;
+        }
+        self
+    }
+}
+
 impl Reads {
+    /// A completed continuation for `query`: any stored trajectory whose consumed plan steps
+    /// agree with the query's. A playout that used only its first steps is the same for every
+    /// plan sharing them, so it is played once per distinct consumed prefix.
     pub fn continuation_score(&self, query: &ContinuationQuery) -> Option<TerminalScoreDifference> {
-        let score = self.continuations.get(query).copied();
+        let score = (0..=CONTINUATION_STEPS).find_map(|used| self.continuations.get(&query.consumed(used)).copied());
         #[cfg(test)]
         if score.is_some() {
             self.continuation_hits.set(self.continuation_hits.get() + 1);
@@ -99,8 +118,9 @@ impl Reads {
         score
     }
 
-    pub fn completed_continuation(&mut self, query: ContinuationQuery, score: TerminalScoreDifference) {
-        self.continuations.insert(query, score);
+    /// Stores a trajectory that consumed the first `used` steps of `query`'s plan.
+    pub fn completed_continuation(&mut self, query: ContinuationQuery, used: usize, score: TerminalScoreDifference) {
+        self.continuations.insert(query.consumed(used), score);
     }
 }
 
@@ -223,18 +243,47 @@ mod tests {
         }
         let score = TerminalScoreDifference::from_terminal(&state, Some((0, 120)), 0).unwrap();
         let mut reads = Reads::default();
-        reads.completed_continuation(query, score);
+        reads.completed_continuation(query, CONTINUATION_STEPS, score);
         assert_eq!(reads.continuation_score(&query), Some(score));
         assert_eq!(Reads::default().continuation_score(&query), None);
-        let mut variants = [query; 6];
+        let mut variants = [query; 5];
         variants[0].world.swap(1, 3);
         variants[1].phase = PlayPhase::Start;
         variants[2].action = Move::Card(1);
         variants[3].plan.actor = 2;
         variants[4].plan.steps[1] = ActivationStep::Ask;
-        variants[5].plan.next = 1;
         for other in variants {
             assert_eq!(reads.continuation_score(&other), None);
         }
+    }
+
+    #[test]
+    fn a_trajectory_answers_every_plan_sharing_its_consumed_steps() {
+        let mut state = FastState::new(std::array::from_fn(|seat| CardSet::single(seat as u8)), 0);
+        let plan = |steps| ContinuationPlan { actor: 0, steps, next: 0 };
+        let query = |steps| ContinuationQuery {
+            world: std::array::from_fn(|seat| state.hand(seat as u8)),
+            phase: PlayPhase::Cards,
+            action: Move::Card(0),
+            plan: plan(steps),
+        };
+        let (own_wait, own_ask, ask_own) = (
+            query([ActivationStep::Own, ActivationStep::Wait]),
+            query([ActivationStep::Own, ActivationStep::Ask]),
+            query([ActivationStep::Ask, ActivationStep::Own]),
+        );
+        while !state.is_over() {
+            state.play(state.legal_cards().iter().next().unwrap());
+        }
+        let score = TerminalScoreDifference::from_terminal(&state, Some((0, 120)), 0).unwrap();
+        let mut reads = Reads::default();
+        // The trajectory consumed only the first step (Own): the second never came up.
+        reads.completed_continuation(own_wait, 1, score);
+        assert_eq!(reads.continuation_score(&own_ask), Some(score));
+        assert_eq!(reads.continuation_score(&ask_own), None);
+        // With no step consumed, every plan shares the trajectory.
+        let mut none = Reads::default();
+        none.completed_continuation(own_wait, 0, score);
+        assert_eq!(none.continuation_score(&ask_own), Some(score));
     }
 }

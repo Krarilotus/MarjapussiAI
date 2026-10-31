@@ -271,6 +271,23 @@ pub fn evaluate_limited<R: RngCore + ?Sized, B: Belief + ?Sized>(
     rng: &mut R,
     limits: Limits,
 ) -> Result<Decision, SolverError> {
+    evaluate_moves(solver, knowledge, table, objective, worlds, belief, rng, limits, |_| true)
+}
+
+/// `evaluate_limited` over the legal moves the caller keeps (`keep`): a root policy filter.
+/// The kept moves' values are those of the full evaluation; the others are not searched.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_moves<R: RngCore + ?Sized, B: Belief + ?Sized>(
+    solver: &mut Solver,
+    knowledge: &Knowledge,
+    table: &PublicState,
+    objective: Objective,
+    worlds: usize,
+    belief: &B,
+    rng: &mut R,
+    limits: Limits,
+    keep: impl Fn(Move) -> bool,
+) -> Result<Decision, SolverError> {
     let budget = Budget::new(limits, solver);
     if budget.stopped(solver) {
         return Err(SolverError::Interrupted);
@@ -313,8 +330,10 @@ pub fn evaluate_limited<R: RngCore + ?Sized, B: Belief + ?Sized>(
         return Err(SolverError::ZeroWeight);
     }
     // The seat to move knows its hand, so its moves are the same in every world.
-    let moves: Vec<Move> = states[0].0.moves().collect();
-    debug_assert!(states.iter().all(|(s, _)| s.moves().eq(moves.iter().copied())));
+    let moves: Vec<Move> = states[0].0.moves().filter(|&m| keep(m)).collect();
+    debug_assert!(states
+        .iter()
+        .all(|(s, _)| s.moves().filter(|&m| keep(m)).eq(moves.iter().copied())));
 
     let mut criteria = criteria(objective, table, me);
     let mut values: Vec<_> = moves

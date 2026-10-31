@@ -13,7 +13,7 @@
 //!   standing ace that wins either now or later is kept, as the future-trick value says).
 
 use engine::{CardSet, GameAction, Move, PlayPhase, QuestionType};
-use solver::{evaluate_limited, Limits, Objective, Solver};
+use solver::{evaluate_moves, Limits, Objective, Solver};
 use std::time::{Duration, Instant};
 
 use crate::rules::RuleId;
@@ -48,36 +48,11 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
         },
         None => Objective::Points,
     };
-    let mut slot = ctx.solver.borrow_mut();
-    let solver = slot.get_or_insert_with(|| Solver::with_tt_bits(TT_BITS));
-    let mut rng = Rng::new(ctx.seed);
-    let evaluated = {
-        let model = ctx.mind.deal_model();
-        let nodes = ctx.params.endgame_nodes;
-        let limits = Limits {
-            deadline,
-            nodes: (nodes > 0).then_some(nodes),
-        };
-        evaluate_limited(
-            solver,
-            k,
-            &table,
-            objective,
-            ctx.params.endgame_worlds as usize,
-            model.weights(),
-            &mut rng,
-            limits,
-        )
-        .ok()
-    };
-    let mut d = evaluated.filter(|d| d.worlds >= ctx.params.endgame_min_worlds as usize)?;
-    if !d.complete && deadline.is_some() {
-        ctx.deadline_hit.set(true);
-    }
-    // A called suit cannot become trump again; known answers without activation add no information.
-    // This root policy filter does not change the engine's legal question list.
+    // A called suit cannot become trump again; known answers without activation add no
+    // information. Such questions are dominated by a card, so they are not searched; this root
+    // policy filter does not change the engine's legal question list.
     let mate = engine::partner(ctx.me);
-    d.moves.retain(|v| match v.mv {
+    let keep = |m: Move| match m {
         Move::Question(QuestionType::Yours) => k.pairs(mate).possible != 0,
         Move::Question(QuestionType::YourHalf(suit)) => {
             !k.is_called(suit)
@@ -88,7 +63,34 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
                 }
         }
         _ => true,
-    });
+    };
+    let mut slot = ctx.solver.borrow_mut();
+    let solver = slot.get_or_insert_with(|| Solver::with_tt_bits(TT_BITS));
+    let mut rng = Rng::new(ctx.seed);
+    let evaluated = {
+        let model = ctx.mind.deal_model();
+        let nodes = ctx.params.endgame_nodes;
+        let limits = Limits {
+            deadline,
+            nodes: (nodes > 0).then_some(nodes),
+        };
+        evaluate_moves(
+            solver,
+            k,
+            &table,
+            objective,
+            ctx.params.endgame_worlds as usize,
+            model.weights(),
+            &mut rng,
+            limits,
+            keep,
+        )
+        .ok()
+    };
+    let d = evaluated.filter(|d| d.worlds >= ctx.params.endgame_min_worlds as usize)?;
+    if !d.complete && deadline.is_some() {
+        ctx.deadline_hit.set(true);
+    }
     let unavailable = || None;
     let Some(mut best) = d.best() else { return unavailable() };
     let means = |m: Move| d.moves.iter().find(|v| v.mv == m).map(|v| v.means.clone());

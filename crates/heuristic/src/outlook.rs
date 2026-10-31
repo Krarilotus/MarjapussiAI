@@ -512,8 +512,9 @@ fn lead0(state: &FastState, known: &Known) -> u8 {
     respond(state, known)
 }
 
-/// Plays the game to its end at level 0 (see the module doc, steps 2 and 3).
-fn playout(state: &mut FastState, known: &mut Known, mut plan: Option<Plan>) {
+/// Plays the game to its end at level 0 (see the module doc, steps 2 and 3); the plan steps it
+/// consumed.
+fn playout(state: &mut FastState, known: &mut Known, mut plan: Option<Plan>) -> usize {
     while !state.is_over() {
         let c = if state.trick().is_empty() {
             let eligible =
@@ -529,6 +530,7 @@ fn playout(state: &mut FastState, known: &mut Known, mut plan: Option<Plan>) {
         known.play(state, c);
         state.play(c);
     }
+    plan.map_or(0, |p| p.next)
 }
 
 /// Option values over the believed worlds: per option its value in each world (worlds where
@@ -660,9 +662,9 @@ fn continuation_score(ctx: &Ctx, mut query: ContinuationQuery, known: Known) -> 
         }
         action => apply(&mut state, &mut known, action),
     }
-    playout(&mut state, &mut known, Some(query.plan));
+    let used = playout(&mut state, &mut known, Some(query.plan));
     let score = TerminalScoreDifference::from_terminal(&state, contract(ctx), ctx.me % 2)?;
-    ctx.concepts.borrow_mut().completed_continuation(query, score);
+    ctx.concepts.borrow_mut().completed_continuation(query, used, score);
     Some(score)
 }
 
