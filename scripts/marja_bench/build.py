@@ -43,6 +43,8 @@ COMPATIBLE_CORES = (
     "d3152f6f2084d5c45d81c7ea252154d73359db5e",
     # Additive (2026-10-31): FastState::question_activates.
     "19936afcfb2e71e463e6bf14bdf02167c90fca06",
+    # Refactor (2026-10-31): FastState::answer_makes_trump (private), same transitions.
+    "2a0343782f2572d35fa3a26261f96ddd3c8b89ce",
 )
 SHARED = ("engine", "observation", "knowledge", "agent")
 FROZEN = ("heuristic", "beliefs", "solver")
