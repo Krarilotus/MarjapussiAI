@@ -142,10 +142,12 @@ impl Scene {
     pub fn act(&self, legal: &[GameAction]) -> Decision {
         // These isolated rule fixtures exercise the fallback policy. Full lawful
         // continuations and their hidden-card guards are in contract_planning. The exact
-        // endgame keeps the four-trick scope the rule fixtures were written for.
+        // endgame keeps the four-trick scope the rule fixtures were written for, and the pass
+        // forth is the store's (P-route, which may overrule it, is off).
         self.act_with(
             Params {
                 endgame_tricks: RULE_FIXTURE_ENDGAME_TRICKS,
+                pass_route: false,
                 ..Params::default()
             },
             legal,

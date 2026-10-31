@@ -104,13 +104,15 @@ params! {
     /// game vs without); choosing the highest target picks the hands whose playout estimate is
     /// too high (human games: estimates of 240+ overshoot by 5 to 22 points).
     route_raise: bool = false,
-    /// P-route: the pass forth by route over the believed worlds (`passing::route_forth`). Off
-    /// (Astra's review 2026-10-13, followed): the forecast lacks the team's private transfer
-    /// facts in play and a receiver-readable route to the giver's kept entries, so its margins
-    /// (+178 over the owner's HP-5 pass) are not yet a fair comparison.
-    pass_route: bool = false,
-    /// The store's best returns the route compares besides its choice and the run-keeping ones.
-    return_store_candidates: u32 = 0,
+    /// P-route: the pass forth by route over the believed worlds (`passing::route_forth`). On
+    /// since checkpoint 3: Astra's review (2026-10-13) holds that the forecast lacks the team's
+    /// private transfer facts in play and a receiver-readable route to the giver's kept
+    /// entries, but over 512 exchange worlds it gains against receivers that read the pass by
+    /// the store's convention (log, "Exchange routes").
+    pass_route: bool = true,
+    /// The store's best returns the route compares besides its choice and the run-keeping ones
+    /// (candidates plateau from 64; log, "Exchange routes").
+    return_store_candidates: u32 = 64,
     /// The store's best passes forth P-route compares besides its purposeful candidates.
     forth_store_candidates: u32 = 0,
     /// Compare the stored return with candidates preserving a top-controlled run.
@@ -124,8 +126,9 @@ params! {
     /// The believed worlds per decision for the outlook and the routes (a compute budget; the
     /// decision deadline stops the evaluations early).
     outlook_worlds: u32 = 64,
-    /// The believed worlds of an exchange step's routes (its limit is 5 s, not 100 ms).
-    exchange_worlds: u32 = 64,
+    /// The believed worlds of an exchange step's routes (its limit is 5 s, not 100 ms). The
+    /// routes gain up to 512 worlds; 768 gain no more and take up to 4.4 s (log, "Exchange routes").
+    exchange_worlds: u32 = 512,
     /// The outlook's simulated players see each believed world's hands (classic Monte-Carlo
     /// actors) instead of only the table's knowledge. Off (owner, 2026-10-12, following Astra's
     /// review): actors decide from what they know; they are improved, not given the deal.
