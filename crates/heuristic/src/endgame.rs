@@ -99,7 +99,8 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction], val: &Valuation) -> Option
         )
         .ok()
     };
-    let d = evaluated.filter(|d| d.worlds >= ctx.params.endgame_min_worlds as usize)?;
+    // A complete evaluation decides even with fewer consistent deals than the minimum.
+    let d = evaluated.filter(|d| d.complete || d.worlds >= ctx.params.endgame_min_worlds as usize)?;
     if !d.complete && deadline.is_some() {
         ctx.deadline_hit.set(true);
     }

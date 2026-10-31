@@ -184,8 +184,8 @@ fn criterion_weight(objective: Objective, c: &Criterion) -> f64 {
             margin(s, s, game_value, 0, 1) - margin(s, s, game_value, 0, 0)
         }
         Measure::ReachTricks { team, .. } => {
-            margin(team, s, game_value, CARD_POINTS_TOTAL, TRICKS - 1)
-                - margin(team, s, game_value, CARD_POINTS_TOTAL, TRICKS)
+            let made = game_value.max(CARD_POINTS_TOTAL);
+            margin(team, s, game_value, made, TRICKS - 1) - margin(team, s, game_value, made, TRICKS)
         }
     }
 }
