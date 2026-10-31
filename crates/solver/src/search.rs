@@ -86,17 +86,13 @@ impl MoveList {
             for m in s.moves().filter(|m| !matches!(m, Move::Card(_))) {
                 let score = match m {
                     Move::Announce(suit) => 10_000 + PAIR_POINTS[suit as usize],
-                    Move::Question(_) => {
-                        let asked = s.after(m);
+                    Move::Question(q) => {
                         // With exposed hands an answer provides no information. If no answer
                         // changes trump or scores a pair, playing directly dominates this
                         // question: same cards and lead, with at least as many rights retained.
                         // Keep all root questions in world evaluation; this is not an
                         // information-set pruning rule.
-                        if !asked.moves().any(|a| {
-                            let answered = asked.after(a);
-                            answered.trump() != s.trump() || answered.called() != s.called()
-                        }) {
+                        if !s.question_activates(q) {
                             continue;
                         }
                         9_000

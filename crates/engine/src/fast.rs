@@ -411,6 +411,19 @@ impl FastState {
         uncalled_pairs(self.hand(self.leader), self.called)
     }
 
+    /// Whether some truthful answer to the leader's `question` makes a trump now (and scores the
+    /// pair); otherwise asking only spends the asker's right.
+    #[inline]
+    pub fn question_activates(&self, question: QuestionType) -> bool {
+        let asker = self.hand(self.leader);
+        question_answers(self.hand(bits::partner(self.leader)), self.called, question).any(|answer| match answer {
+            AnswerType::YesPair(s) | AnswerType::YesHalf(s) => {
+                answer_trump(asker, answer, self.called >> s as u8 & 1 != 0).is_some()
+            }
+            _ => false,
+        })
+    }
+
     /// Legal announcements/questions/answers first, then cards. No hidden-hand pruning here.
     pub fn moves(&self) -> Moves {
         let mut codes = self.legal_cards().0 | (self.announcements() as u64) << Move::ANNOUNCE;
