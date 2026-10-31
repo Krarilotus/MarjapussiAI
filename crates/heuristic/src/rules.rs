@@ -85,6 +85,7 @@ rules! {
     PForth "P-forth" PassingForth 0 1 "[O] [A]" "pass forth: the best Σ passing_weights × features (human choice analysis, owner-requested)";
     PRoute "P-route" PassingForth 1 1 "[O] [A] [D]" "pass forth by route: the store's best pass per set of suits it makes blank, each played out through the declarer's level-0 pass back (reading the Lusche passed as blank signs) and the game; another candidate replaces the store's pass where it is clearly better (Astra's review 2026-10-13, the owner's game 3)";
     PBack "P-back" PassingBack 0 1 "[O] [A]" "pass back: the best Σ passing_weights × features (human choice analysis, owner-requested)";
+    PSearch "P-search" PassingBack 1 1 "[D]" "pass by exact search: the store's best passes, each judged over the believed worlds by the double-dummy contract outcome after the exchange; another candidate replaces the store's pass where it is clearly better";
     // Trump and questions (§6.1)
     HQ1 "HQ-1" Trump 1 3 "[RV]" "cash side-suit standing cards first while HC-2 holds";
     HQ2 "HQ-2" Trump 2 3 "[RV]" "replaced by HC-2's trigger";

@@ -98,6 +98,13 @@ params! {
     /// facts in play and a receiver-readable route to the giver's kept entries, so its margins
     /// (+178 over the owner's HP-5 pass) are not yet a fair comparison.
     pass_route: bool = false,
+    /// The exchange by exact search (`exchange`): the store's best passes, judged over the
+    /// believed worlds by the double-dummy contract outcome, forth and back respectively.
+    exchange_forth: bool = false,
+    exchange_back: bool = false,
+    /// The store's best passes the exchange search compares, and the believed worlds it solves.
+    exchange_candidates: u32 = 8,
+    exchange_worlds: u32 = 16,
     /// Compare the stored return with candidates preserving a top-controlled run.
     /// Independent of the pass-forth route; retains the store on unresolved comparisons.
     return_run_route: bool = true,

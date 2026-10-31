@@ -197,6 +197,9 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
             RuleId::PForth,
             |x| forth_features(hand, &partner, known, x),
         );
+        if ctx.params.exchange_forth {
+            return searched(ctx, &options, store, crate::exchange::forth_values);
+        }
         if !ctx.params.pass_route {
             return store;
         }
@@ -218,11 +221,59 @@ pub(crate) fn decide(ctx: &Ctx, legal: &[GameAction]) -> Decision {
         let (store, options) = choose(ctx, legal, &PASSING_WEIGHTS.back, &BACK_FEATURES, RuleId::PBack, |y| {
             back_features(hand, &partner, trump, y)
         });
+        if ctx.params.exchange_back {
+            return searched(ctx, &options, store, crate::exchange::return_values);
+        }
         if !ctx.params.return_run_route {
             return store;
         }
         route_back(ctx, hand, &options, store)
     }
+}
+
+/// The exchange search (`exchange`) over the store's best options: another replaces the store's
+/// choice where it is clearly better.
+fn searched(
+    ctx: &Ctx,
+    options: &[(GameAction, CardSet, f64)],
+    store: Decision,
+    values_of: fn(&Ctx, &[CardSet]) -> Option<crate::outlook::WorldValues<CardSet>>,
+) -> Decision {
+    let ActionType::Pass(cards) = &store.action.action_type else {
+        return store;
+    };
+    let chosen = CardSet::from_cards(cards);
+    let mut ranked: Vec<_> = options.iter().filter(|o| o.1 != chosen).collect();
+    ranked.sort_by(|a, b| b.2.total_cmp(&a.2));
+    let candidates: Vec<CardSet> = std::iter::once(chosen)
+        .chain(ranked.iter().map(|o| o.1))
+        .take(ctx.params.exchange_candidates as usize)
+        .collect();
+    if candidates.len() < 2 {
+        return store;
+    }
+    let Some(values) = values_of(ctx, &candidates) else {
+        return store;
+    };
+    let best = values.best();
+    let Some(base) = values.index(chosen) else {
+        return store;
+    };
+    if best == base || !values.clearly_better(best, base) {
+        return store;
+    }
+    let selected = values.options[best];
+    let Some(action) = options.iter().find(|o| o.1 == selected).map(|o| o.0) else {
+        return store;
+    };
+    decision(
+        &action,
+        RuleId::PSearch,
+        vec![
+            fact("expected_score_difference", values.mean(best)),
+            fact("over_store", values.mean(best) - values.mean(base)),
+        ],
+    )
 }
 
 /// A top-controlled long suit need not contain a pair. Preserve it as an explicit

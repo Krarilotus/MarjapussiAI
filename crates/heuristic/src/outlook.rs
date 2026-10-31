@@ -556,7 +556,7 @@ fn past(ctx: &Ctx) -> bool {
 impl<K: Copy + PartialEq> WorldValues<K> {
     /// Evaluates every option in every world, until the decision's deadline (after
     /// `MIN_WORLDS`); `None` without worlds or options. The pool is a sample, so a prefix is one.
-    fn over(
+    pub(crate) fn over(
         ctx: &Ctx,
         worlds: &[World],
         options: Vec<K>,

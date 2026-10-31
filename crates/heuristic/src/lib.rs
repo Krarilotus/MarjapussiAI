@@ -9,6 +9,7 @@
 mod bidding;
 mod concepts;
 mod endgame;
+mod exchange;
 mod hand;
 mod leads;
 mod outlook;
