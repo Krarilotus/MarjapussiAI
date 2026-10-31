@@ -36,6 +36,9 @@ COMPATIBLE_CORES = (
     "5ec49bafffd30f830a17824d2c63dfc600f7f237",
     # The published v1/main core; the earlier anchors are not in every clone.
     V1_MAIN,
+    # Additive (2026-10-31): SeriesScore::bonus_team, SeriesTally::resume and
+    # CARD_POINTS_TOTAL. Frozen policies neither construct nor read them.
+    "d3152f6f2084d5c45d81c7ea252154d73359db5e",
 )
 SHARED = ("engine", "observation", "knowledge", "agent")
 FROZEN = ("heuristic", "beliefs", "solver")
