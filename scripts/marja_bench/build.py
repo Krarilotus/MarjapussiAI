@@ -39,6 +39,8 @@ COMPATIBLE_CORES = (
     # Additive (2026-10-31): SeriesScore::bonus_team, SeriesTally::resume and
     # CARD_POINTS_TOTAL. Frozen policies neither construct nor read them.
     "d3152f6f2084d5c45d81c7ea252154d73359db5e",
+    # Additive (2026-10-31): FastState::question_activates.
+    "19936afcfb2e71e463e6bf14bdf02167c90fca06",
 )
 SHARED = ("engine", "observation", "knowledge", "agent")
 FROZEN = ("heuristic", "beliefs", "solver")
