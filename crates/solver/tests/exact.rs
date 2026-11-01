@@ -469,6 +469,48 @@ fn split_pair_question_changes_the_last_trick_only_for_an_uncalled_suit() {
     }
 }
 
+/// Called suits, rights and the phase changed where no pair can still score them: the same
+/// value, and the other position's exact root bound answers in one node.
+#[test]
+fn fields_without_a_scoring_pair_share_cached_bounds() {
+    let mut rng = StdRng::seed_from_u64(23);
+    let mut changed = 0;
+    for i in 0..300usize {
+        let s = position(&mut rng, 2 + (i % 2) as u8, 0);
+        let pairs = |team: u8, called: u8| engine::uncalled_pairs(s.hand(team) | s.hand(team + 2), called);
+        let held = pairs(0, 0) | pairs(1, 0);
+        let open = [0, 1].map(|team| pairs(team, s.called()) != 0);
+        let b = vary(&s, |p| {
+            p.called = p.called & held | rng.random_range(0..16u8) & !held | p.trump.map_or(0, |t| 1 << t as u8);
+            for seat in (0..4).filter(|&seat| !open[seat & 1]) {
+                p.rights[seat] = [
+                    PlayerTrumpPossibilities::Own,
+                    PlayerTrumpPossibilities::Yours,
+                    PlayerTrumpPossibilities::Ours,
+                ][rng.random_range(0..3)];
+            }
+            if !open[p.leader as usize & 1] && rng.random_bool(0.5) {
+                p.phase = if p.phase == PlayPhase::Start {
+                    PlayPhase::Cards
+                } else {
+                    PlayPhase::Start
+                };
+            }
+        });
+        changed += usize::from(s != b);
+        for team in 0..2 {
+            let points = brute(&s, team);
+            assert_eq!(brute(&b, team), points, "{b:?}");
+            let mut solver = Solver::with_tt_bits(12);
+            assert_eq!(solver.value(&s, team), points, "{s:?}");
+            solver.reset_nodes();
+            assert_eq!(solver.value(&b, team), points, "{b:?}");
+            assert_eq!(solver.nodes(), 1, "{b:?} must reuse the root bound of {s:?}");
+        }
+    }
+    assert!(changed >= 150, "too few changed positions: {changed}");
+}
+
 /// Reuse bounds between order-preserving renamings of the zero-point ranks.
 /// Both point and trick optima are checked independently by exhaustive minimax;
 /// scoring ranks, pair cards, suit identities and public state remain unchanged.

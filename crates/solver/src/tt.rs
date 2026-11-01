@@ -1,7 +1,7 @@
 //! Transposition table for trick starts: bounds on a team's future points, keyed by the
 //! position. Points and tricks so far are path data and stay out of the key.
 
-use engine::{FastState, CARDS, CARD_POINTS, SUITS, VALUES};
+use engine::{uncalled_pairs, FastState, CARDS, CARD_POINTS, SUITS, VALUES};
 
 /// Cards per suit in the engine's index layout (`Card::index` = suit × 9 + rank).
 const SUIT_CARDS: u8 = VALUES.len() as u8;
@@ -47,10 +47,14 @@ const PACK_LOW: [[u8; LOW_SETS]; LOW_SETS] = {
 };
 
 /// A trick-start position, the team the values are for, and the measure (points or tricks).
-/// Hands, leader, trump, called suits and trump rights decide the rest of the play;
-/// All three rights levels and the pending question/phase matter, even without an own pair.
-/// Every field is guarded by `tests/exact.rs`
-/// (`transposition_key_separates_every_public_field`).
+/// Hands, leader, trump, called suits, trump rights and the phase decide the rest of the play.
+/// The last three matter only through a pair that can still score: hands only shrink, and
+/// without an uncalled pair a team can neither announce nor ask a question that makes trump
+/// (the search skips other questions). So the key keeps the called bits of suits whose halves
+/// one team holds, all three rights levels of a team's seats while it holds an uncalled pair,
+/// and the phase or pending question while the leader's team does. Every field is guarded by
+/// `tests/exact.rs` (`transposition_key_separates_every_public_field`,
+/// `fields_without_a_scoring_pair_share_cached_bounds`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Key([u64; 4]);
 
@@ -70,12 +74,21 @@ impl Key {
                 *hand = (*hand & !(LOW << shift)) | packed << shift;
             }
         }
+        let held = [0, 1].map(|team| uncalled_pairs(s.hand(team) | s.hand(team + 2), 0));
+        let called = s.called() & (held[0] | held[1]);
+        let open = held.map(|pairs| pairs & !called != 0);
+        let rights = s.rights_code() & (if open[0] { 0x33 } else { 0 } | if open[1] { 0xCC } else { 0 });
+        let phase = if open[s.leader() as usize & 1] {
+            s.phase().code()
+        } else {
+            0
+        };
         let meta = team as u64
             | (s.leader() as u64) << 1
             | (s.trump().map_or(4, |t| t as u64)) << 3
-            | (s.called() as u64) << 6
-            | (s.rights_code() as u64) << 10
-            | (s.phase().code() as u64) << 18
+            | (called as u64) << 6
+            | (rights as u64) << 10
+            | (phase as u64) << 18
             | (tricks as u64) << 21;
         Key([h[0], h[1], h[2], h[3] | meta << CARDS])
     }
