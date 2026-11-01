@@ -1,4 +1,4 @@
-//! Uncached continuation oracle and HO-1/HO-2 sharing tests. No production toggle.
+//! Uncached continuation oracle and HO-1/HO-2 sharing tests, and a move's route-evaluation limit.
 use super::*;
 use beliefs::Mind;
 use observation::SeatEvent;
@@ -321,4 +321,36 @@ fn pending_answer_cache_matches_uncached_and_rejects_cards_even_with_a_warm_card
     let before = ctx.concepts.borrow().continuation_counts();
     assert!(route_values(&ctx, phase, &[card]).is_none());
     assert_eq!(ctx.concepts.borrow().continuation_counts(), before);
+}
+
+/// A move's route evaluation stops at `DecisionClass::route_worlds`: after whole world rows,
+/// never below `outlook_worlds` worlds, the same worlds for every option; without a limit it
+/// plays the whole early pool.
+#[test]
+fn a_moves_route_evaluation_stops_at_its_rollout_limit() {
+    let (base, mind) = fixture();
+    let solver = RefCell::new(None);
+    // (move_route_rollouts, options, worlds evaluated): 80 / 4 = 20; 80 / 20 = 4 below the floor
+    // of 12; no limit: the 32-world early pool (8 tricks left, before the endgame's 7).
+    for (rollouts, options, expected) in [(80, 4usize, 20usize), (80, 20, 12), (0, 4, 32)] {
+        let params = crate::Params {
+            early_worlds: 32,
+            outlook_worlds: 12,
+            move_route_rollouts: rollouts,
+            ..base.clone()
+        };
+        let ctx = context(&params, &mind, &solver);
+        let calls = std::cell::Cell::new(0);
+        let values = ctx
+            .with_worlds(|worlds| {
+                assert_eq!(worlds.len(), 32);
+                WorldValues::over(&ctx, worlds, (0..options).collect(), |_, _| {
+                    calls.set(calls.get() + 1);
+                    Some(0)
+                })
+            })
+            .unwrap();
+        assert!(values.values.iter().all(|row| row.len() == expected), "{rollouts} {options}");
+        assert_eq!(calls.get(), expected * options, "{rollouts} {options}");
+    }
 }

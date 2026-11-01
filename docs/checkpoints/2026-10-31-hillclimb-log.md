@@ -310,8 +310,10 @@ covers taking the game below 140, not B-take's).
 | B-over140 `over_140_cover` 0.95 | 1 | −0.23 [−1.01, +0.56] | +0.16 | plateau |
 | 48 endgame worlds | 1 | −0.17 [−1.58, +1.24] | −2.87 | no gain from more nodes per world |
 | `endgame_min_worlds` 12 | 1 | +0.52 [−0.93, +1.98] | +5.33 | neutral |
-| **256 believed worlds for moves before the endgame's scope (`early_worlds`)** | 1 / 2 / 4 | **+2.16 [+0.19, +4.14] / +1.41 [−0.36, +3.18] / −0.05 [−2.02, +1.92]** | +15.96 / +8.84 / −2.19 | those moves used 10–16 ms of their 100 ms; 128 worlds +0.64; 512 exceed the limit (leads 131 ms raw) |
+| **256 believed worlds for moves before the endgame's scope (`early_worlds`)** | 1 / 2 / 4 | **+2.16 [+0.19, +4.14] / +1.41 [−0.36, +3.18] / −0.05 [−2.02, +1.92]** | +15.96 / +8.84 / −2.19 | 128 worlds +0.64; 512 exceed the limit (leads 131 ms raw); 256 alone on an idle machine: 6 moves over 100 ms raw (max 122 ms: trick-start activation comparisons over every option × 9 plans) |
 | B-take P(make) ≥ 0.6 / 0.4 (`b_take_p_make`, prototype) | 1 | +1.27 [−0.85, +3.39] / −0.75 [−2.86, +1.36] | +9.03 / −6.13 | stricter leans positive |
 | B-take P(take) ≥ 0.6 / 0.4 | 1 | +0.45 [−1.67, +2.58] / +0.87 [−0.25, +1.99] | −0.34 / +5.82 | neutral |
 | B-take counts the partner's believed complete pairs (`b_take_mate_pairs`) | 1 | −1.72 [−3.08, −0.35] | −12.50 [−21.17, −3.83] | more takes, more failures: rejected |
-| B-take's derivable pair floor 0.85 / 0.5 (`b_take_cover`) | 1 | −0.72 [−2.56, +1.11] / −0.03 [−1.53, +1.47] | −4.54 / −1.59 | the human-reading guard (HR-4); seeds 2, 4 pending |
+| B-take's derivable pair floor 0.85 / 0.5 (`b_take_cover`) | 1 / 2 / 4 | −0.72 / −0.36 / −0.27; −0.03 / −0.45 / −1.11 | −4.54 / −6.84 / +2.82; −1.59 / −5.87 / −5.23 | the human-reading guard (HR-4): 0.85 adopted as `over_140_cover` (one owner) |
+| 256 early worlds + the pair floor (`7ef9693`) | 1 / 2 / 4 / 3 / 5 | +1.27 / +1.50 / −0.36 / +0.24 / +0.28 | +13.34 / +3.14 / +0.84 / −4.40 / −1.78 | vs `base` (seed 2) +28.87 / +239.43 (`c4` +23.21 / +200.05): the floor removes the pairless takes that failed against `base` |
+| + a move's route evaluation stops after 6,000 rollouts, never below 64 worlds (`move_route_rollouts`) | 2 vs `base` | +27.54 (6,000 without the floor) | +230.53 | slowest move alone on an idle machine 85.0 ms (uncapped 121.8, `c4` 85.6) |

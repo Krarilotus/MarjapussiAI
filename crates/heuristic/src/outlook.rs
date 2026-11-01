@@ -570,9 +570,9 @@ impl<K: Copy + PartialEq> WorldValues<K> {
         }
         let mut values = vec![Vec::new(); options.len()];
         let mut p = Vec::new();
-        let limit = ctx.class.route_rollouts(ctx.params);
+        let limit = ctx.class.route_worlds(ctx.params, options.len());
         for (i, w) in worlds.iter().enumerate() {
-            if i >= MIN_WORLDS && (past(ctx) || limit.is_some_and(|n| i * options.len() >= n)) {
+            if i >= MIN_WORLDS && (past(ctx) || limit.is_some_and(|n| i >= n)) {
                 break;
             }
             let row: Option<Vec<i32>> = options.iter().map(|o| value(w, o)).collect();

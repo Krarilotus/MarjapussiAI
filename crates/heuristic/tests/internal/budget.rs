@@ -76,3 +76,21 @@ fn exchange_steps_and_early_moves_sample_their_own_worlds() {
         assert_eq!(DecisionClass::of(&legal).worlds(&params, 7), 64);
     }
 }
+
+#[test]
+fn only_a_moves_route_evaluation_has_a_world_limit() {
+    let params = Params {
+        outlook_worlds: 64,
+        move_route_rollouts: 6_000,
+        ..Params::default()
+    };
+    let cards = std::array::from_fn(|i| Card::from_index(i as u8));
+    let card = [action(2, ActionType::CardPlayed(Card::from_index(9)))];
+    // 6,000 rollouts over 10 options are 600 worlds; over 120 options the floor of 64 holds.
+    assert_eq!(DecisionClass::of(&card).route_worlds(&params, 10), Some(600));
+    assert_eq!(DecisionClass::of(&card).route_worlds(&params, 120), Some(64));
+    assert_eq!(DecisionClass::of(&[action(2, ActionType::NewBid(140))]).route_worlds(&params, 10), None);
+    assert_eq!(DecisionClass::of(&[action(0, ActionType::Pass(cards))]).route_worlds(&params, 10), None);
+    let unlimited = Params { move_route_rollouts: 0, ..params };
+    assert_eq!(DecisionClass::of(&card).route_worlds(&unlimited, 10), None);
+}

@@ -126,12 +126,16 @@ impl DecisionClass {
         worlds as usize
     }
 
-    /// The logical work limit of one route evaluation, in rollouts (believed worlds × options):
-    /// a move's (`move_route_rollouts`; 0: none); a bid's and an exchange step's evaluations
-    /// are bounded by their worlds and limits alone.
-    pub fn route_rollouts(self, params: &Params) -> Option<usize> {
+    /// The most believed worlds one route evaluation of `options` options plays out: a move's
+    /// stops after `move_route_rollouts` rollouts (worlds × options), but never below
+    /// `outlook_worlds`, so a wide comparison costs at most what it did over that pool and keeps
+    /// its sample (0: no limit). A bid's and an exchange step's evaluations are bounded by their
+    /// worlds and time limits alone.
+    pub fn route_worlds(self, params: &Params, options: usize) -> Option<usize> {
         match self {
-            DecisionClass::Move if params.move_route_rollouts > 0 => Some(params.move_route_rollouts as usize),
+            DecisionClass::Move if params.move_route_rollouts > 0 => {
+                Some((params.move_route_rollouts as usize / options.max(1)).max(params.outlook_worlds as usize))
+            }
             _ => None,
         }
     }
