@@ -125,6 +125,16 @@ impl DecisionClass {
         };
         worlds as usize
     }
+
+    /// The logical work limit of one route evaluation, in rollouts (believed worlds × options):
+    /// a move's (`move_route_rollouts`; 0: none); a bid's and an exchange step's evaluations
+    /// are bounded by their worlds and limits alone.
+    pub fn route_rollouts(self, params: &Params) -> Option<usize> {
+        match self {
+            DecisionClass::Move if params.move_route_rollouts > 0 => Some(params.move_route_rollouts as usize),
+            _ => None,
+        }
+    }
 }
 
 /// Everything a rule module needs for one decision.

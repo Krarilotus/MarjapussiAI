@@ -129,6 +129,10 @@ params! {
     /// (2026-11-01, against checkpoint 4 on seeds 1, 2, 4: +2.2 / +1.4 / −0.1 points/game; route
     /// evaluations take 2.8× as long, the slowest trick start +8 ms); 512 exceed the move limit.
     early_worlds: u32 = 256,
+    /// A move's route evaluation stops after this many rollouts (believed worlds × options),
+    /// at least `MIN_WORLDS` worlds in: the widest comparisons (an activation over every plan)
+    /// keep the cost they had over 64 worlds, narrower ones use the whole pool (0: none).
+    move_route_rollouts: u32 = 6_000,
     /// The believed worlds of an exchange step's routes (its limit is 5 s, not 100 ms). The
     /// routes gain up to 512 worlds; 768 gain no more and take up to 4.4 s (log, "Exchange routes").
     exchange_worlds: u32 = 512,
