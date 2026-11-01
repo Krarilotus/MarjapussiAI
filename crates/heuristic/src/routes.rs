@@ -67,7 +67,7 @@ impl Routes {
     fn new(ctx: &Ctx) -> Self {
         let _timing = beliefs::profile::scope("routes");
         // A computational budget, not a fitted playing-strength parameter.
-        let worlds_max = ctx.class.worlds(ctx.params);
+        let worlds_max = ctx.class.worlds(ctx.params, ctx.k.hand_len(ctx.me) as u32);
         let model = ctx.mind.deal_model();
         let (space, weights) = (model.space(), model.weights());
         // D1: the partner's raise is read once into these worlds (`RaiseEvidence`). With a

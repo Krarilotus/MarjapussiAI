@@ -124,6 +124,10 @@ params! {
     /// The believed worlds per decision for the outlook and the routes (a compute budget; the
     /// decision deadline stops the evaluations early).
     outlook_worlds: u32 = 64,
+    /// The believed worlds of a move before the exact endgame's scope (`endgame_tricks`). 256
+    /// (2026-11-01, against checkpoint 4 on seeds 1, 2, 4: +2.2 / +1.4 / −0.1 points/game; moves
+    /// stay under 80 ms raw); 512 exceed the move limit.
+    early_worlds: u32 = 256,
     /// The believed worlds of an exchange step's routes (its limit is 5 s, not 100 ms). The
     /// routes gain up to 512 worlds; 768 gain no more and take up to 4.4 s (log, "Exchange routes").
     exchange_worlds: u32 = 512,

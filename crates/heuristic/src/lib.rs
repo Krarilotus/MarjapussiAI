@@ -114,10 +114,13 @@ impl DecisionClass {
         std::time::Duration::from_millis(ms as u64 * 4 / 5)
     }
 
-    /// The believed worlds the decision's routes sample: more for an exchange step's limit.
-    pub fn worlds(self, params: &Params) -> usize {
+    /// The believed worlds the decision's routes sample with `tricks_left` tricks to play: more
+    /// for an exchange step's limit, and for a move before the exact endgame's scope
+    /// (`endgame_tricks`), whose routes get the time the search takes later.
+    pub fn worlds(self, params: &Params, tricks_left: u32) -> usize {
         let worlds = match self {
             DecisionClass::Exchange => params.exchange_worlds,
+            DecisionClass::Move if tricks_left > params.endgame_tricks => params.early_worlds,
             _ => params.outlook_worlds,
         };
         worlds as usize

@@ -57,17 +57,22 @@ fn phase_budgets_follow_the_owners_hard_limits() {
 }
 
 #[test]
-fn only_exchange_steps_sample_the_exchange_worlds() {
+fn exchange_steps_and_early_moves_sample_their_own_worlds() {
     let params = Params {
         outlook_worlds: 64,
+        early_worlds: 256,
         exchange_worlds: 512,
+        endgame_tricks: 7,
         ..Params::default()
     };
     let cards = std::array::from_fn(|i| Card::from_index(i as u8));
     let bid = action(2, ActionType::NewBid(140));
     let card = action(2, ActionType::CardPlayed(Card::from_index(9)));
-    assert_eq!(DecisionClass::of(&[action(0, ActionType::Pass(cards))]).worlds(&params), 512);
-    for legal in [vec![bid], vec![bid, card], vec![card]] {
-        assert_eq!(DecisionClass::of(&legal).worlds(&params), 64);
+    assert_eq!(DecisionClass::of(&[action(0, ActionType::Pass(cards))]).worlds(&params, 9), 512);
+    assert_eq!(DecisionClass::of(&[bid]).worlds(&params, 9), 64);
+    // A move before the exact endgame's scope gets the early pool, the raise-or-lead choice too.
+    for legal in [vec![bid, card], vec![card]] {
+        assert_eq!(DecisionClass::of(&legal).worlds(&params, 8), 256);
+        assert_eq!(DecisionClass::of(&legal).worlds(&params, 7), 64);
     }
 }
