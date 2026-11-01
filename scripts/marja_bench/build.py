@@ -26,8 +26,10 @@ BASE = "afe2ebb9e79eba9661c6cfdae101570578d42475"
 C2 = "1b24987b40ec70605cd8b962a9f3537020d9fe59"
 # Checkpoint 3 (2026-10-31): auction thresholds, exchange routes over 512 worlds, review fixes.
 C3 = "bb2f36cbbfb6e2280b93f96d6dddd3e094ccc461"
+# Checkpoint 4 (2026-11-01): B-take, the faster exact solver, 1.2M nodes per decision.
+C4 = "2b19c6f32e26ce8dc41b4dda8f685b53d99f2142"
 HISTORICAL = {"old": OLD, "previous": COMPATIBLE_CORE, "v1base": V1_BASELINE, "v1": V1_MAIN, "base": BASE, "c2": C2,
-              "c3": C3}
+              "c3": C3, "c4": C4}
 # Source-reviewed additive knowledge helpers; existing core algorithms unchanged.
 # Keep this exact anchor so any subsequent core change requires another review.
 COMPATIBLE_CORES = (
@@ -63,6 +65,7 @@ POLICIES = {
     "base": f"Frozen v1/main with the deadline switch (reproducible baseline), {BASE[:12]}",
     "c2": f"Checkpoint 2: budgeted seven-trick endgame, faster solver, series raise, {C2[:12]}",
     "c3": f"Checkpoint 3: auction thresholds, exchange routes over 512 worlds, {C3[:12]}",
+    "c4": f"Checkpoint 4: B-take, faster exact solver, 1.2M endgame nodes, {C4[:12]}",
     "hp1@FILE": "Current HP1 with the flat TOML overrides of FILE (parameter A/B variant)",
     "rev:COMMIT": "The heuristic, beliefs and solver frozen at a local COMMIT (shared core must be compatible)",
     "hp1-fast": "Current HP1 with continuation, return and endgame search disabled",
