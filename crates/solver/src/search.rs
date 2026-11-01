@@ -9,8 +9,8 @@
 //! `reaches_tricks` (schwarz).
 
 use engine::{
-    points_set, suit_of, takes, trick_winner, value_of, CardSet, FastState, Move, PlayPhase, CARD_POINTS,
-    LAST_TRICK_BONUS, PAIR_POINTS, SUITS, TRICKS,
+    next_seat, opponents, partner, points_set, suit_of, takers, takes, trick_winner, value_of, CardSet, FastState,
+    Move, PlayPhase, Suit, CARD_POINTS, LAST_TRICK_BONUS, PAIR_POINTS, SUITS, TRICKS,
 };
 
 use crate::tt::{Key, TransTable, NO_MOVE};
@@ -124,11 +124,21 @@ impl MoveList {
         let trick = s.trick();
         let trump = s.trump();
         let mover = s.to_move();
-        let hand = s.hand(mover);
+        let (hand, mate) = (s.hand(mover), partner(mover));
         let live = trick.iter().fold(s.in_hands(), |a, &c| a | CardSet::single(c));
+        // Whether `seat` can trump a lead of `suit`: void in it, holding a trump.
+        let ruffs = |seat: u8, suit: Suit| {
+            let held = s.hand(seat);
+            trump.is_some_and(|t| {
+                t != suit && (held & CardSet::suit(suit)).is_empty() && !(held & CardSet::suit(t)).is_empty()
+            })
+        };
+        // The winning card, and whether it is the partner's and holds against the opponent
+        // still to play.
         let lead = trick.split_first().map(|_| {
             let w = trick_winner(trick, trump);
-            (trick[w], (s.leader() as usize + w) % 2 == mover as usize % 2)
+            let holds = trick.len() == 3 || (s.hand(next_seat(mover)) & takers(trick[w], trump)).is_empty();
+            (trick[w], (s.leader() as usize + w) % 2 == mover as usize % 2 && holds)
         });
         for c in legal.iter() {
             // Equivalence: the next lower live card of the suit is ours and scores the same, so
@@ -142,7 +152,21 @@ impl MoveList {
             }
             let (p, rank) = (CARD_POINTS[c as usize] as i32, value_of(c) as i32);
             let score = match lead {
-                None => 4 * p + rank,
+                // Lead a winner (no live card of its suit above it, no opponent to trump it), then
+                // a card the partner wins (with the suit's top card or a trump), then cheap cards.
+                None => {
+                    let suit = suit_of(c);
+                    let above = (live & CardSet::suit(suit)).0 & !((2u64 << c) - 1);
+                    if opponents(mover).iter().any(|&o| ruffs(o, suit)) {
+                        -4 * p - rank
+                    } else if above == 0 {
+                        200 + 4 * p + rank
+                    } else if s.hand(mate).contains(63 - above.leading_zeros() as u8) || ruffs(mate, suit) {
+                        100 + 4 * p + rank
+                    } else {
+                        -4 * p - rank
+                    }
+                }
                 Some((winner, partner_wins)) => match (takes(c, winner, trump), partner_wins) {
                     (true, false) => 200 + 4 * p - rank,
                     (false, true) => 100 + 4 * p,

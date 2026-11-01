@@ -12,7 +12,9 @@ mod fast;
 mod game;
 mod inline;
 
-pub use bits::{next_seat, opponents, partner, play_levels, takes, trick_winner, winning_seat, CardSet, PlayLevels};
+pub use bits::{
+    next_seat, opponents, partner, play_levels, takers, takes, trick_winner, winning_seat, CardSet, PlayLevels,
+};
 pub use fast::{FastParts, FastState, Move, Moves, PlayPhase, PublicState};
 pub use game::bidding::{bid_range, is_bid, BID_STEP, MAX_BID, NO_BID};
 pub use game::cards::{get_all_cards, suit_of, value_of, Card, Suit, Value, CARDS, SUITS, VALUES};

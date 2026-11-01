@@ -209,6 +209,18 @@ pub fn takes(challenger: u8, winner: u8, trump: Option<Suit>) -> bool {
     trump.is_some_and(|t| t as u8 == cs)
 }
 
+/// The cards that take the trick from `winner` (each `takes` it): higher cards of its suit,
+/// and every trump if it is not a trump.
+#[inline]
+pub fn takers(winner: u8, trump: Option<Suit>) -> CardSet {
+    let suit = winner / 9;
+    let above = CardSet(CardSet::suit(SUITS[suit as usize]).0 & !((2u64 << winner) - 1));
+    match trump {
+        Some(t) if t as u8 != suit => above | CardSet::suit(t),
+        _ => above,
+    }
+}
+
 /// Position (0–3) of the card that currently wins `trick` (bit indices in play order).
 /// The first card leads; panics on an empty trick.
 #[inline]
@@ -242,18 +254,11 @@ pub fn play_levels(trick: &[u8], trump: Option<Suit>, first_trick: bool) -> Play
     let winner = rest.iter().fold(first, |w, &c| if takes(c, w, trump) { c } else { w });
     let led = first / 9;
     let led_suit = CardSet::suit(SUITS[led as usize]);
-    let winner_suit = winner / 9;
 
-    // Cards that take the trick: higher cards of the winner's suit, and every trump if the
-    // winner is not a trump. (The former `Vec` rule compared the new high card with the old one
-    // by `Card`'s derived order; for trumps over a non-trump that could exclude them there, but
-    // the trump level below admits the same cards, so the allowed set is identical.)
-    let above_winner = CardSet(CardSet::suit(SUITS[winner_suit as usize]).0 & !((2u64 << winner) - 1));
-    let trumps_over = match trump {
-        Some(t) if t as u8 != winner_suit => CardSet::suit(t),
-        _ => CardSet::EMPTY,
-    };
-    let higher = above_winner | trumps_over;
+    // Cards that take the trick. (The former `Vec` rule compared the new high card with the old
+    // one by `Card`'s derived order; for trumps over a non-trump that could exclude them there,
+    // but the trump level below admits the same cards, so the allowed set is identical.)
+    let higher = takers(winner, trump);
     let led_ace = if first_trick {
         CardSet::single(led * 9 + Value::Ace as u8)
     } else {
