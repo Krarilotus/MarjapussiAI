@@ -7,6 +7,7 @@ use std::cell::RefCell;
 fn fixture() -> (crate::Params, Mind) {
     let params = crate::Params {
         outlook_worlds: 8,
+        early_worlds: 8,
         beliefs: beliefs::BeliefParams::base_only(),
         ..crate::Params::default()
     };
@@ -231,6 +232,7 @@ fn expired_batch_does_not_start_uncached_work_or_change_existing_admission() {
 fn pending_answer_cache_matches_uncached_and_rejects_cards_even_with_a_warm_card_result() {
     let params = crate::Params {
         outlook_worlds: 8,
+        early_worlds: 8,
         beliefs: beliefs::BeliefParams::base_only(),
         ..crate::Params::default()
     };

@@ -67,7 +67,7 @@ impl Routes {
     fn new(ctx: &Ctx) -> Self {
         let _timing = beliefs::profile::scope("routes");
         // A computational budget, not a fitted playing-strength parameter.
-        let worlds_max = ctx.class.worlds(ctx.params, ctx.k.hand_len(ctx.me) as u32);
+        let worlds_max = ctx.class.worlds(ctx.params, ctx.tricks_left());
         let model = ctx.mind.deal_model();
         let (space, weights) = (model.space(), model.weights());
         // D1: the partner's raise is read once into these worlds (`RaiseEvidence`). With a
@@ -148,7 +148,8 @@ impl Routes {
 
 /// Candidate deals per world when a raise is read: a matching combination of the raiser's
 /// pairs can be rare under the uniform draw (game 1187: about 0.5 %); drawing is cheap (2,048
-/// deals in under 1 ms), the playouts are not, so only the resampled pool is played out.
+/// deals in under 1 ms; an early move's 256 worlds draw 8,192), the playouts are not, so only
+/// the resampled pool is played out.
 const RAISE_DRAWS: usize = 32;
 
 /// `n` worlds drawn from `drawn` with probability proportional to weight (systematic

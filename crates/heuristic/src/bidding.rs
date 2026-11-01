@@ -176,8 +176,9 @@ const TAKE_OVER_140: TakeWeights = TakeWeights {
 
 /// B-take: bid the next step over an opponent's contract at 140 or more when P(take) >= 0.5,
 /// `contract_estimate` gives at least an even chance to make it, and the team likely holds a
-/// pair covering it (`team_pair_cover_derivable` >= `over_140_cover`, as every step across 140:
-/// a human partner reads a bid above 140 as a pair, HR-4).
+/// pair covering it: the owner's C43 cover (`team_pair_cover_derivable`: my complete pairs and
+/// those derivable from the partner's messages, Green left out) at least `over_140_cover`, as
+/// B-over140's tie-break needs, since a human partner reads a bid above 140 as a pair (HR-4).
 fn take_over_140(
     ctx: &Ctx,
     legal: &[GameAction],

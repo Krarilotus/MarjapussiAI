@@ -454,4 +454,8 @@ fn b_take_crosses_140_only_with_a_likely_pair() {
     let d = s.act(&s.bid_legal());
     assert_ne!(d.rule, RuleId::BTake, "{:?}", d.why);
     assert_eq!(bid_of(&d), None, "{:?}", d.why);
+    // The fitted gates pass; only the cover vetoes.
+    let fact = |k: &str| d.why.iter().find(|f| f.key == k).map(|f| f.value).unwrap();
+    assert!(fact("p_take") >= 0.5 && fact("p_make") >= 0.5, "{:?}", d.why);
+    assert!(fact("team_pair_cover") < Params::default().over_140_cover, "{:?}", d.why);
 }

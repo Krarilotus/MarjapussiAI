@@ -154,6 +154,12 @@ pub(crate) struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
+    /// The tricks I still play (my hand's cards): what the endgame's scope and the routes' world
+    /// pool are measured by.
+    pub(crate) fn tricks_left(&self) -> u32 {
+        self.k.hand_len(self.me) as u32
+    }
+
     /// Argmax, or a softmax sample at `sample_temperature` (C10/C11), over `scores` (higher is better).
     pub fn select(&self, scores: &[f32]) -> usize {
         let best = (0..scores.len())
