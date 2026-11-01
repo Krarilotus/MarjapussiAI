@@ -161,7 +161,9 @@ params! {
     endgame_worlds: u32 = 64,
     /// The endgame search's logical work limit per decision, in solver nodes (0: none). The
     /// worlds completed within it decide; the wall-clock deadline is only the live safety stop.
-    endgame_nodes: u64 = 1_000_000,
+    /// 1.2M: the search's 65 ms share at about 55 ns per node (raw moves at most 86 ms, idle
+    /// machine, 2026-11-01); 1.5M and 2M gain more but exceed the move limit.
+    endgame_nodes: u64 = 1_200_000,
     /// The fewest completed worlds the endgame decides on (at most `endgame_worlds`), unless all
     /// consistent deals were solved; with fewer, the play rules decide.
     endgame_min_worlds: u32 = 16,

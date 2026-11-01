@@ -274,5 +274,18 @@ were broken before cost −0.8. "Own points" stays the defenders' criterion.
 | Racing in the exchange routes, z = 2 every 32 worlds (`exchange_race_z`, `65fed24`) | 1 / 2 | −0.43 [−1.34, +0.48] / −0.60 [−1.60, +0.39] | −5.76 / −5.77 | returns 4.3× faster (1.78 → 0.42 s mean), but drops some winners |
 | The store's 16 / 64 best passes forth as further forth-route candidates (`forth_store_candidates`) | 1 | +0.03 [−1.31, +1.36] / −0.55 [−2.33, +1.23] | −1.78 / −7.87 | no gain over 512 worlds: the parameter is removed (`c3`'s default 0 kept) |
 | HZ-1 by route (`route_raise`) | 1 | −3.73 [−6.87, −0.58] | −24.71 [−48.61, −0.81] | made 1,490 vs 1,637 contracts: still overraises with the deep endgame |
-| Racing in the exchange routes, z = 3 | 1 | −0.27 [−0.68, +0.14] | −1.51 [−3.82, +0.81] | returns 2.3× faster (0.77 s mean); 60-game decision hash unchanged |
+| Racing in the exchange routes, z = 3 | 1 / 2 | −0.27 [−0.68, +0.14] / −0.13 [−0.44, +0.18] | −1.51 / −2.18 | returns 2.3× faster (0.77 s mean), a few decisions differ; the 5 s limit holds without it: not adopted |
+| B-quiet `take_140_min` 0.7 / 0.9 | 1 | +0.26 [−0.32, +0.84] / −0.55 [−1.37, +0.26] | +1.95 / −5.98 | plateau: 0.8 stays |
+| B-over140 `over_140_cover` 0.75 / 0.95 | 1 | −1.80 [−3.04, −0.57] / +0.22 [−0.44, +0.87] | −11.55 / +2.17 | 0.85 stays |
+| **B-take on (`b_take`, owner: reassess once the declarer play improves; `98a16c3`)** | 1 / 2 / 4 | **+4.15 [+0.77, +7.54] / +3.67 [+0.11, +7.23] / +6.35 [+3.02, +9.68]** | **+39.58 / +49.35 / +54.77** | the team declares ~3,200 contracts instead of ~1,800 and makes 67 %: adopted |
+| Solver exact speedups (`e2cf414`), 1M nodes | 1 / 2 | −0.75 [−2.38, +0.88] / +0.94 [−0.68, +2.56] | −3.25 / +6.24 | more searches finish; no measurable gain at the same budget |
+| same, 1.2M / 1.5M / 2M nodes | 1 | +1.16 [−0.75, +3.08] / +0.97 [−1.27, +3.22] / +2.13 [−0.35, +4.62] | +9.39 / +9.76 / +22.50 | raw move maxima 114 / 139 / 167 ms on a loaded machine |
+| B-take + solver speedups + 1.2M nodes (`98a16c3`) | 1 | +5.04 [+1.35, +8.74] | +42.65 [+15.55, +69.75] | the candidate |
+| HZ-1 over 20 coarse bins of the estimate's spread (`0efb990`) | 1 / 2 | +0.09 [−1.90, +2.08] / −0.22 [−2.18, +1.74] | +1.47 / −3.14 | P(make) in 5 % steps: 1,037 raises instead of 574 |
+| HZ-1 continuous over the spread (`bce6f2a`) | 1 / 2 | −0.07 [−1.09, +0.95] / −0.52 [−1.55, +0.52] | −1.34 / −1.94 | neutral: c3's two-point formula costs nothing measurable |
+| same, without the series weighting (`raise_series = false`) | 1 | +2.15 [+0.72, +3.57] | +2.43 [−9.66, +14.52] | the series weighting trades game points for the series bonus |
+| No estimated raises (`estimated_raise = false`) | 1 | −0.69 [−2.41, +1.03] | −22.60 [−36.35, −8.84] | HZ-1 with HS-1 is worth ~23 points/series |
 
+Raise accounting (`c3` vs `base`, seed 2, each raise against keeping the auction value with the
+same card points): `c3`'s 601 raises net −0.44 points/game (43 contracts lost to the raise), `base`'s
+434 net +1.30; but the series worth, not the game score, is what HZ-1 maximises (the row above).

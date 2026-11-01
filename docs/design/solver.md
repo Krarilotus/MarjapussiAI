@@ -98,7 +98,7 @@ A team with no trick gets a first-trick criterion when engine scoring penalises
 being trickless. The loss-fixed second pass runs only after all primary
 comparisons finish; if interrupted, retain the complete primary comparison.
 
-Since 2026-10-31 the agent searches from seven tricks left within one million solver nodes
+Since 2026-10-31 the agent searches from seven tricks left within a node budget (1.2 million since 2026-11-01)
 per decision (`solver::Effort`): a reach criterion is read from the same team's exact
 points instead of a second search; racing (`solver::Racing`) drops moves two paired
 standard errors behind after every eight worlds; a search whose nodes per world project past
