@@ -3,9 +3,10 @@
 //! The team maximises its future points (cards, the last-trick bonus, its own announced pairs);
 //! the other team minimises them. Fail-soft alpha-beta with a transposition table at trick
 //! starts (bounds on future points), a static upper bound, safe card equivalence and move
-//! ordering. `value` is one full-window search, `reaches` one zero-window probe (MTD(f) over
-//! zero-window probes measured slower for `value`; docs/design/solver.md). The same search
-//! counts tricks instead of points for `tricks` and `reaches_tricks` (schwarz).
+//! ordering; a forced last trick is played out. `value` is one full-window search, `reaches`
+//! one zero-window probe (MTD(f) over zero-window probes measured slower for `value`;
+//! docs/design/solver.md). The same search counts tricks instead of points for `tricks` and
+//! `reaches_tricks` (schwarz).
 
 use engine::{
     points_set, suit_of, takes, trick_winner, value_of, CardSet, FastState, Move, PlayPhase, CARD_POINTS,
@@ -313,6 +314,33 @@ impl Solver {
             .collect()
     }
 
+    /// The measure still to come in the last trick if its play is forced: no question at its
+    /// start could make a trump (both halves of an uncalled suit with the leader's team; no
+    /// other question is searched, and one card cannot announce). Its winner takes the rest.
+    #[inline]
+    fn last_trick(&self, s: &FastState) -> Option<i32> {
+        let forced = match s.phase() {
+            PlayPhase::Cards => true,
+            PlayPhase::Start => pair_bound(s, s.leader() & 1) == 0,
+            PlayPhase::Answer(_) => false,
+        };
+        if !forced {
+            return None;
+        }
+        let mut cards = [0; 4];
+        let played = s.trick().len();
+        cards[..played].copy_from_slice(s.trick());
+        for (i, card) in cards.iter_mut().enumerate().skip(played) {
+            *card = s.hand((s.leader() + i as u8) & 3).0.trailing_zeros() as u8;
+        }
+        let won = (s.leader() as usize + trick_winner(&cards, s.trump())) & 1 == self.team as usize;
+        Some(match (won, self.tricks) {
+            (false, _) => 0,
+            (true, true) => 1,
+            (true, false) => self.card_total - s.card_points(0) - s.card_points(1),
+        })
+    }
+
     /// Fail-soft alpha-beta on the future measure (points or tricks) of `self.team`.
     fn search(&mut self, s: &FastState, mut alpha: i32, mut beta: i32, budget: &Budget) -> Option<i32> {
         // Check a node cap exactly, and the clock once per 64 nodes. Completed child
@@ -328,6 +356,11 @@ impl Solver {
         self.nodes += 1;
         if s.is_over() {
             return Some(0);
+        }
+        if s.tricks_done() + 1 == TRICKS {
+            if let Some(rest) = self.last_trick(s) {
+                return Some(rest);
+            }
         }
         let team = self.team;
         let most = self.most(s);
