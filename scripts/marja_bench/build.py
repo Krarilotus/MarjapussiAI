@@ -48,6 +48,9 @@ COMPATIBLE_CORES = (
     "19936afcfb2e71e463e6bf14bdf02167c90fca06",
     # Refactor (2026-10-31): FastState::answer_makes_trump (private), same transitions.
     "2a0343782f2572d35fa3a26261f96ddd3c8b89ce",
+    # Refactor and export (2026-11-01): engine::takers is play_levels' own taker rule, extracted;
+    # engine::uncalled_pairs is re-exported. Same transitions and legal sets.
+    "65ff311d7b1b718ec932704acd57ec46385eaa9b",
 )
 SHARED = ("engine", "observation", "knowledge", "agent")
 FROZEN = ("heuristic", "beliefs", "solver")
