@@ -29,6 +29,7 @@ marja-bench new previous new previous 4000 --seed 20261012
 | `c2` | `1b24987`: checkpoint 2 (budgeted seven-trick endgame, faster solver, series raise). |
 | `c3` | `bb2f36c`: checkpoint 3 (auction thresholds, exchange routes over 512 worlds). |
 | `c4` | `2b19c6f`: checkpoint 4 (B-take, faster exact solver, 1.2M endgame nodes). |
+| `c5` | `c52ae96`: checkpoint 5 (early worlds with a route limit, B-take's pair floor). |
 | `rev:COMMIT` | The heuristic, beliefs and solver of any local commit (shared core compatible). |
 | `hp1@FILE` | The current HP1 with the flat TOML overrides of `FILE`. |
 | `hp1-fast` | Current HP1 with return, continuation and endgame search disabled. |
