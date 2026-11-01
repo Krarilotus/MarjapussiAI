@@ -56,7 +56,8 @@ params! {
     /// B-over140: a step across 140 only if P(our team holds a pair covering the excess) is at
     /// least this ([O] 2026-10-06: "P(team pair) high, ~75 %"). With the deep endgame 0.85 scores
     /// better (2026-10-31, seeds 1, 2, 4: +1.5 points/game, +8 points/series; 0.95 alike, 0.65
-    /// worse).
+    /// worse). B-take's bid across 140 needs the same cover (2026-11-01: −0.5 points/game
+    /// against no floor, the price of keeping a bid above 140 a pair message, HR-4).
     over_140_cover: f32 = 0.85,
     /// B-defend: the opponents can likely play up to 140 plus the pair they hold with at least
     /// this probability (`Mind::opp_reach`; the owner's 75 %, as `over_140_cover` before).

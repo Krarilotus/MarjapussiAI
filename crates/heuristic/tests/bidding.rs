@@ -443,3 +443,15 @@ fn b_take_bids_on_over_the_opponents_140_with_a_pair_and_aces() {
         assert_eq!((bid_of(&d), d.rule), expected, "{:?}", d.why);
     }
 }
+
+#[test]
+fn b_take_crosses_140_only_with_a_likely_pair() {
+    // Three aces, two tens and two single halves, the partner not yet heard: strong enough for
+    // the fitted P(take) and P(make), but a bid above 140 tells a pair (HR-4) and the team's
+    // derivable pair cover stays below `over_140_cover` (the Fable review's example).
+    let mut s = Scene::new(1, &["g-A", "e-A", "s-A", "e-Z", "g-Z", "r-K", "s-O", "g-6", "e-6"]);
+    s.auction(&[(0, Some(140))]);
+    let d = s.act(&s.bid_legal());
+    assert_ne!(d.rule, RuleId::BTake, "{:?}", d.why);
+    assert_eq!(bid_of(&d), None, "{:?}", d.why);
+}

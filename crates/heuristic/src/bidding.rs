@@ -174,8 +174,10 @@ const TAKE_OVER_140: TakeWeights = TakeWeights {
     partner_passed: -0.25,
 };
 
-/// B-take: bid the next step over an opponent's contract at 140 or more when
-/// P(take) >= 0.5 and `contract_estimate` gives at least an even chance to make it.
+/// B-take: bid the next step over an opponent's contract at 140 or more when P(take) >= 0.5,
+/// `contract_estimate` gives at least an even chance to make it, and the team likely holds a
+/// pair covering it (`team_pair_cover_derivable` >= `over_140_cover`, as every step across 140:
+/// a human partner reads a bid above 140 as a pair, HR-4).
 fn take_over_140(
     ctx: &Ctx,
     legal: &[GameAction],
@@ -200,12 +202,14 @@ fn take_over_140(
     let bid = value + 5;
     let estimate = crate::raising::contract_estimate(hand, own_pairs, ctx.mind.derived_pair_value());
     let p_make = crate::raising::p_make(estimate, bid);
+    let cover = ctx.mind.team_pair_cover_derivable(bid);
     why.extend([
         fact("p_take", p_take),
         fact("contract_estimate", estimate),
         fact("p_make", p_make),
+        fact("team_pair_cover", cover),
     ]);
-    let rule_takes = p_take >= 0.5 && p_make >= 0.5;
+    let rule_takes = p_take >= 0.5 && p_make >= 0.5 && cover >= ctx.params.over_140_cover;
     // The route (take_vs_defend over the believed worlds) overrules the fitted rule only where
     // it is clearly better.
     let takes = match holder.filter(|_| ctx.params.route_take) {

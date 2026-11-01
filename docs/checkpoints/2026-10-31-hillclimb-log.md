@@ -300,3 +300,18 @@ partner reading HR-4 may misread such a bid). Measured next: a derivable pair fl
 (`b_take_cover`) and the partner's believed complete pairs in its estimate (`b_take_mate_pairs`,
 the estimate counts only pairs around my single halves). Kept: HB-8 (a planned rule that also
 covers taking the game below 140, not B-take's).
+
+## After checkpoint 4 (opponent `c4`)
+
+| Variant | Seeds | Points/game | Points/series | Cause |
+|---|---|---|---|---|
+| B-take by route (`route_take`) | 1 | −0.50 [−3.45, +2.45] | −9.52 | vetoes many takes (1,971 contracts vs 3,029) |
+| B-quiet `take_140_min` 0.7 / 0.9 | 1 | +0.45 [−0.26, +1.17] / −0.49 [−1.28, +0.31] | +3.02 / −4.17 | plateau |
+| B-over140 `over_140_cover` 0.95 | 1 | −0.23 [−1.01, +0.56] | +0.16 | plateau |
+| 48 endgame worlds | 1 | −0.17 [−1.58, +1.24] | −2.87 | no gain from more nodes per world |
+| `endgame_min_worlds` 12 | 1 | +0.52 [−0.93, +1.98] | +5.33 | neutral |
+| **256 believed worlds for moves before the endgame's scope (`early_worlds`)** | 1 / 2 / 4 | **+2.16 [+0.19, +4.14] / +1.41 [−0.36, +3.18] / −0.05 [−2.02, +1.92]** | +15.96 / +8.84 / −2.19 | those moves used 10–16 ms of their 100 ms; 128 worlds +0.64; 512 exceed the limit (leads 131 ms raw) |
+| B-take P(make) ≥ 0.6 / 0.4 (`b_take_p_make`, prototype) | 1 | +1.27 [−0.85, +3.39] / −0.75 [−2.86, +1.36] | +9.03 / −6.13 | stricter leans positive |
+| B-take P(take) ≥ 0.6 / 0.4 | 1 | +0.45 [−1.67, +2.58] / +0.87 [−0.25, +1.99] | −0.34 / +5.82 | neutral |
+| B-take counts the partner's believed complete pairs (`b_take_mate_pairs`) | 1 | −1.72 [−3.08, −0.35] | −12.50 [−21.17, −3.83] | more takes, more failures: rejected |
+| B-take's derivable pair floor 0.85 / 0.5 (`b_take_cover`) | 1 | −0.72 [−2.56, +1.11] / −0.03 [−1.53, +1.47] | −4.54 / −1.59 | the human-reading guard (HR-4); seeds 2, 4 pending |

@@ -59,7 +59,7 @@ rules! {
     BDefend "B-defend" Bidding 3 1 "[O]" "nothing to tell, the partner passed first, many cards standing against us: 140, then +5 up to the limit";
     BQuiet "B-quiet" Bidding 5 1 "[O]" "nothing to tell: pass";
     HB8 "HB-8" Bidding 7 3 "[D]" "nothing left to tell: +5 to take the game (off until KB batch 2)";
-    BTake "B-take" Bidding 6 1 "[O] [A]" "at 140 or more against an opponent: bid on when P(take) >= 0.5 (human analysis) and contract_estimate gives P(make) >= 0.5";
+    BTake "B-take" Bidding 6 1 "[O] [A]" "at 140 or more against an opponent: bid on when P(take) >= 0.5 (human analysis), contract_estimate gives P(make) >= 0.5 and the team likely holds a covering pair (team_pair_cover_derivable >= over_140_cover, as every step across 140)";
     BControl "B-control" Bidding 13 1 "[O] [D]" "at 140 or more, one ownership challenge excluding truthful untold information: +5 with a pair whose suit runs from the top (control_run), against the opponents when my partner passed while telling was cheap; no extra Ace/halves evidence inferred from the control step (the owner's deal 573)";
     BOffer "B-offer" Bidding 14 1 "[O] [D]" "at 140 or more: +5 Ace information over my partner holding the game with the Red pair shown and no team ace shown, when I haven't bid and hold an ace; the Red-pair holder may spend its one ownership challenge on a +5 keep after that offer, including opponent intervention; the keep does not assert halves (the owner's deal 848)";
     HB140c "HB-140c" Bidding 10 3 "[O]" "bid exactly 140 to claim or defend without a known pair (off until KB batch 2)";
