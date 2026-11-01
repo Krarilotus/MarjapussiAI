@@ -58,11 +58,19 @@ impl Budget {
 /// Default transposition table: 2^18 entries of 40 bytes (10 MB).
 pub const DEFAULT_TT_BITS: u32 = 18;
 
-/// Uncalled suits whose halves `team` holds between its two hands (suit bits): the only pairs
-/// an announcement or a question can still score for it.
+/// Suits whose two halves `team` holds between its two hands (suit bits), called or not.
 #[inline]
-fn team_pairs(s: &FastState, team: u8) -> u8 {
-    uncalled_pairs(s.hand(team) | s.hand(team + 2), s.called())
+pub(crate) fn team_halves(s: &FastState, team: u8) -> u8 {
+    uncalled_pairs(s.hand(team) | s.hand(team + 2), 0)
+}
+
+/// Uncalled suits whose halves `team` holds between its two hands (suit bits): the only pairs
+/// an announcement or a question can still score for it, and the only trumps its questions can
+/// still make (an answer completes a suit only with the asking team's halves: the engine's
+/// `FastState::answer_makes_trump`). Empty, the team's rights and questions change nothing.
+#[inline]
+pub(crate) fn team_pairs(s: &FastState, team: u8) -> u8 {
+    team_halves(s, team) & !s.called()
 }
 
 /// Uncalled pairs that could still score for `team`. This deliberately overestimates
@@ -99,7 +107,7 @@ impl MoveList {
             len: 0,
         };
         if s.phase() != PlayPhase::Cards {
-            let pairs = team_pairs(s, s.leader() & 1) != 0;
+            let can_make_trump = s.phase() == PlayPhase::Start && team_pairs(s, s.leader() & 1) != 0;
             for m in s.moves().filter(|m| !matches!(m, Move::Card(_))) {
                 let score = match m {
                     Move::Announce(suit) => 10_000 + PAIR_POINTS[suit as usize],
@@ -110,7 +118,7 @@ impl MoveList {
                         // Keep all root questions in world evaluation; this is not an
                         // information-set pruning rule. Without a pair in the leader's team, no
                         // answer can.
-                        if !pairs || !s.question_activates(q) {
+                        if !can_make_trump || !s.question_activates(q) {
                             continue;
                         }
                         9_000
@@ -293,7 +301,7 @@ impl Solver {
     #[inline]
     fn most(&self, s: &FastState) -> i32 {
         if !self.tricks {
-            self.card_total - s.card_points(0) - s.card_points(1) + pair_bound(s, self.team)
+            self.cards_to_come(s) + pair_bound(s, self.team)
         } else {
             (TRICKS - s.tricks_done()) as i32
         }
@@ -369,8 +377,14 @@ impl Solver {
         Some(match (won, self.tricks) {
             (false, _) => 0,
             (true, true) => 1,
-            (true, false) => self.card_total - s.card_points(0) - s.card_points(1),
+            (true, false) => self.cards_to_come(s),
         })
+    }
+
+    /// The card points (with the last-trick bonus) not yet taken.
+    #[inline]
+    fn cards_to_come(&self, s: &FastState) -> i32 {
+        self.card_total - s.card_points(0) - s.card_points(1)
     }
 
     /// Fail-soft alpha-beta on the future measure (points or tricks) of `self.team`.

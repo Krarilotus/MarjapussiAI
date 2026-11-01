@@ -1,7 +1,9 @@
 //! Transposition table for trick starts: bounds on a team's future points, keyed by the
 //! position. Points and tricks so far are path data and stay out of the key.
 
-use engine::{uncalled_pairs, FastState, CARDS, CARD_POINTS, SUITS, VALUES};
+use engine::{FastState, CARDS, CARD_POINTS, SUITS, VALUES};
+
+use crate::search::{team_halves, team_pairs};
 
 /// Cards per suit in the engine's index layout (`Card::index` = suit × 9 + rank).
 const SUIT_CARDS: u8 = VALUES.len() as u8;
@@ -50,7 +52,7 @@ const PACK_LOW: [[u8; LOW_SETS]; LOW_SETS] = {
 /// Hands, leader, trump, called suits, trump rights and the phase decide the rest of the play.
 /// The last three matter only through a pair that can still score: hands only shrink, and
 /// without an uncalled pair a team can neither announce nor ask a question that makes trump
-/// (the search skips other questions). So the key keeps the called bits of suits whose halves
+/// (`search::team_pairs`). So the key keeps the called bits of suits whose halves
 /// one team holds, all three rights levels of a team's seats while it holds an uncalled pair,
 /// and the phase or pending question while the leader's team does. Every field is guarded by
 /// `tests/exact.rs` (`transposition_key_separates_every_public_field`,
@@ -74,9 +76,9 @@ impl Key {
                 *hand = (*hand & !(LOW << shift)) | packed << shift;
             }
         }
-        let held = [0, 1].map(|team| uncalled_pairs(s.hand(team) | s.hand(team + 2), 0));
-        let called = s.called() & (held[0] | held[1]);
-        let open = held.map(|pairs| pairs & !called != 0);
+        let called = s.called() & (team_halves(s, 0) | team_halves(s, 1));
+        let open = [0, 1].map(|team| team_pairs(s, team) != 0);
+        // Two bits per seat (`FastState::rights_code`): seats 0 and 2 in 0x33, 1 and 3 in 0xCC.
         let rights = s.rights_code() & (if open[0] { 0x33 } else { 0 } | if open[1] { 0xCC } else { 0 });
         let phase = if open[s.leader() as usize & 1] {
             s.phase().code()

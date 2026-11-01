@@ -31,12 +31,14 @@ final total. `reaches` checks a future-point threshold with a zero-window search
 Search uses fail-soft alpha-beta with principal-variation (zero-window) probes after the
 first move, a static upper bound, move ordering and a fixed-size transposition table. The
 bound is the card points not yet awarded (conserved through the search, so not summed per
-node), the last-trick bonus and the team's reachable uncalled pairs. The default table is 2^18 entries of 40 bytes
-(10 MiB); the heuristic agent uses 2^16 entries (2.5 MiB). A last trick whose start allows no
-question that could make a trump is played out, not searched. Leads try a card that wins the
-trick first (no live card of its suit above it, no opponent to trump it), then one the partner
-wins, then cheap cards; later in a trick, a partner's winning card counts only if the opponent
-still to play cannot take it.
+node), the last-trick bonus and the team's reachable uncalled pairs. The default table is 2^18
+entries of 40 bytes (10 MiB); the heuristic agent uses 2^16 entries (2.5 MiB).
+
+Move ordering: leads try a card that wins the trick first (no live card of its suit above it,
+no opponent to trump it), then one the partner wins, then cheap cards; later in a trick, a
+partner's winning card counts only if the opponent still to play cannot take it. A last trick
+whose start allows no question that could make a trump (`search::team_pairs`, the one owner of
+that rule in the solver) is played out, not searched.
 
 At an empty trick, the key contains all hands (the zero-point ranks 6–9 of each suit packed
 by their order and owner, scoring ranks literal; the stored best move is translated with

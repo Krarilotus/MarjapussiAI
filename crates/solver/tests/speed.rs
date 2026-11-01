@@ -188,7 +188,8 @@ fn decision_time_by_worlds() {
     }
 }
 
-/// Full decisions, no deadline truncation: same 20 fixtures as decision_time_by_worlds.
+/// Full decisions, no deadline truncation: same 20 fixtures as decision_time_by_worlds. ns/node
+/// divides the whole decision time, dealing the worlds included, by the nodes searched.
 #[test]
 #[ignore]
 fn decision_time_contract_64() {
