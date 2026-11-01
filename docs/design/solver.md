@@ -32,12 +32,19 @@ Search uses fail-soft alpha-beta with principal-variation (zero-window) probes a
 first move, a static upper bound, move ordering and a fixed-size transposition table. The
 bound is the card points not yet awarded (conserved through the search, so not summed per
 node), the last-trick bonus and the team's reachable uncalled pairs. The default table is 2^18 entries of 40 bytes
-(10 MiB); the heuristic agent uses 2^16 entries (2.5 MiB).
+(10 MiB); the heuristic agent uses 2^16 entries (2.5 MiB). A last trick whose start allows no
+question that could make a trump is played out, not searched. Leads try a card that wins the
+trick first (no live card of its suit above it, no opponent to trump it), then one the partner
+wins, then cheap cards; later in a trick, a partner's winning card counts only if the opponent
+still to play cannot take it.
 
 At an empty trick, the key contains all hands (the zero-point ranks 6–9 of each suit packed
 by their order and owner, scoring ranks literal; the stored best move is translated with
-them), leader, trump, called suits,
-**all three rights levels per player**, phase/pending question, team and measure.
+them), leader, trump, team and measure, and the called suits, rights and phase where a pair
+can still score: the called bits of suits whose halves one team holds, **all three rights
+levels** of a team's seats while it holds an uncalled pair, and the phase/pending question
+while the leader's team does. Without an uncalled pair a team can neither announce nor ask a
+question that makes trump, and hands only shrink.
 Existing points/tricks are path data; cached values describe the future.
 The hands determine how many tricks remain. Completed bounds survive between
 decisions and after interruption; unfinished parents are not stored as exact.

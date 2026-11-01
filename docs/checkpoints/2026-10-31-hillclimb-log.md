@@ -48,6 +48,33 @@ are the open questions (research proposal 5).
 | Killer moves per ply (rejected) | nodes +1% / +2% / −4% at 5 / 6 / 7 cards | ordering is already 95% first-move cutoffs mid-trick, 83% at trick starts |
 | Transposition table 2^18–2^22 entries (rejected) | 3.63M → 3.52M nodes at 7 cards, slower per node | the table is not the bottleneck |
 
+Second round (`proto/solver-speed-2`, 2026-11-01). Mean nodes of the 64-world contract decisions
+(speed test, 20 per size) at 5 / 6 / 7 / 8 cards; instructions are hardware counts of the same
+runs (deterministic, unlike the shared machine's timings):
+
+| Change | Evidence | Effect |
+|---|---|---|
+| Forced last trick played out, not searched | golden hash unchanged; all solver tests | 152k / 950k / 3.63M / 27.6M → 135k / 864k / 3.40M / 26.1M |
+| Leads by who takes the trick (sure winner, then partner's, then cheap); a partner's winner counts only if it holds against the next opponent | golden hash unchanged | → 119k / 761k / 2.87M / 19.1M |
+| Question activation tested only when the leader's team holds a pair | same nodes | instructions −6% |
+| TT key drops called suits, rights and phase that no pair can still use | golden hash unchanged; new merge test | → 104k / 539k / 2.21M / 14.4M; max nodes 765k / 5.43M / 17.1M / 165M → 339k / 2.42M / 9.13M / 67.5M |
+| Table-move scan skipped without a table move | same nodes | instructions −3% |
+| Decided-trick bound mid-trick (rejected) | nodes −5% at 5–7 cards | instructions +2%, time ±0 |
+| Lazy best-first move selection, insertion at push, packed sort keys (rejected) | same nodes | instructions +3% / +2% / +4% |
+| PVS re-search narrowed to the probe's bound (rejected); PVS at trick starts only (rejected) | nodes ±0; +7% / +12% / +18% at 5 / 6 / 7 | re-searches are rare |
+| 32-byte aligned TT entries (rejected) | same nodes | no time gain; the 2^16 table sits in L3 |
+| Exhausted trump dropped from the key; follow-suit-aware hold test; previous hint kept after fail-low (rejected) | nodes −0.3–0.8% / −0.1–0.6% / ±0 | not worth the code |
+
+Mean / max ms of those decisions 7.3 / 34 → 5.4 / 19 (5 cards), 49 / 288 → 26 / 122 (6),
+182 / 867 → 120 / 416 (7), 1,430 / 9,303 → 774 / 3,840 (8); time per node stays ~50–54 ns
+(cheap nodes went away, the key costs a little more), so a node-capped search takes about as
+long as before but does more. Bounded 45 ms decisions at 7 cards: complete 1 → 7 of 20, mean
+worlds 32 → 44. Whole agent: with `endgame_nodes = 0` the `perf --games 60` decision log is
+byte-identical (hash `3bc0682a03147330`, 3,045 decisions); with the default one-million-node
+limit the hash changes (`fcfc7e72d372853a` → `b4a5b7c0f2a06651`) because the limit now completes
+more worlds: every game's first difference is a budget-bound endgame search (partial, or left
+to the rules before), and 1,207 instead of 1,149 endgame decisions are made by search.
+
 ## Budgeted deep endgame (after the fix; includes the series raise and raise evidence)
 
 | Variant (`ef04487`) | Points/game | Points/series | Bonus rate ours/theirs |
