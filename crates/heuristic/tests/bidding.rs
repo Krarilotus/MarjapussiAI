@@ -23,6 +23,19 @@ fn tell(s: &Scene) -> (Option<i32>, RuleId) {
     (bid_of(&d), d.rule)
 }
 
+/// The owner's examples of the other rules predate B-take (off when they were given): they are
+/// read without it, and the default's B-take bid is recorded where it deviates.
+fn owner_tell(s: &Scene) -> (Option<i32>, RuleId) {
+    let d = s.act_with(
+        Params {
+            b_take: false,
+            ..Params::default()
+        },
+        &s.bid_legal(),
+    );
+    (bid_of(&d), d.rule)
+}
+
 /// B-quiet at the threshold the human-choice fit implies (`take_140_min = 0.5`).
 fn human_take() -> Params {
     Params {
@@ -332,13 +345,14 @@ fn deal_573_takes_one_step_with_a_control_run() {
     // Without the Schell ace there is no run to own.
     let mut s = Scene::new(2, &["e-K", "e-U", "s-U", "s-Z", "s-K", "s-O", "s-9", "s-7", "r-8"]);
     s.auction(&auction);
-    assert_eq!(tell(&s).0, None);
+    assert_eq!(owner_tell(&s).0, None);
+    assert_eq!(tell(&s).1, RuleId::BTake);
     // Once: after its 160 the opponents' 165 is defended.
     let mut s = Scene::new(2, &["e-K", "e-U", "s-A", "s-Z", "s-K", "s-O", "s-9", "s-7", "r-8"]);
     let mut longer = auction.to_vec();
     longer.extend([(2, Some(160)), (1, Some(165))]);
     s.auction(&longer);
-    assert_eq!(tell(&s).0, None);
+    assert_eq!(owner_tell(&s).0, None);
 }
 
 /// The partner's first pass at 140 or more is censored, not weak (the owner 2026-10-13): no
@@ -348,7 +362,8 @@ fn a_first_pass_over_140_does_not_make_the_partner_weak() {
     let hand = ["e-K", "e-U", "s-A", "s-Z", "s-K", "s-O", "s-9", "s-7", "r-8"];
     let mut s = Scene::new(0, &hand);
     s.auction(&[(0, Some(130)), (1, Some(145)), (2, None), (3, None)]);
-    assert_eq!(tell(&s).0, None);
+    assert_eq!(owner_tell(&s).0, None);
+    assert_eq!(tell(&s).1, RuleId::BTake);
     let mut s = Scene::new(0, &hand);
     s.auction(&[(0, Some(130)), (1, Some(135)), (2, None), (3, Some(145))]);
     assert_eq!(tell(&s), (Some(150), RuleId::BControl));
@@ -401,7 +416,8 @@ fn keep_survives_intervention_but_requires_the_offered_red_pair() {
     // an unrelated Bells pair under the Red-pair prerequisite.
     let mut other_pair = Scene::new(1, &hand(&["s-K", "s-O"]));
     other_pair.auction(&auction);
-    assert_eq!(tell(&other_pair).0, None);
+    assert_eq!(owner_tell(&other_pair).0, None);
+    assert_eq!(tell(&other_pair).1, RuleId::BTake);
 }
 
 #[test]
@@ -409,4 +425,19 @@ fn an_offering_hand_with_its_own_pair_still_sends_only_plus_five() {
     let mut s = Scene::new(3, &hand(&["e-A", "g-K", "g-O"]));
     s.auction(&[(0, Some(120)), (1, Some(145)), (2, None)]);
     assert_eq!(tell(&s), (Some(150), RuleId::BOffer));
+}
+
+#[test]
+fn b_take_bids_on_over_the_opponents_140_with_a_pair_and_aces() {
+    // The partner passed, the opponents hold the game at 140; I hold the Bells pair, three aces
+    // and two more standing cards: P(take) and P(make 145) both clear 0.5 (B-take, on since
+    // the deep endgame and the exchange routes: checkpoint 2026-11-01). A weak hand lets them play.
+    let strong = ["s-A", "s-Z", "s-K", "s-O", "g-A", "e-A", "e-Z", "r-6", "g-7"];
+    for (h, take) in [(&strong[..], true), (&LOW[..], false)] {
+        let mut s = Scene::new(2, h);
+        s.auction(&[(0, None), (1, Some(140))]);
+        let d = s.act(&s.bid_legal());
+        let expected = if take { (Some(145), RuleId::BTake) } else { (None, RuleId::BQuiet) };
+        assert_eq!((bid_of(&d), d.rule), expected, "{:?}", d.why);
+    }
 }

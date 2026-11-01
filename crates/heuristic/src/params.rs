@@ -83,14 +83,13 @@ params! {
     /// only the logical work limits (worlds, solver nodes) bound a decision, so its result
     /// does not depend on the machine's load.
     deadlines: bool = true,
-    /// B-take: bid on over an opponent's contract at 140 or more by the fitted rule. Off for the
-    /// deployed execution (2026-10-13, Astra's review 17.4: a restriction to reassess once the
-    /// declarer play improves): at its own decisions bidding was worse than passing (branchdiff,
-    /// 439 positions, both branches played out by four HP1: -33 per decision); in 175 of 201
-    /// both-fail cases the team missed even the bid price, by a median 51 points; against live,
-    /// off vs on +8.8 per game [+2.0, +15.5] on the development deals, and off vs live -1.3
-    /// [-10.1, +7.5] on 2,000 untouched games.
-    b_take: bool = false,
+    /// B-take: bid on over an opponent's contract at 140 or more by the fitted rule. Off from
+    /// 2026-10-13 (Astra's review 17.4: a restriction to reassess once the declarer play
+    /// improves; with the v1 play, bidding on was worse than passing). On since the deep endgame
+    /// and the exchange routes: against checkpoint 3 on seeds 1, 2, 4 +4.2 / +3.7 / +6.4
+    /// points/game, +40 / +49 / +55 points/series (the team declares 3,200 contracts instead of
+    /// 1,800 and makes 67 % of them).
+    b_take: bool = true,
     /// B-take by route: take_vs_defend over the believed worlds can overrule the fitted rule.
     /// Off: with the level-0 exchange (no signals read) the playouts are pessimistic about
     /// every declarer: from the bidding position the simulated declaring team makes about 40 %
