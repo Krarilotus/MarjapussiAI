@@ -31,7 +31,7 @@ pub use game::points::{
     points_card, points_pair, points_set, points_trick, Points, CARD_POINTS, CARD_POINTS_TOTAL, LAST_TRICK_BONUS,
     PAIR_POINTS, VALUE_POINTS,
 };
-pub use game::rules::{trick_points, trump_points};
+pub use game::rules::{trick_points, trump_points, uncalled_pairs};
 pub use game::scoring::{
     game_scores, round5, team_points, GameOutcome, SeriesLength, SeriesResult, SeriesSettings, SeriesTally, TeamPoints,
     SCHWARZ_FACTOR_FIFTHS,

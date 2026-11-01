@@ -9,8 +9,8 @@
 //! `reaches_tricks` (schwarz).
 
 use engine::{
-    next_seat, opponents, partner, points_set, suit_of, takers, takes, trick_winner, value_of, CardSet, FastState,
-    Move, PlayPhase, Suit, CARD_POINTS, LAST_TRICK_BONUS, PAIR_POINTS, SUITS, TRICKS,
+    next_seat, opponents, partner, points_set, suit_of, takers, takes, trick_winner, uncalled_pairs, value_of, CardSet,
+    FastState, Move, PlayPhase, Suit, CARD_POINTS, LAST_TRICK_BONUS, PAIR_POINTS, SUITS, TRICKS,
 };
 
 use crate::tt::{Key, TransTable, NO_MOVE};
@@ -58,18 +58,23 @@ impl Budget {
 /// Default transposition table: 2^18 entries of 40 bytes (10 MB).
 pub const DEFAULT_TT_BITS: u32 = 18;
 
+/// Uncalled suits whose halves `team` holds between its two hands (suit bits): the only pairs
+/// an announcement or a question can still score for it.
+#[inline]
+fn team_pairs(s: &FastState, team: u8) -> u8 {
+    uncalled_pairs(s.hand(team) | s.hand(team + 2), s.called())
+}
+
 /// Uncalled pairs that could still score for `team`. This deliberately overestimates
 /// activation: a question can reach a partner or split pair despite lost own rights.
 #[inline]
 fn pair_bound(s: &FastState, team: u8) -> i32 {
-    let hand = s.hand(team) | s.hand(team + 2);
-    let mut most = 0;
-    for suit in SUITS {
-        if s.called() >> suit as u8 & 1 == 0 && CardSet::halves(suit).is_subset(hand) {
-            most += PAIR_POINTS[suit as usize];
-        }
-    }
-    most
+    let pairs = team_pairs(s, team);
+    SUITS
+        .iter()
+        .filter(|&&suit| pairs >> suit as u8 & 1 != 0)
+        .map(|&suit| PAIR_POINTS[suit as usize])
+        .sum()
 }
 
 /// The moves searched at a node, best guess first: one card per run of equivalent cards.
@@ -94,6 +99,7 @@ impl MoveList {
             len: 0,
         };
         if s.phase() != PlayPhase::Cards {
+            let pairs = team_pairs(s, s.leader() & 1) != 0;
             for m in s.moves().filter(|m| !matches!(m, Move::Card(_))) {
                 let score = match m {
                     Move::Announce(suit) => 10_000 + PAIR_POINTS[suit as usize],
@@ -102,8 +108,9 @@ impl MoveList {
                         // changes trump or scores a pair, playing directly dominates this
                         // question: same cards and lead, with at least as many rights retained.
                         // Keep all root questions in world evaluation; this is not an
-                        // information-set pruning rule.
-                        if !s.question_activates(q) {
+                        // information-set pruning rule. Without a pair in the leader's team, no
+                        // answer can.
+                        if !pairs || !s.question_activates(q) {
                             continue;
                         }
                         9_000
@@ -345,7 +352,7 @@ impl Solver {
     fn last_trick(&self, s: &FastState) -> Option<i32> {
         let forced = match s.phase() {
             PlayPhase::Cards => true,
-            PlayPhase::Start => pair_bound(s, s.leader() & 1) == 0,
+            PlayPhase::Start => team_pairs(s, s.leader() & 1) == 0,
             PlayPhase::Answer(_) => false,
         };
         if !forced {
