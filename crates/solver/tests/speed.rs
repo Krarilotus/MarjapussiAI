@@ -193,11 +193,12 @@ fn decision_time_by_worlds() {
 #[ignore]
 fn decision_time_contract_64() {
     let mut solver = Solver::with_tt_bits(16);
-    eprintln!("| k | decisions | worlds | mean ms | max ms | mean nodes |");
-    for k in [5, 6, 7] {
+    eprintln!("| k | decisions | worlds | mean ms | max ms | mean nodes | max nodes | ns/node |");
+    eprintln!("|---|---|---|---|---|---|---|---|");
+    for k in [5, 6, 7, 8] {
         let decisions = positions::decisions(k, 20);
         let mut times = vec![];
-        let mut nodes = 0;
+        let mut nodes = vec![];
         for (i, (know, table, _, _)) in decisions.iter().enumerate() {
             solver.clear();
             solver.reset_nodes();
@@ -220,13 +221,16 @@ fn decision_time_contract_64() {
             .unwrap();
             times.push(start.elapsed().as_nanos());
             assert!(d.complete);
-            nodes += solver.nodes();
+            nodes.push(solver.nodes());
         }
+        let (ns, total) = (times.iter().sum::<u128>(), nodes.iter().sum::<u64>());
         eprintln!(
-            "| {k} | 20 | 64 | {:.3} | {:.3} | {} |",
-            ms(times.iter().sum::<u128>()) / 20.0,
+            "| {k} | 20 | 64 | {:.3} | {:.3} | {} | {} | {:.1} |",
+            ms(ns) / 20.0,
             ms(*times.iter().max().unwrap()),
-            nodes / 20
+            total / 20,
+            nodes.iter().max().unwrap(),
+            ns as f64 / total as f64
         );
     }
 }
