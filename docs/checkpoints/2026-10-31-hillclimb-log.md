@@ -326,3 +326,12 @@ covers taking the game below 140, not B-take's).
 | HL-2 cash standing cards off (`lead_cash_standing`) | 1 | −13.84 [−17.01, −10.67] | −97.18 | the cash rule is worth 14 points/game |
 | HL-1 schnippeln off (`lead_schnippeln`) | 1 | +0.23 [−0.53, +1.00] | +0.84 | neutral |
 | HL-5 destroy a pair off (`lead_destroy_pair`) | 1 | −0.00 [−0.01, +0.00] | −0.01 | a few games change; kept (on) |
+| HL-3 plan-suit leads off (`lead_plan_suit`) | 1 | −0.05 [−0.31, +0.22] | −1.22 | neutral |
+| `half_question_min` 0.3 / 0.5 | 1 | −0.23 [−0.90, +0.45] / −0.42 [−0.83, −0.02] | −0.79 / −4.29 | 0.4 stays |
+| `partner_trump_conf` 0.7 / 0.9 | 1 | −0.04 [−0.12, +0.05] / +0.06 [−0.06, +0.19] | −0.21 / +0.35 | 0.8 stays |
+| `partner_half_conf` 0.4 / 0.6 | 1 | −0.35 [−0.94, +0.24] / −0.09 [−0.33, +0.16] | −2.90 / −0.49 | 0.5 stays |
+| `partner_pair_min` 0.2 | 1 | +0.10 [−0.43, +0.63] | +1.50 | 0.1 stays |
+| `partner_lead_conf` 0.6 / 0.8 | 1 | −0.06 [−0.19, +0.06] / +0.13 [−0.09, +0.35] | −0.34 / +1.21 | 0.7 stays |
+| `opp_reach_cover` 0.65 / 0.85 | 1 | −0.14 [−0.33, +0.05] / −0.07 [−0.18, +0.04] | −0.80 / −0.41 | 0.75 stays |
+| αμ, M = 2 over the last 4 tricks (`endgame_alphamu`, Opus prototype `fe502bc`, vs `c4`) | 1 / 2 | +0.58 [−0.29, +1.45] / −0.60 [−1.59, +0.40] | +6.60 / −2.38 | ~0.8 % of late decisions change; raw moves up to 116 ms |
+| αμ, M = 2 over the last 3 tricks (vs `c4`) | 1 / 2 / 4 | +0.55 [+0.02, +1.08] / −0.50 [−1.03, +0.02] / +0.26 [−0.11, +0.63] | +5.50 / −2.82 / +2.90 | neutral: strategy fusion in the last tricks costs nothing measurable at budgets that fit the move limit; not merged |
