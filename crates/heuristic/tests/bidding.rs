@@ -347,12 +347,14 @@ fn deal_573_takes_one_step_with_a_control_run() {
     s.auction(&auction);
     assert_eq!(owner_tell(&s).0, None);
     assert_eq!(tell(&s).1, RuleId::BTake);
-    // Once: after its 160 the opponents' 165 is defended.
+    // Once: after its 160 the opponents' 165 is defended (B-control's one challenge is spent);
+    // the default bids on by B-take instead.
     let mut s = Scene::new(2, &["e-K", "e-U", "s-A", "s-Z", "s-K", "s-O", "s-9", "s-7", "r-8"]);
     let mut longer = auction.to_vec();
     longer.extend([(2, Some(160)), (1, Some(165))]);
     s.auction(&longer);
     assert_eq!(owner_tell(&s).0, None);
+    assert_eq!(tell(&s), (Some(170), RuleId::BTake));
 }
 
 /// The partner's first pass at 140 or more is censored, not weak (the owner 2026-10-13): no

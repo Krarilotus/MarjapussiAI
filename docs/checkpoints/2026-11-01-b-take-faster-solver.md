@@ -13,8 +13,9 @@
 rule fitted to human choices (P(take) and P(make the next step) both at least 0.5). The owner
 switched it off on 2026-10-13 as "a restriction to reassess once the declarer play improves".
 With the deep endgame and the exchange routes it has: the team declares about 3,200 contracts
-instead of 1,800 and still makes 67 % of them. The rule's strongest term is the team's pair
-cover, so its bids across 140 keep the convention that such a bid promises a pair. The owner's
+instead of 1,800 and still makes 67 % of them. The rule's strongest term is the team's pair cover, but that is not a promise: it can bid
+across 140 without a likely pair, which a human partner reading such a bid as a pair (HR-4)
+would misread (corrected 2026-11-01 after the Fable review; a pair floor is under measurement). The owner's
 examples of B-control and B-offer predate it: their tests read them without B-take and record
 where the default player now takes the game instead.
 

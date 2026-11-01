@@ -289,3 +289,14 @@ were broken before cost −0.8. "Own points" stays the defenders' criterion.
 Raise accounting (`c3` vs `base`, seed 2, each raise against keeping the auction value with the
 same card points): `c3`'s 601 raises net −0.44 points/game (43 contracts lost to the raise), `base`'s
 434 net +1.30; but the series worth, not the game score, is what HZ-1 maximises (the row above).
+
+## Review (Fable, `47712f9..f8c5981`)
+
+No must-fix; B-take's order against the convention rules and its reading by the belief model
+are clean. Fixed: stale node-budget and bidding-module docs, B-over140's rule text (0.85),
+the deal-573 "once" case records the default's B-take step. Corrected: the checkpoint-4
+record claimed B-take's bids across 140 promise a pair; the rule has no pair floor (a human
+partner reading HR-4 may misread such a bid). Measured next: a derivable pair floor for B-take
+(`b_take_cover`) and the partner's believed complete pairs in its estimate (`b_take_mate_pairs`,
+the estimate counts only pairs around my single halves). Kept: HB-8 (a planned rule that also
+covers taking the game below 140, not B-take's).

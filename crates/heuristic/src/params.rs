@@ -154,7 +154,7 @@ params! {
     // Endgame (F10 = D-c): the exact solver over believable worlds. Measured 2026-10-31
     // (hill-climb log): from seven tricks with a one-million-node budget, at least 16 worlds and
     // racing at two standard errors, +9.6 points/game and +78 points/series against four tricks
-    // unbounded; one million nodes keep a card decision under the 100 ms limit.
+    // unbounded. The faster solver of 2026-11-01 fits 1.2M nodes (`endgame_nodes`) in the limit.
     /// With at most this many tricks left (0: off).
     endgame_tricks: u32 = 7,
     /// Worlds solved per decision (all consistent deals if there are fewer).

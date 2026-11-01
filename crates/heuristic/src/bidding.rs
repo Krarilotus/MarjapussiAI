@@ -22,10 +22,14 @@
 //! 4. **B-gate, part 1:** nothing told, my first or second call, value ≤ 125, no pair of my
 //!    own, and strong cards or many halves: bid 140 (it closes the opponents' exchange; they
 //!    lose if they overbid without a pair).
-//! 5. **B-quiet:** pass.
+//! 5. At 140 or more: **B-control** and **B-offer** (the one ownership challenge,
+//!    `own_the_game`), then **B-take** against an opponent's contract: the next step when the
+//!    fitted P(take) and the estimate's P(make the next step) are at least 0.5 (on since
+//!    checkpoint 4, 2026-11-01).
+//! 6. **B-quiet:** pass.
 //!
-//! Taking the game (HB-8), claiming 140 (HB-140c), the barriers and raising come with the game
-//! estimate in batch 2; until then they are off.
+//! Taking the game below 140 with nothing left to tell (HB-8), claiming 140 without a known pair
+//! (HB-140c) and the barrier bids are not implemented.
 
 use beliefs::conventions::{
     follow_target, info_to_tell, next_context, pair_value, BidContext, BidObs, HandClass, Message, PAIR_LINE,

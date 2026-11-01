@@ -54,7 +54,7 @@ rules! {
     // Bidding (§3.1)
     // KB batch 1 (`findings/kb/concepts.md`)
     BTell "B-tell" Bidding 0 1 "[O]" "tell the first live message: with a pair, the ace first, then the pair; 3+ halves without a pair before the ace; a +10/+15 landing on 140 goes to 145";
-    BOver140 "B-over140" Bidding 1 1 "[O]" "a step across 140 only with team_pair_cover(target) >= 0.75, else the message is skipped; in the tie-break, over 140 when the team pair (derived) covers 145";
+    BOver140 "B-over140" Bidding 1 1 "[O]" "a step across 140 only with team_pair_cover(target) >= over_140_cover (0.85), else the message is skipped; in the tie-break, over 140 when the team pair (derived) covers 145";
     BGate "B-gate" Bidding 4 1 "[O]" "the 140 gate: block instead of telling (part 2), with strong cards and nothing to tell (part 1; thresholds proposed), or in the tie-break when game_drive >= 0.5";
     BDefend "B-defend" Bidding 3 1 "[O]" "nothing to tell, the partner passed first, many cards standing against us: 140, then +5 up to the limit";
     BQuiet "B-quiet" Bidding 5 1 "[O]" "nothing to tell: pass";
