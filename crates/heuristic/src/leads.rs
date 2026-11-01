@@ -50,21 +50,9 @@ pub(crate) fn before_standing(ctx: &Ctx, legal: CardSet) -> Option<Lead> {
 }
 
 pub(crate) fn after_standing(ctx: &Ctx, legal: CardSet, val: &Valuation) -> Option<Lead> {
-    draw_trumps(ctx, legal)
-        .or_else(|| schnippeln_line(ctx, legal, val))
+    schnippeln_line(ctx, legal, val)
         .or_else(|| destroy_pair(ctx, legal, val))
         .or_else(|| partner_ruffs(ctx, legal, val))
-}
-
-/// A current trump control with a reserve. All inputs belong to the actor's view;
-/// possible higher cards include the partner's, since forced overtaking transfers
-/// the lead too. This resource is a prior, not a veto on other scored routes.
-pub(crate) fn control_trump(hand: CardSet, trump: Option<Suit>, others: CardSet) -> Option<u8> {
-    let mine = hand & CardSet::suit(trump?);
-    if mine.len() < 2 {
-        return None;
-    }
-    mine.iter().find(|&c| (higher(c) & (mine | others)).is_empty())
 }
 
 /// A specific cash before Yours: retain the lead and leave partner at least one
@@ -212,50 +200,12 @@ fn partner_ruffs(ctx: &Ctx, legal: CardSet, val: &Valuation) -> Option<Lead> {
     ))
 }
 
-/// HL-4: lead trump only with a reason: I hold the top trump and another one, and an opponent
-/// may still hold trump. *Why:* drawing their trumps protects our standing side cards from
-/// being ruffed.
-fn draw_trumps(ctx: &Ctx, legal: CardSet) -> Option<Lead> {
-    let t = ctx.k.trump()?;
-    if !ctx.params.lead_draw_trump {
-        return None;
-    }
-    let mine = legal & CardSet::suit(t);
-    let [l, r] = opponents(ctx.me);
-    let theirs = (ctx.k.may_hold(l) | ctx.k.may_hold(r)) & CardSet::suit(t);
-    if mine.len() < 2 || theirs.is_empty() {
-        return None;
-    }
-    let c = control_trump(legal, Some(t), theirs | ctx.k.may_hold(partner(ctx.me)))?;
-    Some((
-        c,
-        RuleId::HL4,
-        vec![
-            fact("their_trumps", theirs.len()),
-            fact("retained_trumps", mine.len() - 1),
-        ],
-    ))
-}
-
 #[cfg(test)]
 mod control_tests {
     use super::*;
 
     fn cards(names: &[&str]) -> CardSet {
         CardSet::from_cards(&names.iter().map(|s| s.parse().unwrap()).collect::<Vec<_>>())
-    }
-
-    #[test]
-    fn drawing_control_requires_a_reserve_and_no_forced_transfer() {
-        let trump = Some(Suit::Bells);
-        assert_eq!(
-            control_trump(cards(&["s-A", "s-8"]), trump, cards(&["s-Z"])),
-            Some("s-A".parse::<Card>().unwrap().index())
-        );
-        assert_eq!(control_trump(cards(&["s-A", "e-8"]), trump, cards(&["s-Z"])), None);
-        // The possible ace can belong to partner too: mandatory overtaking would
-        // spend the transfer before the actor could continue drawing.
-        assert_eq!(control_trump(cards(&["s-Z", "s-8"]), trump, cards(&["s-A"])), None);
     }
 
     #[test]

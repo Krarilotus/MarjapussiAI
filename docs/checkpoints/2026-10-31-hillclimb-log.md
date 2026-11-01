@@ -317,3 +317,12 @@ covers taking the game below 140, not B-take's).
 | B-take's derivable pair floor 0.85 / 0.5 (`b_take_cover`) | 1 / 2 / 4 | −0.72 / −0.36 / −0.27; −0.03 / −0.45 / −1.11 | −4.54 / −6.84 / +2.82; −1.59 / −5.87 / −5.23 | the human-reading guard (HR-4): 0.85 adopted as `over_140_cover` (one owner) |
 | 256 early worlds + the pair floor (`7ef9693`) | 1 / 2 / 4 / 3 / 5 | +1.27 / +1.50 / −0.36 / +0.24 / +0.28 | +13.34 / +3.14 / +0.84 / −4.40 / −1.78 | vs `base` (seed 2) +28.87 / +239.43 (`c4` +23.21 / +200.05): the floor removes the pairless takes that failed against `base` |
 | + a move's route evaluation stops after 6,000 rollouts, never below 64 worlds (`move_route_rollouts`) | 2 vs `base` | +27.54 (6,000 without the floor) | +230.53 | slowest move alone on an idle machine 85.0 ms (uncapped 121.8, `c4` 85.6) |
+
+## After checkpoint 5 (opponent `c5`)
+
+| Variant | Seeds | Points/game | Points/series | Cause |
+|---|---|---|---|---|
+| HL-4 draw trumps on (`lead_draw_trump`) | 1 | 0.00 (no game changed) | 0.00 | outside the endgame trump is rarely made yet, and the routes decide the rest: the dormant switch and its rule are removed |
+| HL-2 cash standing cards off (`lead_cash_standing`) | 1 | −13.84 [−17.01, −10.67] | −97.18 | the cash rule is worth 14 points/game |
+| HL-1 schnippeln off (`lead_schnippeln`) | 1 | +0.23 [−0.53, +1.00] | +0.84 | neutral |
+| HL-5 destroy a pair off (`lead_destroy_pair`) | 1 | −0.00 [−0.01, +0.00] | −0.01 | a few games change; kept (on) |

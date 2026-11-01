@@ -159,8 +159,6 @@ params! {
     /// HL-3: lead into partner's known void when its estimated winning entry meets conf.
     lead_plan_suit: bool = true,
     partner_trump_conf: f32 = 0.8,
-    /// HL-4: lead the top trump to draw the opponents' trumps.
-    lead_draw_trump: bool = false,
 
     // Endgame (F10 = D-c): the exact solver over believable worlds. Measured 2026-10-31
     // (hill-climb log): from seven tricks with a one-million-node budget, at least 16 worlds and
@@ -300,9 +298,9 @@ mod tests {
     fn toml_round_trip_and_override() {
         let defaults = Params::default();
         assert_eq!(Params::from_toml(&defaults.to_toml()).unwrap(), defaults);
-        let p = Params::from_toml("# override\ntrust_partner = 0.75\nlead_draw_trump = true  # on\n").unwrap();
+        let p = Params::from_toml("# override\ntrust_partner = 0.75\nlead_schnippeln = false  # off\n").unwrap();
         assert_eq!(p.conv().trust_partner, 0.75);
-        assert!(p.lead_draw_trump);
+        assert!(!p.lead_schnippeln);
         assert!(Params::from_toml("nope = 1").is_err());
         assert!(Params::from_toml("w_blank = 12.5").is_err());
         assert!(Params::from_toml("pass_temperature = 1").is_err());

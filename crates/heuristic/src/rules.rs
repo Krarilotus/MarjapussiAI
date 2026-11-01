@@ -115,7 +115,6 @@ rules! {
     HL1 "HL-1" Play 20 1 "[O]" "trick 1: schnippeln when the partner certainly holds the suit's ace";
     HL2 "HL-2" Play 21 1 "[O]" "lead a side-suit standing card that is no pair half, highest first";
     HL3 "HL-3" Play 22 1 "[O]" "lead into partner's known void when a winning ruff entry is likely";
-    HL4 "HL-4" Play 23 1 "[RV]" "lead trump only with a reason: the top trump to draw theirs";
     HL5 "HL-5" Play 24 1 "[O]" "destroy an opponent pair: lead A or 10 of its likely suit";
     HL6 "HL-6" Play 25 1 "[O]" "two cards left: keep the top trump for the last trick";
     HL7 "HL-7" Play 26 1 "[RV]" "never lead a card that certainly loses when another exists";

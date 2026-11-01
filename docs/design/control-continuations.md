@@ -53,8 +53,8 @@ The `in_hands()` standing check uses the union of unplayed cards, which is
 public in a complete deal; it is not itself an ownership leak and stays unchanged.
 The actual information issue was the shared private activation plan.
 
-The existing `lead_draw_trump` switch remains false by default. The reordered
-HL4 fallback is opt-in; the default behavior change comes from the continuation
+The existing `lead_draw_trump` switch remains false by default (removed 2026-11-01: switched
+on, it changed none of 5,000 games against checkpoint 5). The reordered HL4 fallback is opt-in; the default behavior change comes from the continuation
 question prior and actor-local route evaluation. This does not establish that
 the recorded early-transfer choices are fixed; their replay remains required.
 
