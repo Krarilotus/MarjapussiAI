@@ -183,12 +183,13 @@ impl MoveList {
             };
             list.push(c, score);
         }
-        for i in 0..list.len {
-            if list.codes[i] == tt_best {
+        let n = list.len;
+        if tt_best != NO_MOVE {
+            if let Some(i) = list.codes[..n].iter().position(|&c| c == tt_best) {
                 list.scores[i] = i32::MAX;
             }
         }
-        for i in 1..list.len {
+        for i in 1..n {
             let mut j = i;
             while j > 0 && list.scores[j - 1] < list.scores[j] {
                 list.scores.swap(j - 1, j);
