@@ -335,3 +335,4 @@ covers taking the game below 140, not B-take's).
 | `opp_reach_cover` 0.65 / 0.85 | 1 | −0.14 [−0.33, +0.05] / −0.07 [−0.18, +0.04] | −0.80 / −0.41 | 0.75 stays |
 | αμ, M = 2 over the last 4 tricks (`endgame_alphamu`, Opus prototype `fe502bc`, vs `c4`) | 1 / 2 | +0.58 [−0.29, +1.45] / −0.60 [−1.59, +0.40] | +6.60 / −2.38 | ~0.8 % of late decisions change; raw moves up to 116 ms |
 | αμ, M = 2 over the last 3 tricks (vs `c4`) | 1 / 2 / 4 | +0.55 [+0.02, +1.08] / −0.50 [−1.03, +0.02] / +0.26 [−0.11, +0.63] | +5.50 / −2.82 / +2.90 | neutral: strategy fusion in the last tricks costs nothing measurable at budgets that fit the move limit; not merged |
+| Routes compare playouts by the game's series worth (HS-1, `route_series`, `727cbb5`) | 1 / 2 | −0.32 [−1.95, +1.30] / −0.91 [−2.51, +0.70] | +3.48 / −4.11 | no series gain; the worth per playout costs time (raw moves up to 150 ms loaded): not merged |
