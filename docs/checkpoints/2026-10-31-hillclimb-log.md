@@ -238,3 +238,14 @@ points (−4.2 points/game). They gave up real points for contract-breaking chan
 open-hand worlds overstate (strategy fusion: the declarer is credited with perfect
 guessing). Breaking 34 more contracts gained +2.2 points/game; 12 contracts made that
 were broken before cost −0.8. "Own points" stays the defenders' criterion.
+
+## After checkpoint 3 (opponent `c3`; prototypes on `proto/*` branches)
+
+| Variant | Seeds | Points/game | Points/series | Cause |
+|---|---|---|---|---|
+| HO-3: follows by route like HO-1's leads (`outlook_follows`, `0cbdae2`) | 1 / 2 | −0.14 [−1.63, +1.35] / +1.29 [−0.19, +2.77] | +2.58 / +9.13 | not measurably better; raw moves up to 139 ms; not adopted |
+| Racing in the exchange routes, z = 2 every 32 worlds (`exchange_race_z`, `65fed24`) | 1 / 2 | −0.43 [−1.34, +0.48] / −0.60 [−1.60, +0.39] | −5.76 / −5.77 | returns 4.3× faster (1.78 → 0.42 s mean), but drops some winners |
+| The store's 16 / 64 best passes forth as further forth-route candidates (`forth_store_candidates`) | 1 | +0.03 [−1.31, +1.36] / −0.55 [−2.33, +1.23] | −1.78 / −7.87 | no gain over 512 worlds: the parameter is removed (`c3`'s default 0 kept) |
+| HZ-1 by route (`route_raise`) | 1 | −3.73 [−6.87, −0.58] | −24.71 [−48.61, −0.81] | made 1,490 vs 1,637 contracts: still overraises with the deep endgame |
+| Racing in the exchange routes, z = 3 | 1 | −0.27 [−0.68, +0.14] | −1.51 [−3.82, +0.81] | returns 2.3× faster (0.77 s mean); 60-game decision hash unchanged |
+

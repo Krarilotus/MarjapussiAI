@@ -353,8 +353,7 @@ fn route_forth(ctx: &Ctx, hand: CardSet, options: &[(GameAction, CardSet, f64)],
         .pair_suits()
         .filter_map(|s| best_where(&|x| (x & CardSet::halves(s)).is_empty()));
     let mut candidates = vec![chosen];
-    let ranked = store_ranked(options, ctx.params.forth_store_candidates as usize);
-    for x in blanks.chain(whole_suits).chain(aces).chain(pairs_kept).chain(ranked) {
+    for x in blanks.chain(whole_suits).chain(aces).chain(pairs_kept) {
         if !candidates.contains(&x) && options.iter().any(|o| o.1 == x) {
             candidates.push(x);
         }

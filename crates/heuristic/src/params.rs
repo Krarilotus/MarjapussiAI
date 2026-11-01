@@ -113,8 +113,6 @@ params! {
     /// The store's best returns the route compares besides its choice and the run-keeping ones
     /// (candidates plateau from 64; log, "Exchange routes").
     return_store_candidates: u32 = 64,
-    /// The store's best passes forth P-route compares besides its purposeful candidates.
-    forth_store_candidates: u32 = 0,
     /// P-route back: compare the stored return with the store's best returns
     /// (`return_store_candidates`) and those preserving a top-controlled run. Independent of
     /// the pass-forth route; retains the store on unresolved comparisons.
