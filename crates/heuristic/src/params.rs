@@ -53,24 +53,26 @@ macro_rules! params {
 params! {
     // Bidding, KB batch 1 (`findings/kb/concepts.md`): the convention's encoder and its
     // weights are `beliefs::conventions::Params`.
+    // `over_140_cover`, `take_140_min`, `b_take` and `pass_route` are the owner's settings
+    // (2026-11-10, D7/D8). The hill climb's 0.85, 0.8, on and on were measured but not adopted:
+    // the owner's four score −1.93 [−5.63, +1.77] points/game below them, the two thresholds
+    // alone −1.31 [−3.02, +0.39], neither significant (PR #4 review, paired, seed 1110 vs base).
     /// B-over140: a step across 140 only if P(our team holds a pair covering the excess) is at
-    /// least this ([O] 2026-10-06: "P(team pair) high, ~75 %"). With the deep endgame 0.85 scores
-    /// better (2026-10-31, seeds 1, 2, 4: +1.5 points/game, +8 points/series; 0.95 alike, 0.65
-    /// worse). B-take's bid across 140 needs the same cover (2026-11-01: −0.5 points/game
-    /// against no floor, the price of keeping a bid above 140 a pair message, HR-4).
-    over_140_cover: f32 = 0.85,
+    /// least this ([O] 2026-10-06: "P(team pair) high, ~75 %"). The hill climb measured 0.85
+    /// stronger (2026-10-31, seeds 1, 2, 4: +1.5 points/game). B-take's bid across 140 needs the
+    /// same cover (HR-4).
+    over_140_cover: f32 = 0.75,
     /// B-defend: the opponents can likely play up to 140 plus the pair they hold with at least
-    /// this probability (`Mind::opp_reach`; the owner's 75 %, as `over_140_cover` before).
+    /// this probability (`Mind::opp_reach`; the owner's 75 %, as `over_140_cover`).
     opp_reach_cover: f32 = 0.75,
 
     /// Pass-back plan: minimum P(partner holds a half of the suit) to favour my single half.
     partner_half_conf: f32 = 0.5,
 
-    /// B-quiet: take the game at 140 (nothing left to tell) from this fitted P(take). The fit
-    /// imitates humans at 0.5; with the deep endgame, 0.8 scores better (2026-10-31, against
-    /// checkpoint 2 on seeds 1, 2, 4: +1.2 points/game, +7 points/series; 0.7 to 0.9 a plateau,
-    /// 0.4 worse).
-    take_140_min: f32 = 0.8,
+    /// B-quiet: take the game at 140 (nothing left to tell) from this fitted P(take). At 0.5
+    /// the fit imitates humans and takes the owner's seed-42 140. The hill climb measured 0.8
+    /// stronger (2026-10-31, against checkpoint 2 on seeds 1, 2, 4: +1.2 points/game).
+    take_140_min: f32 = 0.5,
 
     /// HZ-1: raise after the exchange by `contract_estimate` (the best expected contract score).
     estimated_raise: bool = true,
@@ -86,11 +88,11 @@ params! {
     deadlines: bool = true,
     /// B-take: bid on over an opponent's contract at 140 or more by the fitted rule. Off from
     /// 2026-10-13 (Astra's review 17.4: a restriction to reassess once the declarer play
-    /// improves; with the v1 play, bidding on was worse than passing). On since the deep endgame
-    /// and the exchange routes: against checkpoint 3 on seeds 1, 2, 4 +4.2 / +3.7 / +6.4
-    /// points/game, +40 / +49 / +55 points/series (the team declares 3,200 contracts instead of
-    /// 1,800 and makes 67 % of them).
-    b_take: bool = true,
+    /// improves; with the v1 play, bidding on was worse than passing). With the deep endgame and
+    /// the exchange routes the hill climb measured it on against checkpoint 3 at +4.2 / +3.7 /
+    /// +6.4 points/game on seeds 1, 2, 4 (checkpoint 2026-11-01); the review's c3 → c4 step
+    /// (B-take and a larger solver budget) on seed 1110 against base was −3.93 [−7.60, −0.26].
+    b_take: bool = false,
     /// B-take by route: take_vs_defend over the believed worlds can overrule the fitted rule.
     /// Off: with the level-0 exchange (no signals read) the playouts are pessimistic about
     /// every declarer: from the bidding position the simulated declaring team makes about 40 %
@@ -104,12 +106,12 @@ params! {
     /// game vs without); choosing the highest target picks the hands whose playout estimate is
     /// too high (human games: estimates of 240+ overshoot by 5 to 22 points).
     route_raise: bool = false,
-    /// P-route: the pass forth by route over the exchange worlds (`passing::route_forth`). On
-    /// since checkpoint 3: Astra's review (2026-10-13) holds that the forecast lacks the team's
-    /// private transfer facts in play and a receiver-readable route to the giver's kept
-    /// entries, but over `exchange_worlds` it gains, also with a partner that reads the pass by
-    /// the store's convention (log, "Exchange routes").
-    pass_route: bool = true,
+    /// P-route: the pass forth by route over the exchange worlds (`passing::route_forth`). Off
+    /// (Astra's review 2026-10-13, followed): the forecast lacks the team's private transfer
+    /// facts in play and a receiver-readable route to the giver's kept entries. The hill climb
+    /// measured it on over `exchange_worlds` as a gain, also with a partner that reads the pass
+    /// by the store's convention (checkpoint 3; log, "Exchange routes").
+    pass_route: bool = false,
     /// The store's best returns the route compares besides its choice and the run-keeping ones
     /// (candidates plateau from 64; log, "Exchange routes").
     return_store_candidates: u32 = 64,

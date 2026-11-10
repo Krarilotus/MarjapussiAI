@@ -19,10 +19,12 @@ fn plain_auction() -> Vec<(u8, Option<i32>)> {
     vec![(0, Some(120)), (1, None), (2, None), (3, None)]
 }
 
-/// The default player's pass (`Scene::act` keeps the store's): P-route may overrule the store.
-fn default_pass(s: &Scene) -> Decision {
+/// The pass with P-route on (off by default; `Scene::act` keeps the store's): the route may
+/// overrule the store.
+fn route_pass(s: &Scene) -> Decision {
     let params = Params {
         endgame_tricks: RULE_FIXTURE_ENDGAME_TRICKS,
+        pass_route: true,
         ..Params::default()
     };
     s.act_with(params, &s.pass_legal())
@@ -37,9 +39,9 @@ fn hp5_green_is_only_a_tie_breaker() {
     );
     let store = set(&["e-6", "e-7", "s-6", "s-7"]);
     assert_eq!(passed(&s.act(&s.pass_legal())), store);
-    // The default player compares it by route and passes the Red A, 10 and K here (P-route,
-    // measured stronger in self-play: checkpoint 2026-10-31-exchange-routes).
-    let d = default_pass(&s);
+    // With P-route on, the player compares it by route and passes the Red A, 10 and K here
+    // (measured stronger in self-play, not adopted: checkpoint 2026-10-31-exchange-routes).
+    let d = route_pass(&s);
     assert_eq!(d.rule, RuleId::PRoute, "{:?}", d.why);
     assert_ne!(passed(&d), store);
 }
@@ -53,7 +55,7 @@ fn hp6_passes_an_unknown_whole_suit_pair() {
         &["g-6", "g-7", "e-8", "e-9", "s-K", "s-O", "r-9", "r-8", "r-7"],
         &plain_auction(),
     );
-    for d in [s.act(&s.pass_legal()), default_pass(&s)] {
+    for d in [s.act(&s.pass_legal()), route_pass(&s)] {
         assert!(
             CardSet::halves(Suit::Bells).is_subset(passed(&d)),
             "{:?} {:?}",
@@ -69,7 +71,7 @@ fn hp6_passes_an_unknown_acorns_pair_when_the_partner_showed_no_halves() {
         &["e-K", "e-O", "g-6", "g-7", "s-8", "s-9", "r-A", "r-Z", "r-9"],
         &plain_auction(),
     );
-    for d in [s.act(&s.pass_legal()), default_pass(&s)] {
+    for d in [s.act(&s.pass_legal()), route_pass(&s)] {
         assert!(CardSet::halves(Suit::Acorns).is_subset(passed(&d)), "{:?}", passed(&d));
     }
 }

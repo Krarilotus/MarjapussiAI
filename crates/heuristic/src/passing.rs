@@ -421,10 +421,10 @@ mod control_tests {
     #[test]
     fn return_run_comparison_is_enabled_independently_of_pass_forth() {
         let params = crate::Params::default();
-        assert!(params.return_run_route && params.pass_route);
-        let no_forth = crate::Params::from_toml("pass_route = false").unwrap();
-        assert!(no_forth.return_run_route);
-        let no_run = crate::Params::from_toml("return_run_route = false").unwrap();
+        assert!(params.return_run_route && !params.pass_route);
+        let forth = crate::Params::from_toml("pass_route = true").unwrap();
+        assert!(forth.return_run_route);
+        let no_run = crate::Params::from_toml("pass_route = true\nreturn_run_route = false").unwrap();
         assert!(no_run.pass_route);
     }
 

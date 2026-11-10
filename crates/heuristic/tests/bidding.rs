@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{bid_of, Scene};
+use common::{bid_of, Scene, RULE_FIXTURE_ENDGAME_TRICKS};
 use heuristic::{HeuristicAgent, Params, RuleId};
 
 const LOW: [&str; 9] = ["g-6", "e-7", "s-8", "r-9", "s-6", "g-7", "e-8", "r-8", "g-8"];
@@ -23,25 +23,20 @@ fn tell(s: &Scene) -> (Option<i32>, RuleId) {
     (bid_of(&d), d.rule)
 }
 
-/// The owner's examples of the other rules predate B-take (off when they were given): they are
-/// read without it, and the default's B-take bid is recorded where it deviates.
-fn owner_tell(s: &Scene) -> (Option<i32>, RuleId) {
-    let d = s.act_with(
-        Params {
-            b_take: false,
-            ..Params::default()
-        },
-        &s.bid_legal(),
-    );
-    (bid_of(&d), d.rule)
-}
-
-/// B-quiet at the threshold the human-choice fit implies (`take_140_min = 0.5`).
-fn human_take() -> Params {
+/// `Scene::act`'s parameters with B-take on (off by default, the owner 2026-11-10; on in the
+/// hill climb's checkpoints 4 and 5).
+fn b_take_on() -> Params {
     Params {
-        take_140_min: 0.5,
+        b_take: true,
+        endgame_tricks: RULE_FIXTURE_ENDGAME_TRICKS,
         ..Params::default()
     }
+}
+
+/// B-take's bid, recorded where it deviates from the owner's examples, which predate it.
+fn b_take_tell(s: &Scene) -> (Option<i32>, RuleId) {
+    let d = s.act_with(b_take_on(), &s.bid_legal());
+    (bid_of(&d), d.rule)
 }
 
 #[test]
@@ -99,7 +94,7 @@ fn b_quiet_runs_the_tie_break_with_strong_cards() {
     let strong = ["g-A", "g-Z", "g-K", "e-A", "e-Z", "s-A", "s-Z", "r-6", "r-7"];
     let mut s = Scene::new(2, &strong);
     s.auction(&[(0, Some(120)), (1, Some(130))]);
-    let d = s.act_with(human_take(), &s.bid_legal());
+    let d = s.act(&s.bid_legal());
     assert_eq!((bid_of(&d), d.rule), (Some(140), RuleId::BGate), "{:?}", d.why);
     assert!(d.why.iter().any(|f| f.key == "p_take_140" && f.value >= 0.5));
 }
@@ -263,19 +258,13 @@ fn bluffing_an_ace_step_nobody_can_hold() {
 #[test]
 fn tie_break_over_140_with_a_derived_team_pair() {
     // Batch 1c, the owner's example: the partner +10 (3+ halves or a small pair), I hold the
-    // Red and Acorns halves and an ace to tell: our team likely holds a pair, so over 140 at the
-    // owner's 75 % cover. The default (0.85, measured stronger in self-play) keeps below 140.
+    // Red and Acorns halves and an ace to tell: our team likely holds a pair, so over 140.
     let mut s = Scene::new(2, &["r-K", "e-O", "g-A", "g-6", "s-6", "s-7", "e-6", "e-7", "g-7"]);
     s.auction(&[(0, Some(125)), (1, None)]);
-    assert_ne!(s.act(&s.bid_legal()).rule, RuleId::BOver140);
-    let owner = Params {
-        over_140_cover: 0.75,
-        ..Params::default()
-    };
-    let d = s.act_with(owner.clone(), &s.bid_legal());
+    let d = s.act(&s.bid_legal());
     assert_eq!((bid_of(&d), d.rule), (Some(145), RuleId::BOver140), "{:?}", d.why);
     let fact = |k: &str| d.why.iter().find(|f| f.key == k).map(|f| f.value).unwrap();
-    assert!(fact("team_pair_cover") >= owner.over_140_cover);
+    assert!(fact("team_pair_cover") >= Params::default().over_140_cover);
     assert!(fact("derived_pair_value") > 60.0);
 }
 
@@ -302,13 +291,11 @@ fn tie_break_steps_with_a_pair_still_to_tell_and_the_partner_yet_to_call() {
 #[test]
 fn seed_42_s1_takes_the_game_at_140() {
     // C43b, the owner's seed-42 game: S1 told its ace (125), S3 +10 (135), nothing left to
-    // tell: p_take_140 ≈ 0.69 → 140 at the human-fitted threshold ([O] "should have gone for
-    // the 140 to take the game"); without standing_potential (Eichel A Z U 9) it would be below
-    // 0.5. The default threshold (0.8, measured stronger in self-play) passes here.
+    // tell: p_take_140 ≈ 0.69 → 140 ([O] "should have gone for the 140 to take the game");
+    // without standing_potential (Eichel A Z U 9) it would be below 0.5.
     let mut s = Scene::new(1, &["e-9", "g-K", "e-Z", "e-U", "s-K", "g-6", "g-U", "e-A", "r-Z"]);
     s.auction(&[(0, Some(120)), (1, Some(125)), (2, None), (3, Some(135)), (0, None)]);
-    assert_eq!(bid_of(&s.act(&s.bid_legal())), None);
-    let d = s.act_with(human_take(), &s.bid_legal());
+    let d = s.act(&s.bid_legal());
     let fact = |k: &str| d.why.iter().find(|f| f.key == k).map(|f| f.value);
     assert_eq!((bid_of(&d), d.rule), (Some(140), RuleId::BGate), "{:?}", d.why);
     let p = fact("p_take_140").unwrap();
@@ -345,16 +332,16 @@ fn deal_573_takes_one_step_with_a_control_run() {
     // Without the Schell ace there is no run to own.
     let mut s = Scene::new(2, &["e-K", "e-U", "s-U", "s-Z", "s-K", "s-O", "s-9", "s-7", "r-8"]);
     s.auction(&auction);
-    assert_eq!(owner_tell(&s).0, None);
-    assert_eq!(tell(&s).1, RuleId::BTake);
+    assert_eq!(tell(&s).0, None);
+    assert_eq!(b_take_tell(&s).1, RuleId::BTake);
     // Once: after its 160 the opponents' 165 is defended (B-control's one challenge is spent);
-    // the default bids on by B-take instead.
+    // with B-take on, it bids on instead.
     let mut s = Scene::new(2, &["e-K", "e-U", "s-A", "s-Z", "s-K", "s-O", "s-9", "s-7", "r-8"]);
     let mut longer = auction.to_vec();
     longer.extend([(2, Some(160)), (1, Some(165))]);
     s.auction(&longer);
-    assert_eq!(owner_tell(&s).0, None);
-    assert_eq!(tell(&s), (Some(170), RuleId::BTake));
+    assert_eq!(tell(&s).0, None);
+    assert_eq!(b_take_tell(&s), (Some(170), RuleId::BTake));
 }
 
 /// The partner's first pass at 140 or more is censored, not weak (the owner 2026-10-13): no
@@ -364,8 +351,8 @@ fn a_first_pass_over_140_does_not_make_the_partner_weak() {
     let hand = ["e-K", "e-U", "s-A", "s-Z", "s-K", "s-O", "s-9", "s-7", "r-8"];
     let mut s = Scene::new(0, &hand);
     s.auction(&[(0, Some(130)), (1, Some(145)), (2, None), (3, None)]);
-    assert_eq!(owner_tell(&s).0, None);
-    assert_eq!(tell(&s).1, RuleId::BTake);
+    assert_eq!(tell(&s).0, None);
+    assert_eq!(b_take_tell(&s).1, RuleId::BTake);
     let mut s = Scene::new(0, &hand);
     s.auction(&[(0, Some(130)), (1, Some(135)), (2, None), (3, Some(145))]);
     assert_eq!(tell(&s), (Some(150), RuleId::BControl));
@@ -418,8 +405,8 @@ fn keep_survives_intervention_but_requires_the_offered_red_pair() {
     // an unrelated Bells pair under the Red-pair prerequisite.
     let mut other_pair = Scene::new(1, &hand(&["s-K", "s-O"]));
     other_pair.auction(&auction);
-    assert_eq!(owner_tell(&other_pair).0, None);
-    assert_eq!(tell(&other_pair).1, RuleId::BTake);
+    assert_eq!(tell(&other_pair).0, None);
+    assert_eq!(b_take_tell(&other_pair).1, RuleId::BTake);
 }
 
 #[test]
@@ -432,13 +419,13 @@ fn an_offering_hand_with_its_own_pair_still_sends_only_plus_five() {
 #[test]
 fn b_take_bids_on_over_the_opponents_140_with_a_pair_and_aces() {
     // The partner passed, the opponents hold the game at 140; I hold the Bells pair, three aces
-    // and two more standing cards: P(take) and P(make 145) both clear 0.5 (B-take, on since
-    // the deep endgame and the exchange routes: checkpoint 2026-11-01). A weak hand lets them play.
+    // and two more standing cards: P(take) and P(make 145) both clear 0.5 (B-take on, as in
+    // checkpoint 2026-11-01). A weak hand lets them play.
     let strong = ["s-A", "s-Z", "s-K", "s-O", "g-A", "e-A", "e-Z", "r-6", "g-7"];
     for (h, take) in [(&strong[..], true), (&LOW[..], false)] {
         let mut s = Scene::new(2, h);
         s.auction(&[(0, None), (1, Some(140))]);
-        let d = s.act(&s.bid_legal());
+        let d = s.act_with(b_take_on(), &s.bid_legal());
         let expected = if take { (Some(145), RuleId::BTake) } else { (None, RuleId::BQuiet) };
         assert_eq!((bid_of(&d), d.rule), expected, "{:?}", d.why);
     }
@@ -448,10 +435,10 @@ fn b_take_bids_on_over_the_opponents_140_with_a_pair_and_aces() {
 fn b_take_crosses_140_only_with_a_likely_pair() {
     // Three aces, two tens and two single halves, the partner not yet heard: strong enough for
     // the fitted P(take) and P(make), but a bid above 140 tells a pair (HR-4) and the team's
-    // derivable pair cover stays below `over_140_cover` (the Fable review's example).
+    // derivable pair cover stays below `over_140_cover` (the Fable review's example; B-take on).
     let mut s = Scene::new(1, &["g-A", "e-A", "s-A", "e-Z", "g-Z", "r-K", "s-O", "g-6", "e-6"]);
     s.auction(&[(0, Some(140))]);
-    let d = s.act(&s.bid_legal());
+    let d = s.act_with(b_take_on(), &s.bid_legal());
     assert_ne!(d.rule, RuleId::BTake, "{:?}", d.why);
     assert_eq!(bid_of(&d), None, "{:?}", d.why);
     // The fitted gates pass; only the cover vetoes.

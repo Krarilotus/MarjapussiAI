@@ -67,6 +67,7 @@ and hidden-card swaps. Root owns all builds, tests, runtime/strength qualificati
 and live acceptance; this checkpoint must remain incomplete until that evidence.
 
 Update 2026-10-31 (checkpoint 3): the return route also compares the store's best
-returns (`return_store_candidates`), the pass forth runs by route (`pass_route`), and
-both sample the exchange's own world pool (`exchange_worlds`); evidence in
+returns (`return_store_candidates`), the pass forth can run by route (`pass_route`;
+off by the owner's settings of 2026-11-10), and both sample the exchange's own world
+pool (`exchange_worlds`); evidence in
 [the checkpoint](../checkpoints/2026-10-31-exchange-routes.md).
