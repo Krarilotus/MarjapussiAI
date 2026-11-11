@@ -370,7 +370,11 @@ fn activation(state: &FastState, known: &Known, step: Option<Step>) -> Option<Mo
             let others = (0..4)
                 .filter(|&seat| seat != actor)
                 .fold(CardSet::EMPTY, |cards, seat| cards | known.may(own, seat));
-            if crate::leads::cash_before_question(own, state.trump(), others, lead0(state, known)) {
+            let cash = lead0(state, known);
+            let mate_held = known.held[partner(actor) as usize];
+            if !crate::leads::cash_spoils_split_half(actor, own, state.called(), &known.may, mate_held, cash)
+                && crate::leads::cash_before_question(own, state.trump(), others, cash)
+            {
                 None
             } else {
                 Some(question)
@@ -1108,6 +1112,10 @@ mod continuation_cache_tests;
 #[cfg(test)]
 #[path = "../tests/internal/rollout_public_facts.rs"]
 mod public_facts_tests;
+
+#[cfg(test)]
+#[path = "../tests/internal/split_half_cash.rs"]
+mod split_half_cash_tests;
 
 #[cfg(test)]
 mod tests {

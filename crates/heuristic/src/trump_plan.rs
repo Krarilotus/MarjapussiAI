@@ -295,9 +295,27 @@ pub(crate) fn timing(
             _ => None,
         })
         .fold(CardSet::EMPTY, |s, c| s | CardSet::single(c));
+    // A cash that forces the partner's only possible card, the other half of my
+    // split pair, loses that pair before a half question: not a cash prior.
+    let may: [CardSet; 4] = std::array::from_fn(|s| ctx.k.may_hold(s as u8));
+    let called = SUITS
+        .into_iter()
+        .filter(|&s| ctx.k.is_called(s))
+        .fold(0u8, |bits, s| bits | 1 << s as u8);
+    let spoils = |card: u8| {
+        crate::leads::cash_spoils_split_half(
+            ctx.me,
+            ctx.k.certain(ctx.me),
+            called,
+            &may,
+            ctx.k.certain(partner(ctx.me)),
+            card,
+        )
+    };
     let retained = (ctx.k.retaining_lead(ctx.me) & (cards - val.plan_cards))
         .iter()
         .filter(|&card| planned.as_ref().is_some_and(|p| preserves_activation(ctx, p, card)))
+        .filter(|&card| !spoils(card))
         .fold(CardSet::EMPTY, |set, card| set | CardSet::single(card));
     // With no trump, all these cards remain own winners. Under trump, only
     // the trump run plus ONE side winner is certified; later side rounds can
@@ -339,6 +357,7 @@ pub(crate) fn timing(
         .filter(|d| ctx.params.lead_cash_standing
             && d.action.action_type == ActionType::Question(QuestionType::Yours))
         .and(lead_card)
+        .filter(|&card| !spoils(card))
         .filter(|&card| {
             let others = (0..4)
                 .filter(|&seat| seat != ctx.me)

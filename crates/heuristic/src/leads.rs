@@ -63,6 +63,42 @@ fn live_half(cash: u8, hand: CardSet, others: CardSet) -> bool {
         && !((CardSet::halves(engine::suit_of(cash)) - CardSet::single(cash)) & (hand | others)).is_empty()
 }
 
+/// Leading `cash` would spoil a possible split pair: I hold one half of its open suit, not
+/// `cash` itself, and the other half is the partner's only possible card there, so the partner
+/// must follow with it before a half question can count the pair. A conditional resource loss,
+/// not knowledge that the partner owns that half: the half and the partner's known cards must
+/// fit one partner hand. `may` is each seat's possible cards (no sampled hand); `mate_held` the
+/// partner's cards I know from our exchange.
+pub(crate) fn cash_spoils_split_half(
+    me: u8,
+    hand: CardSet,
+    called: u8,
+    may: &[CardSet; 4],
+    mate_held: CardSet,
+    cash: u8,
+) -> bool {
+    let suit = engine::suit_of(cash);
+    let mine = hand & CardSet::halves(suit);
+    if called & (1 << suit as u8) != 0 || !hand.contains(cash) || mine.len() != 1 || mine.contains(cash) {
+        return false;
+    }
+    let mate = partner(me) as usize;
+    let possible = (may[mate] - hand) | mate_held;
+    let companion = CardSet::halves(suit) - mine;
+    if possible & CardSet::suit(suit) != companion {
+        return false;
+    }
+    let elsewhere = (0..4)
+        .filter(|&s| s != mate && s != me as usize)
+        .fold(hand, |cards, s| cards | (may[s] - hand - mate_held));
+    let known = mate_held | (possible - elsewhere);
+    let required = known | companion;
+    (known & hand).is_empty()
+        && required.is_subset(possible)
+        && required.len() <= hand.len()
+        && hand.len() <= possible.len()
+}
+
 /// A specific cash before Yours: retain the lead and leave partner at least one
 /// spare beyond its pair. This is not a guard on own announcements or AskHalf.
 pub(crate) fn cash_before_question(hand: CardSet, trump: Option<Suit>, others: CardSet, cash: u8) -> bool {
@@ -244,5 +280,50 @@ mod control_tests {
         // A higher card still out: g-K does not stand.
         assert!(!cash_before_question(hand, None, others | cards(&["g-Z"]), cash));
         assert!(!cash_before_question(hand, Some(Suit::Bells), others, cash));
+    }
+
+    /// Seat 0 holds g-O; the partner (seat 2) may hold g-K and no other Green card.
+    fn split() -> (CardSet, [CardSet; 4]) {
+        let hand = cards(&["g-A", "g-O", "g-8", "e-A", "e-O", "s-6"]);
+        let rest = CardSet::ALL - hand;
+        let green = CardSet::suit(Suit::Green) - cards(&["g-K"]);
+        (hand, [hand, rest, rest - green, rest])
+    }
+
+    fn spoils(hand: CardSet, called: u8, may: &[CardSet; 4], held: CardSet, name: &str) -> bool {
+        cash_spoils_split_half(0, hand, called, may, held, name.parse::<Card>().unwrap().index())
+    }
+
+    #[test]
+    fn cashing_over_the_partners_only_possible_card_spoils_the_split_half() {
+        let (hand, may) = split();
+        assert!(spoils(hand, 0, &may, CardSet::EMPTY, "g-A"));
+        // Another suit, where the partner may follow with a spare: no loss.
+        assert!(!spoils(hand, 0, &may, CardSet::EMPTY, "e-A"));
+    }
+
+    #[test]
+    fn a_spare_a_called_suit_an_absent_half_or_no_own_half_keep_the_cash() {
+        let (hand, may) = split();
+        let mut spare = may;
+        spare[2] |= cards(&["g-6"]);
+        assert!(!spoils(hand, 0, &spare, CardSet::EMPTY, "g-A"));
+        assert!(!spoils(hand, 0, &may, cards(&["g-K", "g-6"]), "g-A"));
+        assert!(!spoils(hand, 1 << Suit::Green as u8, &may, CardSet::EMPTY, "g-A"));
+        let mut absent = may;
+        absent[2] -= cards(&["g-K"]);
+        assert!(!spoils(hand, 0, &absent, CardSet::EMPTY, "g-A"));
+        let lost_own = (hand - cards(&["g-O"])) | cards(&["r-6"]);
+        let rest = CardSet::ALL - lost_own;
+        let lost_may = [lost_own, rest, rest - (CardSet::suit(Suit::Green) - cards(&["g-K"])), rest];
+        assert!(!spoils(lost_own, 0, &lost_may, CardSet::EMPTY, "g-A"));
+    }
+
+    #[test]
+    fn the_half_and_the_partners_known_cards_must_fit_one_hand() {
+        let (hand, may) = split();
+        let full = cards(&["e-7", "e-8", "e-9", "s-7", "s-8", "r-7"]);
+        assert!(!spoils(hand, 0, &may, full, "g-A"));
+        assert!(spoils(hand, 0, &may, full - cards(&["r-7"]), "g-A"));
     }
 }
