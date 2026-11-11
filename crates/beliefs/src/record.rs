@@ -18,7 +18,8 @@ pub struct PassEvent {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Record {
-    /// Bidding actions in order: `(seat, Some(bid))` or `(seat, None)` for a pass.
+    /// Pre-exchange bidding actions: `(seat, Some(bid))` or `(seat, None)` for a pass.
+    /// A post-return raise updates the public contract, but is not an auction message.
     pub auction: Vec<(Seat, Option<i32>)>,
     pub passes: Vec<PassEvent>,
     /// Per seat: its kind, its bids in their public context, its melds and questions.
@@ -31,17 +32,26 @@ impl Record {
         for (s, kind) in r.seats.iter_mut().zip(kinds) {
             s.kind = kind;
         }
+        let mut auction_open = true;
         for e in events {
             match *e {
-                SeatEvent::Bid { seat, value } => r.auction.push((seat, Some(value))),
-                SeatEvent::StopBidding { seat } => r.auction.push((seat, None)),
-                SeatEvent::Pass { from, to, cards } => r.passes.push(PassEvent { from, to, cards }),
+                SeatEvent::Bid { seat, value } if auction_open => r.auction.push((seat, Some(value))),
+                SeatEvent::StopBidding { seat } if auction_open => r.auction.push((seat, None)),
+                SeatEvent::Pass { from, to, cards } => {
+                    // The first exchange publicly closes bidding, even for seats whose
+                    // filtered event hides the cards. Mind retains subsequent raises;
+                    // their contract/resource evidence belongs to a separate reader.
+                    auction_open = false;
+                    r.passes.push(PassEvent { from, to, cards });
+                }
                 SeatEvent::AnnounceTrump { seat, suit } | SeatEvent::YesPair { seat, suit } => {
                     r.seats[seat as usize].melds |= 1 << suit as u8
                 }
                 SeatEvent::AskPair { seat } => r.seats[seat as usize].asks.push(None),
                 SeatEvent::AskHalf { seat, suit } => r.seats[seat as usize].asks.push(Some(suit)),
-                SeatEvent::CardPlayed { .. }
+                SeatEvent::Bid { .. }
+                | SeatEvent::StopBidding { .. }
+                | SeatEvent::CardPlayed { .. }
                 | SeatEvent::YesHalf { .. }
                 | SeatEvent::NoPair { .. }
                 | SeatEvent::NoHalf { .. }
