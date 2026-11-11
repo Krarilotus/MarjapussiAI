@@ -246,7 +246,14 @@ pub const BARRIERS: [i32; 4] = [PAIR_LINE, 180, 200, 220];
 /// `P(action | class, ctx)`: the generative bid model for all seat kinds. HP1's encoder sends
 /// `message` at `follow_target`; the reading also allows literal steps, blocks and bluffs.
 /// `bid` is `None` for a pass; `trust` is the observer's trust θ in this speaker (§3.4).
+/// Closed-channel passes censor message inference; this does not model ownership
+/// strength or a negative offer-refusal signal. Positive offers retain their reading.
 pub fn bid_likelihood(bid: Option<i32>, class: HandClass, ctx: &BidContext, trust: f32, params: &Params) -> f32 {
+    // B-tell closes at 140 even with untold messages. Ownership/offer refusal
+    // has no calibrated negative model, so a high pass adds no class evidence.
+    if bid.is_none() && !ctx.info_channel_open() {
+        return generic_step(bid, ctx, params);
+    }
     // A high +5 outside the supported Ace offer can be a keep, control bid or
     // information. No calibrated intent mixture is available: leave its holding
     // evidence neutral rather than asserting TwoHalves or another pair. The
@@ -495,6 +502,80 @@ mod tests {
     }
 
     #[test]
+    fn first_and_subsequent_closed_channel_passes_censor_all_hand_classes() {
+        let p = Params::default();
+        for value in [140, 145] {
+            for first_step in [true, false] {
+                let c = BidContext {
+                    first_step,
+                    team_ace: !first_step,
+                    sent: if first_step { 0 } else { Message::Ace.bit() },
+                    n_before: if first_step { 1 } else { 5 },
+                    ..ctx(value, false)
+                };
+                let obs = BidObs {
+                    bid: None,
+                    ctx: c,
+                    nominal: None,
+                };
+                let expected = generic_step(None, &c, &p);
+                let table = bid_table(&obs, 0.9, &p);
+                // Includes no pair, every own pair, halves and Ace classes.
+                assert!(table.iter().all(|&x| x == expected && x > 0.0));
+            }
+        }
+    }
+
+    #[test]
+    fn open_channel_pass_still_downweights_an_untold_pair() {
+        let p = Params::default();
+        let c = BidContext {
+            first_step: false,
+            sent: Message::Ace.bit(),
+            n_before: 2,
+            ..ctx(130, true)
+        };
+        let quiet = HandClass {
+            ace: true,
+            halves: [0; 4],
+        };
+        let mut paired = quiet;
+        paired.halves[Suit::Red as usize] = 2;
+        assert_eq!(message(quiet, &c, &p), None);
+        assert_eq!(message(paired, &c, &p), Some(Message::BigPair));
+        assert!(bid_likelihood(None, quiet, &c, 0.9, &p) > bid_likelihood(None, paired, &c, 0.9, &p));
+    }
+
+    #[test]
+    fn earlier_ace_evidence_survives_a_later_closed_channel_pass() {
+        let p = Params::default();
+        let read = walk_auction(
+            &[
+                (0, Some(120)),
+                (1, Some(125)),
+                (2, Some(135)),
+                (3, Some(140)),
+                (0, None),
+                (1, None),
+            ],
+            &p,
+        );
+        assert_eq!(read[1].nominal, Some(Message::Ace));
+        assert!(!read[5].ctx.first_step && !read[5].ctx.info_channel_open());
+        let ace = HandClass {
+            ace: true,
+            halves: [0; 4],
+        };
+        let no_ace = HandClass { ace: false, ..ace };
+        let first = bid_table(&read[1], 0.9, &p);
+        assert!(first[ace.index()] > first[no_ace.index()]);
+        let prior = [9.0 / 36.0; 36];
+        let before = class_posterior(&prior, &read[1..2], 0.9, &p);
+        let after = class_posterior(&prior, &[read[1], read[5]], 0.9, &p);
+        assert!(before.iter().zip(after).all(|(&a, b)| (a - b).abs() < 1e-6));
+    }
+
+    #[test]
     fn shift_from_125_moves_every_message_from_the_140_hit_upwards() {
         let p = Params::default();
         let c = ctx(125, false);
@@ -592,6 +673,15 @@ mod tests {
         assert_eq!(likelihood(ace), likelihood(paired));
         assert!(likelihood(ace) > likelihood(no_ace));
         assert!(likelihood(no_ace) > 0.0); // external actors can deviate
+
+        // A positive offer reads Ace, but an unsafe refusal has no negative model.
+        let refusal = BidObs {
+            bid: None,
+            ctx: c,
+            nominal: None,
+        };
+        let table = bid_table(&refusal, 0.9, &p);
+        assert!(table.iter().all(|&x| x == table[0] && x > 0.0));
     }
 
     #[test]
@@ -615,6 +705,10 @@ mod tests {
         assert!(read[5].ctx.offer_reply);
         assert_eq!(read[5].nominal, None);
         let table = bid_table(&read[5], 0.9, &p);
+        assert!(table.iter().all(|&x| x == table[0] && x > 0.0));
+        // Preserve positive keep semantics without inventing a negative refusal.
+        let refusal = BidObs { bid: None, ..read[5] };
+        let table = bid_table(&refusal, 0.9, &p);
         assert!(table.iter().all(|&x| x == table[0] && x > 0.0));
         let c = next_context(&auction, 1, &p);
         assert!(!c.offer_reply);
