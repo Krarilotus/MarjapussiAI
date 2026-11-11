@@ -55,6 +55,14 @@ pub(crate) fn after_standing(ctx: &Ctx, legal: CardSet, val: &Valuation) -> Opti
         .or_else(|| partner_ruffs(ctx, legal, val))
 }
 
+/// A rank label alone is not an activation resource: after the companion half
+/// has been played, this card can no longer complete that pair. `others` is the
+/// actor's conservative set of possible remaining cards, never a sampled hand.
+fn live_half(cash: u8, hand: CardSet, others: CardSet) -> bool {
+    CardSet::HALVES.contains(cash)
+        && !((CardSet::halves(engine::suit_of(cash)) - CardSet::single(cash)) & (hand | others)).is_empty()
+}
+
 /// A specific cash before Yours: retain the lead and leave partner at least one
 /// spare beyond its pair. This is not a guard on own announcements or AskHalf.
 pub(crate) fn cash_before_question(hand: CardSet, trump: Option<Suit>, others: CardSet, cash: u8) -> bool {
@@ -70,7 +78,7 @@ pub(crate) fn cash_before_question(hand: CardSet, trump: Option<Suit>, others: C
     // potential pairs have a spare discard. A future half question is separate.
     let outside = others & CardSet::suit(suit);
     let standing = mine.iter().filter(|&c| (higher(c) & outside).is_empty()).count() as u32;
-    !CardSet::HALVES.contains(cash)
+    !live_half(cash, hand, others)
         && !(mine & CardSet::HALVES).is_empty()
         && mine.len() >= 2
         && standing >= outside.len()
@@ -221,5 +229,20 @@ mod control_tests {
             CardSet::ALL - unsafe_hand,
             cash
         ));
+    }
+
+    #[test]
+    fn standing_half_can_be_cashed_after_its_companion_was_played() {
+        // g-O (the King's companion), g-A and g-Z are played: g-K stands and pairs nothing.
+        let hand = cards(&["g-K", "g-U", "g-9", "g-8", "r-O"]);
+        let cash = "g-K".parse::<Card>().unwrap().index();
+        let spent = cards(&["g-A", "g-Z", "g-O"]);
+        let others = CardSet::ALL - hand - spent;
+        assert!(cash_before_question(hand, None, others, cash));
+        // Companion still out: g-K is a live half and is kept.
+        assert!(!cash_before_question(hand, None, others | cards(&["g-O"]), cash));
+        // A higher card still out: g-K does not stand.
+        assert!(!cash_before_question(hand, None, others | cards(&["g-Z"]), cash));
+        assert!(!cash_before_question(hand, Some(Suit::Bells), others, cash));
     }
 }
